@@ -3,18 +3,69 @@ import sys
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene, QFileDialog,
     QVBoxLayout, QWidget, QHBoxLayout, QPushButton, QLabel, QCheckBox,
-    QFrame, QSpacerItem, QSizePolicy
+    QFrame, QSpacerItem, QSizePolicy, QMenu, QAction, QDialog,
+    QSlider, QColorDialog, QComboBox, QFormLayout, QDialogButtonBox, QMessageBox
 )
 from PyQt5.QtGui import QPixmap, QImage, QIcon, QColor, QPainter
-from PyQt5.QtCore import Qt, QDir, QTimer, QSize
+from PyQt5.QtCore import Qt, QDir, QTimer, QSize, QSettings
 from threading import Thread
 import time
+
+class SettingsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("设置")
+        self.setMinimumWidth(300)
+        
+        layout = QFormLayout(self)
+        
+        # 缩放设置
+        self.scale_slider = QSlider(Qt.Horizontal)
+        self.scale_slider.setMinimum(50)
+        self.scale_slider.setMaximum(200)
+        self.scale_slider.setValue(100)
+        self.scale_slider.setTickPosition(QSlider.TicksBelow)
+        self.scale_slider.setTickInterval(10)
+        layout.addRow("图片缩放:", self.scale_slider)
+        
+        # 背景颜色选择
+        self.bg_color_btn = QPushButton("选择颜色")
+        self.bg_color_btn.clicked.connect(self.choose_bg_color)
+        layout.addRow("背景颜色:", self.bg_color_btn)
+        
+        # 主题选择
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["浅色", "深色", "护眼"])
+        layout.addRow("主题:", self.theme_combo)
+        
+        # 按钮
+        self.button_box = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        layout.addRow(self.button_box)
+    
+    def choose_bg_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            self.bg_color_btn.setStyleSheet(
+                f"background-color: {color.name()};"
+                f"border: 1px solid #cccccc;"
+                f"border-radius: 4px;"
+            )
 
 class ComicViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Python 漫画浏览器 (增强版)")
         self.setGeometry(100, 100, 1200, 800)
+        
+        # 初始化设置
+        self.settings = QSettings("ManhuaViewer", "ComicViewer")
+        
+        # 添加设置菜单
+        self.create_menu_bar()
         
         # 设置窗口样式
         self.setStyleSheet("""
@@ -53,6 +104,27 @@ class ComicViewer(QMainWindow):
                 border: 1px solid #dddddd;
                 border-radius: 4px;
             }
+            QMenuBar {
+                background-color: #ffffff;
+                border-bottom: 1px solid #dddddd;
+            }
+            QMenuBar::item {
+                padding: 4px 8px;
+                background-color: transparent;
+            }
+            QMenuBar::item:selected {
+                background-color: #e0e0e0;
+            }
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #dddddd;
+            }
+            QMenu::item {
+                padding: 6px 20px;
+            }
+            QMenu::item:selected {
+                background-color: #e0e0e0;
+            }
         """)
 
         # 变量初始化
@@ -81,6 +153,7 @@ class ComicViewer(QMainWindow):
                 background-color: #ffffff;
                 border-radius: 8px;
                 padding: 10px;
+                margin-bottom: 10px;
             }
         """)
         toolbar_container.setLayout(self.toolbar)
@@ -121,6 +194,17 @@ class ComicViewer(QMainWindow):
             view.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
             view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            # 启用鼠标事件
+            view.setMouseTracking(True)
+            view.viewport().setMouseTracking(True)
+            # 安装事件过滤器
+            view.viewport().installEventFilter(self)
+            # 设置缩放属性
+            view.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+            view.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+            # 初始化拖动相关变量
+            view.drag_start_pos = None
+            view.original_transform = None
         
         self.view_left.setScene(self.scene_left)
         self.view_right.setScene(self.scene_right)
@@ -135,6 +219,7 @@ class ComicViewer(QMainWindow):
             QFrame {
                 background-color: #ffffff;
                 border-radius: 8px;
+                margin-top: 10px;
             }
         """)
         view_container.setLayout(self.view_layout)
@@ -148,12 +233,157 @@ class ComicViewer(QMainWindow):
         self.btn_next.clicked.connect(self.next_page)
         self.check_double.stateChanged.connect(self.toggle_double_page)
 
+    def create_menu_bar(self):
+        """创建菜单栏"""
+        menubar = self.menuBar()
+        
+        # 文件菜单
+        file_menu = menubar.addMenu("文件")
+        
+        # 打开文件夹动作
+        open_action = QAction("打开文件夹", self)
+        open_action.triggered.connect(self.open_folder)
+        file_menu.addAction(open_action)
+        
+        # 最近打开的文件
+        self.recent_menu = QMenu("最近打开", self)
+        file_menu.addMenu(self.recent_menu)
+        self.update_recent_files_menu()
+        
+        # 添加分隔线
+        file_menu.addSeparator()
+        
+        # 清除最近文件
+        clear_recent_action = QAction("清除最近文件", self)
+        clear_recent_action.triggered.connect(self.clear_recent_files)
+        file_menu.addAction(clear_recent_action)
+        
+        # 视图菜单
+        view_menu = menubar.addMenu("视图")
+        double_page_action = QAction("双页模式", self, checkable=True)
+        double_page_action.triggered.connect(
+            lambda: self.check_double.setChecked(not self.check_double.isChecked())
+        )
+        view_menu.addAction(double_page_action)
+        
+        # 设置菜单
+        settings_menu = menubar.addMenu("设置")
+        preferences_action = QAction("偏好设置", self)
+        preferences_action.triggered.connect(self.show_settings)
+        settings_menu.addAction(preferences_action)
+    
+    def show_settings(self):
+        """显示设置对话框"""
+        dialog = SettingsDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            # 应用设置
+            scale_factor = dialog.scale_slider.value() / 100.0
+            self.apply_scale(scale_factor)
+            
+            # 应用主题
+            theme = dialog.theme_combo.currentText()
+            self.apply_theme(theme)
+    
+    def apply_scale(self, factor):
+        """应用缩放设置"""
+        self.scale_factor = factor
+        self.load_image()  # 重新加载当前图片以应用缩放
+    
+    def apply_theme(self, theme):
+        """应用主题设置"""
+        if theme == "浅色":
+            self.setStyleSheet("""
+                QMainWindow { background-color: #f0f0f0; }
+                QGraphicsView { background-color: #ffffff; }
+            """)
+        elif theme == "深色":
+            self.setStyleSheet("""
+                QMainWindow { background-color: #2d2d2d; }
+                QGraphicsView { background-color: #1a1a1a; }
+                QLabel { color: #ffffff; }
+                QCheckBox { color: #ffffff; }
+            """)
+        elif theme == "护眼":
+            self.setStyleSheet("""
+                QMainWindow { background-color: #f0f7eb; }
+                QGraphicsView { background-color: #ffffff; }
+            """)
+
+    def update_recent_files_menu(self):
+        """更新最近打开文件菜单"""
+        self.recent_menu.clear()
+        recent_files = self.settings.value("recent_files", [])
+        
+        if not recent_files:
+            self.recent_menu.setEnabled(False)
+            return
+            
+        self.recent_menu.setEnabled(True)
+        for file_path in recent_files:
+            # 显示完整路径
+            action = QAction(file_path, self)
+            action.setData(file_path)
+            action.triggered.connect(lambda checked, path=file_path: self.open_recent_file(path))
+            self.recent_menu.addAction(action)
+
+    def open_recent_file(self, file_path):
+        """打开最近的文件"""
+        if os.path.exists(file_path):
+            self.load_folder(file_path)
+        else:
+            # 如果文件不存在，从最近文件列表中移除
+            recent_files = self.settings.value("recent_files", [])
+            if file_path in recent_files:
+                recent_files.remove(file_path)
+                self.settings.setValue("recent_files", recent_files)
+                self.update_recent_files_menu()
+            QMessageBox.warning(self, "警告", "文件不存在或已被删除！")
+
+    def clear_recent_files(self):
+        """清除最近打开文件列表"""
+        self.settings.setValue("recent_files", [])
+        self.update_recent_files_menu()
+
+    def add_to_recent_files(self, file_path):
+        """添加文件到最近打开列表"""
+        recent_files = self.settings.value("recent_files", [])
+        
+        # 如果文件已经在列表中，先移除
+        if file_path in recent_files:
+            recent_files.remove(file_path)
+        
+        # 将文件添加到列表开头
+        recent_files.insert(0, file_path)
+        
+        # 限制最近文件数量为10个
+        recent_files = recent_files[:10]
+        
+        # 保存设置
+        self.settings.setValue("recent_files", recent_files)
+        self.update_recent_files_menu()
+
     def open_folder(self):
         """选择文件夹并加载图片"""
-        folder = QFileDialog.getExistingDirectory(self, "选择漫画文件夹")
+        # 获取上次打开的文件夹路径
+        last_path = self.settings.value("last_folder", "")
+        
+        folder = QFileDialog.getExistingDirectory(
+            self, 
+            "选择漫画文件夹",
+            last_path
+        )
+        
         if not folder:
             return
+            
+        # 保存当前文件夹路径
+        self.settings.setValue("last_folder", folder)
+        self.add_to_recent_files(folder)
+        
+        self.load_folder(folder)
 
+    def load_folder(self, folder):
+        """加载指定文件夹的图片"""
         # 清空缓存
         self.preloaded_images.clear()
 
@@ -190,6 +420,8 @@ class ComicViewer(QMainWindow):
             pixmap = self.get_pixmap(self.current_index)
             if pixmap:
                 self.scene_left.addPixmap(pixmap)
+                # 重置缩放并适应视图
+                self.view_left.resetTransform()
                 self.view_left.fitInView(self.scene_left.itemsBoundingRect(), Qt.KeepAspectRatio)
         # 双页模式
         else:
@@ -200,9 +432,13 @@ class ComicViewer(QMainWindow):
 
             if pixmap_left:
                 self.scene_left.addPixmap(pixmap_left)
+                # 重置缩放并适应视图
+                self.view_left.resetTransform()
                 self.view_left.fitInView(self.scene_left.itemsBoundingRect(), Qt.KeepAspectRatio)
             if pixmap_right:
                 self.scene_right.addPixmap(pixmap_right)
+                # 重置缩放并适应视图
+                self.view_right.resetTransform()
                 self.view_right.fitInView(self.scene_right.itemsBoundingRect(), Qt.KeepAspectRatio)
 
     def get_pixmap(self, index):
@@ -271,6 +507,88 @@ class ComicViewer(QMainWindow):
             self.next_page()
         elif event.key() == Qt.Key_D:
             self.check_double.setChecked(not self.check_double.isChecked())
+
+    def eventFilter(self, obj, event):
+        """处理鼠标事件"""
+        if event.type() == event.MouseButtonPress:
+            # 获取点击位置
+            pos = event.pos()
+            view = obj.parent()
+            
+            # 如果是中键按下，开始拖动
+            if event.button() == Qt.MiddleButton:
+                view.drag_start_pos = event.pos()
+                view.original_transform = view.transform()
+                return True
+            
+            # 获取视图的宽度
+            width = view.width()
+            
+            # 判断点击位置
+            if pos.x() < width / 3:  # 左侧1/3区域
+                self.prev_page()
+                return True
+            elif pos.x() > width * 2 / 3:  # 右侧1/3区域
+                self.next_page()
+                return True
+        elif event.type() == event.MouseMove:
+            # 处理拖动
+            view = obj.parent()
+            if view.drag_start_pos is not None:
+                # 计算移动距离
+                delta = event.pos() - view.drag_start_pos
+                # 应用移动
+                view.setTransform(view.original_transform)
+                view.translate(delta.x(), delta.y())
+                return True
+        elif event.type() == event.MouseButtonRelease:
+            # 释放鼠标时恢复原位
+            view = obj.parent()
+            if event.button() == Qt.MiddleButton:
+                # 恢复原始位置
+                view.setTransform(view.original_transform)
+                view.drag_start_pos = None
+                view.original_transform = None
+                return True
+        elif event.type() == event.MouseButtonDblClick:
+            # 双击重置缩放
+            view = obj.parent()
+            view.resetTransform()
+            # 重新适应视图
+            if view == self.view_left:
+                self.view_left.fitInView(self.scene_left.itemsBoundingRect(), Qt.KeepAspectRatio)
+            elif view == self.view_right:
+                self.view_right.fitInView(self.scene_right.itemsBoundingRect(), Qt.KeepAspectRatio)
+            return True
+        elif event.type() == event.Wheel:
+            # 处理滚轮事件
+            delta = event.angleDelta().y()
+            view = obj.parent()
+            
+            # 计算缩放因子
+            factor = 1.1 if delta > 0 else 0.9
+            
+            # 应用缩放
+            view.scale(factor, factor)
+            
+            # 限制缩放范围
+            current_scale = view.transform().m11()
+            if current_scale < 0.1:  # 最小缩放
+                view.resetTransform()
+                view.scale(0.1, 0.1)
+            elif current_scale > 10:  # 最大缩放
+                view.resetTransform()
+                view.scale(10, 10)
+            
+            return True
+                
+        return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event):
+        """窗口大小改变时重新调整图片显示"""
+        super().resizeEvent(event)
+        # 重新加载当前图片以适应新的大小
+        self.load_image()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
