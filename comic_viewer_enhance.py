@@ -134,6 +134,7 @@ class ComicViewer(QMainWindow):
         self.preload_thread = None
         self.preloaded_images = {}
         self.double_page_mode = False
+        self.long_image_mode = False  # 长图模式开关
 
         # 主界面布局
         self.central_widget = QWidget()
@@ -162,6 +163,7 @@ class ComicViewer(QMainWindow):
         self.btn_prev = QPushButton("上一页 (←)")
         self.btn_next = QPushButton("下一页 (→)")
         self.check_double = QCheckBox("双页模式")
+        self.check_long = QCheckBox("长图模式")  # 添加长图模式复选框
         self.label_status = QLabel("状态: 未加载图片")
         
         # 添加弹性空间
@@ -171,6 +173,7 @@ class ComicViewer(QMainWindow):
         self.toolbar.addWidget(self.btn_prev)
         self.toolbar.addWidget(self.btn_next)
         self.toolbar.addWidget(self.check_double)
+        self.toolbar.addWidget(self.check_long)  # 添加长图模式复选框到工具栏
         self.toolbar.addItem(spacer)
         self.toolbar.addWidget(self.label_status)
         
@@ -232,6 +235,7 @@ class ComicViewer(QMainWindow):
         self.btn_prev.clicked.connect(self.prev_page)
         self.btn_next.clicked.connect(self.next_page)
         self.check_double.stateChanged.connect(self.toggle_double_page)
+        self.check_long.stateChanged.connect(self.toggle_long_image_mode)  # 连接长图模式信号
 
     def create_menu_bar(self):
         """创建菜单栏"""
@@ -422,7 +426,11 @@ class ComicViewer(QMainWindow):
                 self.scene_left.addPixmap(pixmap)
                 # 重置缩放并适应视图
                 self.view_left.resetTransform()
-                self.view_left.fitInView(self.scene_left.itemsBoundingRect(), Qt.KeepAspectRatio)
+                if not self.long_image_mode:
+                    self.view_left.fitInView(self.scene_left.itemsBoundingRect(), Qt.KeepAspectRatio)
+                else:
+                    # 长图模式下滚动到顶部
+                    self.view_left.verticalScrollBar().setValue(0)
         # 双页模式
         else:
             self.scene_left.clear()
@@ -434,12 +442,20 @@ class ComicViewer(QMainWindow):
                 self.scene_left.addPixmap(pixmap_left)
                 # 重置缩放并适应视图
                 self.view_left.resetTransform()
-                self.view_left.fitInView(self.scene_left.itemsBoundingRect(), Qt.KeepAspectRatio)
+                if not self.long_image_mode:
+                    self.view_left.fitInView(self.scene_left.itemsBoundingRect(), Qt.KeepAspectRatio)
+                else:
+                    # 长图模式下滚动到顶部
+                    self.view_left.verticalScrollBar().setValue(0)
             if pixmap_right:
                 self.scene_right.addPixmap(pixmap_right)
                 # 重置缩放并适应视图
                 self.view_right.resetTransform()
-                self.view_right.fitInView(self.scene_right.itemsBoundingRect(), Qt.KeepAspectRatio)
+                if not self.long_image_mode:
+                    self.view_right.fitInView(self.scene_right.itemsBoundingRect(), Qt.KeepAspectRatio)
+                else:
+                    # 长图模式下滚动到顶部
+                    self.view_right.verticalScrollBar().setValue(0)
 
     def get_pixmap(self, index):
         """从缓存或文件获取图片，避免重复加载"""
@@ -485,6 +501,21 @@ class ComicViewer(QMainWindow):
             self.view_right.hide()
         self.load_image()  # 重新加载当前页
 
+    def toggle_long_image_mode(self, state):
+        """切换长图模式"""
+        self.long_image_mode = state == Qt.Checked
+        
+        # 根据模式设置滚动条策略
+        for view in [self.view_left, self.view_right]:
+            if self.long_image_mode:
+                view.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+                view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            else:
+                view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        self.load_image()  # 重新加载当前图片
+
     def prev_page(self):
         """上一页（双页模式一次翻两页）"""
         step = 2 if self.double_page_mode else 1
@@ -507,6 +538,8 @@ class ComicViewer(QMainWindow):
             self.next_page()
         elif event.key() == Qt.Key_D:
             self.check_double.setChecked(not self.check_double.isChecked())
+        elif event.key() == Qt.Key_L:  # 添加长图模式快捷键
+            self.check_long.setChecked(not self.check_long.isChecked())
 
     def eventFilter(self, obj, event):
         """处理鼠标事件"""
@@ -565,20 +598,26 @@ class ComicViewer(QMainWindow):
             delta = event.angleDelta().y()
             view = obj.parent()
             
-            # 计算缩放因子
-            factor = 1.1 if delta > 0 else 0.9
-            
-            # 应用缩放
-            view.scale(factor, factor)
-            
-            # 限制缩放范围
-            current_scale = view.transform().m11()
-            if current_scale < 0.1:  # 最小缩放
-                view.resetTransform()
-                view.scale(0.1, 0.1)
-            elif current_scale > 10:  # 最大缩放
-                view.resetTransform()
-                view.scale(10, 10)
+            if self.long_image_mode:
+                # 长图模式下，滚轮控制垂直滚动
+                # 向下滚动时图片向上移动
+                scroll_amount = delta / 120 * 20  # 调整滚动速度
+                view.verticalScrollBar().setValue(
+                    int(view.verticalScrollBar().value() - scroll_amount)
+                )
+            else:
+                # 普通模式下，滚轮控制缩放
+                factor = 1.1 if delta > 0 else 0.9
+                view.scale(factor, factor)
+                
+                # 限制缩放范围
+                current_scale = view.transform().m11()
+                if current_scale < 0.1:  # 最小缩放
+                    view.resetTransform()
+                    view.scale(0.1, 0.1)
+                elif current_scale > 10:  # 最大缩放
+                    view.resetTransform()
+                    view.scale(10, 10)
             
             return True
                 
