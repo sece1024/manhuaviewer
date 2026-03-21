@@ -53,20 +53,18 @@ class PreloadThread(QThread):
     """后台预加载线程，使用 QImage（线程安全）"""
     loaded = pyqtSignal(int, QImage)
 
-    def __init__(self, image_files: list[str], center_index: int, cache: LRUCache):
+    def __init__(self, image_files: list[str], center_index: int):
         super().__init__()
         self.image_files = image_files
         self.center_index = center_index
-        self.cache = cache
 
     def run(self):
         start = max(0, self.center_index - PRELOAD_BEFORE)
         end = min(len(self.image_files), self.center_index + PRELOAD_AFTER)
         for i in range(start, end):
-            if i not in self.cache:
-                try:
-                    img = QImage(self.image_files[i])
-                    if not img.isNull():
-                        self.loaded.emit(i, img)
-                except Exception as e:
-                    logger.warning(f"预加载图片失败 [{i}]: {self.image_files[i]}: {e}")
+            try:
+                img = QImage(self.image_files[i])
+                if not img.isNull():
+                    self.loaded.emit(i, img)
+            except Exception as e:
+                logger.warning(f"预加载图片失败 [{i}]: {self.image_files[i]}: {e}")

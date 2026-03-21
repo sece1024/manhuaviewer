@@ -51,6 +51,7 @@ class ThumbnailDialog(QDialog):
         self.image_files = image_files
         self.current_index = current_index
         self._thumb_labels: dict[int, QLabel] = {}
+        self._closed = False
 
         self.setWindowTitle(f"缩略图总览 ({len(image_files)} 页)")
         self.setMinimumSize(700, 500)
@@ -110,8 +111,8 @@ class ThumbnailDialog(QDialog):
         btn_close.clicked.connect(self.accept)
         layout.addWidget(btn_close)
 
-        # 异步加载缩略图
-        self._thread_pool = QThreadPool.globalInstance()
+        # 使用独立线程池，关闭时可清理
+        self._thread_pool = QThreadPool(self)
         self._thread_pool.setMaxThreadCount(4)
         self._load_thumbnails()
 
@@ -123,7 +124,9 @@ class ThumbnailDialog(QDialog):
             self._thread_pool.start(loader)
 
     def _on_thumbnail_loaded(self, index: int, pixmap: QPixmap):
-        """缩略图加载完成回调"""
+        """缩略图加载完成回调，忽略关闭后的残留信号"""
+        if self._closed:
+            return
         if index in self._thumb_labels:
             label = self._thumb_labels[index]
             label.setPixmap(pixmap)
@@ -131,6 +134,16 @@ class ThumbnailDialog(QDialog):
                 label.setStyleSheet("border: 3px solid #4a86e8; border-radius: 4px;")
             else:
                 label.setStyleSheet("border: 1px solid #dddddd; border-radius: 4px;")
+
+    def reject(self):
+        self._closed = True
+        self._thread_pool.clear()
+        super().reject()
+
+    def accept(self):
+        self._closed = True
+        self._thread_pool.clear()
+        super().accept()
 
     def _on_click(self, index):
         self.page_selected.emit(index)

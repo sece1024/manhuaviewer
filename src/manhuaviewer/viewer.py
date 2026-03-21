@@ -12,8 +12,8 @@ from PyQt5.QtWidgets import (
     QFrame, QSpacerItem, QSizePolicy, QMenu, QAction, QDialog,
     QMessageBox, QProgressBar,
 )
-from PyQt5.QtGui import QPixmap, QIcon, QPainter, QKeySequence, QTransform, QDragEnterEvent, QDropEvent
-from PyQt5.QtCore import Qt, QDir, QTimer, QSettings, QThread, pyqtSignal
+from PyQt5.QtGui import QPixmap, QPainter, QKeySequence, QTransform, QDragEnterEvent, QDropEvent
+from PyQt5.QtCore import Qt, QDir, QSettings, QThread, pyqtSignal, QEvent, QTimer
 
 from manhuaviewer.constants import SUPPORTED_FORMATS, MAX_RECENT_FILES
 from manhuaviewer.styles import STYLE_SHEET, THEMES
@@ -57,6 +57,12 @@ class ComicViewer(QMainWindow):
         self._connect_signals()
         self._restore_state()
 
+        # resize 防抖定时器
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(150)  # 150ms 防抖
+        self._resize_timer.timeout.connect(self._on_resize_debounced)
+
     # ── UI 初始化 ──────────────────────────────────────────────
 
     def _init_ui(self):
@@ -71,11 +77,11 @@ class ComicViewer(QMainWindow):
         root_layout.setSpacing(10)
 
         # 工具栏
-        toolbar_frame = QFrame()
-        toolbar_frame.setStyleSheet(
+        self._toolbar_frame = QFrame()
+        self._toolbar_frame.setStyleSheet(
             "QFrame { background-color: #ffffff; border-radius: 8px; padding: 10px; }"
         )
-        toolbar = QHBoxLayout(toolbar_frame)
+        toolbar = QHBoxLayout(self._toolbar_frame)
         toolbar.setSpacing(10)
 
         self.btn_open = QPushButton("打开文件夹")
@@ -92,7 +98,7 @@ class ComicViewer(QMainWindow):
         toolbar.addWidget(self.check_long)
         toolbar.addItem(QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum))
         toolbar.addWidget(self.label_status)
-        root_layout.addWidget(toolbar_frame)
+        root_layout.addWidget(self._toolbar_frame)
 
         # 进度条
         self.progress_bar = QProgressBar()
@@ -442,19 +448,36 @@ class ComicViewer(QMainWindow):
         px_left = self._get_pixmap(self.current_index)
         px_right = self._get_pixmap(self.current_index + 1) if self.current_index + 1 < len(self.image_files) else None
 
-        for view, scene, pixmap in [
-            (self.view_left, self.scene_left, px_left),
-            (self.view_right, self.scene_right, px_right),
-        ]:
-            if pixmap:
-                pixmap = self._apply_rotation(pixmap)
-                scene.addPixmap(pixmap)
-                if not self.long_image_mode:
-                    self._apply_scale(view, scene)
-                else:
-                    view.resetTransform()
-                    view.fitInView(scene.itemsBoundingRect(), Qt.KeepAspectRatio)
-                    view.verticalScrollBar().setValue(0)
+        if px_left:
+            px_left = self._apply_rotation(px_left)
+            self.scene_left.addPixmap(px_left)
+            if not self.long_image_mode:
+                self._apply_scale(self.view_left, self.scene_left)
+            else:
+                self.view_left.resetTransform()
+                self.view_left.fitInView(self.scene_left.itemsBoundingRect(), Qt.KeepAspectRatio)
+                self.view_left.verticalScrollBar().setValue(0)
+
+        if px_right:
+            px_right = self._apply_rotation(px_right)
+            self.scene_right.addPixmap(px_right)
+            if not self.long_image_mode:
+                self._apply_scale(self.view_right, self.scene_right)
+            else:
+                self.view_right.resetTransform()
+                self.view_right.fitInView(self.scene_right.itemsBoundingRect(), Qt.KeepAspectRatio)
+                self.view_right.verticalScrollBar().setValue(0)
+        else:
+            # 最后一页，右侧面板显示提示
+            self.view_right.resetTransform()
+            from PyQt5.QtWidgets import QGraphicsTextItem
+            text_item = QGraphicsTextItem("已是最后一页")
+            text_item.setDefaultTextColor(Qt.gray)
+            font = text_item.font()
+            font.setPointSize(16)
+            text_item.setFont(font)
+            self.scene_right.addItem(text_item)
+            self.view_right.fitInView(self.scene_right.itemsBoundingRect(), Qt.KeepAspectRatio)
 
     def _get_pixmap(self, index):
         """获取指定索引的图片，带异常处理"""
@@ -478,15 +501,13 @@ class ComicViewer(QMainWindow):
         if self._preload_thread and self._preload_thread.isRunning():
             return
 
-        self._preload_thread = PreloadThread(
-            self.image_files, self.current_index, self.preloaded_images
-        )
+        self._preload_thread = PreloadThread(self.image_files, self.current_index)
         self._preload_thread.loaded.connect(self._on_preload_loaded)
         self._preload_thread.start()
 
     def _on_preload_loaded(self, index, qimage):
         """预加载回调，将 QImage 转为 QPixmap（主线程安全）"""
-        if not qimage.isNull():
+        if index not in self.preloaded_images and not qimage.isNull():
             self.preloaded_images.put(index, QPixmap.fromImage(qimage))
 
     # ── 模式切换 ───────────────────────────────────────────────
@@ -557,6 +578,18 @@ class ComicViewer(QMainWindow):
             self.prev_page()
         elif key == Qt.Key_Right:
             self.next_page()
+        elif key == Qt.Key_Up:
+            if self.long_image_mode:
+                view = self.view_left
+                view.verticalScrollBar().setValue(view.verticalScrollBar().value() - 80)
+            else:
+                self.prev_page()
+        elif key == Qt.Key_Down:
+            if self.long_image_mode:
+                view = self.view_left
+                view.verticalScrollBar().setValue(view.verticalScrollBar().value() + 80)
+            else:
+                self.next_page()
         elif key == Qt.Key_Home:
             self.current_index = 0
             self._load_current()
@@ -569,8 +602,6 @@ class ComicViewer(QMainWindow):
             super().keyPressEvent(event)
 
     def eventFilter(self, obj, event):
-        from PyQt5.QtCore import QEvent
-
         if event.type() == QEvent.MouseButtonPress:
             pos = event.pos()
             # obj 是 viewport，parent() 才是 QGraphicsView
@@ -634,9 +665,14 @@ class ComicViewer(QMainWindow):
 
     def _toggle_fullscreen(self):
         if self._is_fullscreen:
+            self.menuBar().show()
+            self._toolbar_frame.show()
+            self.progress_bar.hide()
             self.showNormal()
             self._is_fullscreen = False
         else:
+            self.menuBar().hide()
+            self._toolbar_frame.hide()
             self.showFullScreen()
             self._is_fullscreen = True
 
@@ -739,6 +775,10 @@ class ComicViewer(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if self.image_files:
+            self._resize_timer.start()
+
+    def _on_resize_debounced(self):
         if self.image_files:
             self._load_current()
 
