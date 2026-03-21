@@ -1,10 +1,13 @@
 [project]
 name = "manhuaviewer"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "基于 PyQt5 的桌面漫画/图片浏览器，支持单页、双页、长图模式"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "pyinstaller>=6.13.0",
     "pyqt5>=5.15.11",
 ]
+
+[project.scripts]
+manhuaviewer = "main:main"
