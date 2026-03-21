@@ -55,15 +55,14 @@ JPG, JPEG, PNG, BMP, WebP, GIF, TIFF
 git clone https://github.com/sece1024/manhuaviewer.git
 cd manhuaviewer
 
-# 安装依赖 (uv 会根据当前平台生成 lock 文件)
+# macOS / Linux
 uv sync
-
-# 运行
 uv run manhuaviewer
 
-# 或者用 pip
-pip install -e .
-python main.py
+# Windows (uv sync 会因 pyqt5-qt5 缺少 Windows wheel 报错，改用 uv pip)
+uv venv
+uv pip install -e .
+uv run manhuaviewer
 ```
 
 ## 打包为可执行文件

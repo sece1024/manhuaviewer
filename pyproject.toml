@@ -7,6 +7,9 @@ license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "pyqt5>=5.15.11",
+    # pyqt5-qt5 在 macOS/Linux 上是 pyqt5 的传递依赖，Windows 上不需要
+    # 显式声明带平台标记的版本，帮助包管理器正确解析
+    "pyqt5-qt5>=5.15 ; sys_platform != 'win32'",
 ]
 
 [project.optional-dependencies]
