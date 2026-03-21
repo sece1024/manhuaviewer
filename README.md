@@ -5,18 +5,21 @@
 ## 功能特性
 
 - 📖 **单页/双页模式** — 适配普通漫画和对开页
-- 🖼️ **长图模式** — 适合条漫、长条图浏览
-- ⚡ **预加载** — 后台预加载后续页面，翻页无延迟
-- 🎨 **主题切换** — 浅色 / 深色 / 护眼三种主题
+- 🖼️ **长图模式** — 适合条漫、长条图浏览（支持 ↑/↓ 滚动）
+- ⚡ **预加载** — LRU 缓存 + 后台预加载，翻页无延迟
+- 🎨 **主题切换** — 浅色 / 深色 / 护眼三种主题 + 自定义背景色
 - 📂 **最近文件** — 自动记住最近打开的文件夹
 - 🔍 **缩放拖拽** — 滚轮缩放，中键拖拽，双击重置
 - 📊 **阅读历史** — 自动记录每个文件夹的阅读进度，再次打开自动恢复
 - 🏷️ **标签系统** — 给漫画文件夹打标签，方便分类整理
-- 🖼️ **缩略图总览** — 一页看所有页面，点击直达
+- 🖼️ **缩略图总览** — 异步加载，一页看所有页面，自动定位当前页
 - 🔄 **图片旋转** — 支持顺时针/逆时针 90° 旋转
-- ⛶ **全屏模式** — 沉浸式阅读体验
+- ⛶ **全屏模式** — 沉浸式阅读（隐藏工具栏和菜单栏）
 - 🎯 **跳转到页** — 快速跳转到指定页码
-- ⌨️ **快捷键** — 完整的键盘操作支持
+- 🖱️ **拖拽打开** — 直接拖拽文件夹到窗口打开
+- 📋 **右键菜单** — 图片区右键快速操作
+- ⌨️ **快捷键** — 完整的键盘操作支持（F1 查看列表）
+- 📝 **状态栏增强** — 显示图片分辨率和文件大小
 
 ## 支持格式
 
@@ -28,6 +31,7 @@ JPG, JPEG, PNG, BMP, WebP, GIF, TIFF
 |------|------|
 | ← / A | 上一页 |
 | → / Space | 下一页 |
+| ↑ / ↓ | 长图模式滚动 / 翻页 |
 | D | 切换双页模式 |
 | L | 切换长图模式 |
 | R | 顺时针旋转 90° |
@@ -35,7 +39,8 @@ JPG, JPEG, PNG, BMP, WebP, GIF, TIFF
 | T | 缩略图总览 |
 | G | 跳转到指定页 |
 | M | 管理标签 |
-| F11 | 全屏模式 |
+| F1 | 快捷键列表 |
+| F11 | 全屏模式（Esc 退出） |
 | Home | 跳到第一页 |
 | End | 跳到最后一页 |
 | Ctrl+O | 打开文件夹 |
@@ -72,6 +77,9 @@ uv pip install -e .
 .venv\Scripts\python main.py
 # macOS / Linux
 .venv/bin/python main.py
+
+# 也可以
+python -m manhuaviewer
 ```
 
 > ⚠️ Windows 上不要用 `uv run`，它会重新解析依赖并拉到没有 Windows wheel 的 `pyqt5-qt5` 版本。用 `uv pip install` + 直接调用 python 即可。
@@ -101,19 +109,31 @@ pytest tests/ -v
 
 ```
 ├── main.py                         # 入口点（兼容直接运行）
-├── pyproject.toml                  # 项目配置 + 依赖
+├── pyproject.toml                  # 项目配置 + 依赖 + ruff 规范
 ├── LICENSE                         # MIT 许可证
 ├── README.md
 ├── .gitignore
 ├── src/
 │   └── manhuaviewer/
-│       ├── __init__.py
-│       ├── viewer.py               # 主程序（浏览器 UI）
-│       └── data_store.py           # 数据持久化（阅读历史 + 标签）
+│       ├── __init__.py             # 版本号
+│       ├── __main__.py             # python -m 入口
+│       ├── viewer.py               # 主窗口
+│       ├── constants.py            # 常量（格式、交互参数）
+│       ├── styles.py               # 样式表 & 主题
+│       ├── preload.py              # LRU 缓存 + 预加载线程
+│       ├── data_store.py           # 数据持久化（原子写入）
+│       └── dialogs/                # 对话框模块
+│           ├── __init__.py
+│           ├── settings.py         # 设置（恢复已保存值）
+│           ├── history.py          # 阅读历史
+│           ├── tags.py             # 标签管理
+│           ├── thumbnails.py       # 缩略图（异步加载）
+│           └── jump.py             # 跳转到页
 ├── scripts/
 │   └── build.py                    # PyInstaller 打包脚本
 └── tests/
-    └── test_data_store.py          # 单元测试（19 个）
+    ├── test_data_store.py          # 数据层测试（19 个）
+    └── test_preload.py             # LRU 缓存测试（7 个）
 ```
 
 ## 数据存储
@@ -121,6 +141,7 @@ pytest tests/ -v
 - 阅读历史和标签数据保存在:
   - **Windows**: `%APPDATA%/ManhuaViewer/`
   - **Linux/macOS**: `~/.local/share/ManhuaViewer/`
+- 使用原子写入（tempfile + os.replace），防止断电丢数据
 
 ## License
 

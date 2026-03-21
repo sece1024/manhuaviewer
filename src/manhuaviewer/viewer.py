@@ -28,7 +28,7 @@ from manhuaviewer.dialogs import (
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "0.4.0"
+from manhuaviewer import __version__ as APP_VERSION
 
 
 class ComicViewer(QMainWindow):
