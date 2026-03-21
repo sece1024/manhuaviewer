@@ -39,15 +39,22 @@ def _load_json(path: Path) -> dict:
 
 
 def _save_json(path: Path, data: dict):
-    """安全写入 JSON — 先写临时文件再 rename，防止写入中断导致数据丢失"""
-    tmp_path = path.with_suffix(".tmp")
+    """安全写入 JSON — 先写临时文件再原子替换，防止写入中断导致数据丢失"""
+    import tempfile
+    dir_name = str(path.parent)
     try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        tmp_path.replace(path)
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, str(path))
+        except Exception:
+            os.unlink(tmp_path)
+            raise
     except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
+        # 如果 mkstemp 失败，回退到简单写入
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 # ── 阅读历史 ────────────────────────────────────────────────────

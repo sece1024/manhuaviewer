@@ -57,11 +57,17 @@ class PreloadThread(QThread):
         super().__init__()
         self.image_files = image_files
         self.center_index = center_index
+        self._running = True
+
+    def stop(self):
+        self._running = False
 
     def run(self):
         start = max(0, self.center_index - PRELOAD_BEFORE)
         end = min(len(self.image_files), self.center_index + PRELOAD_AFTER)
         for i in range(start, end):
+            if not self._running:
+                return
             try:
                 img = QImage(self.image_files[i])
                 if not img.isNull():

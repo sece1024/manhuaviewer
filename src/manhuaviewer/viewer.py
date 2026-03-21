@@ -355,10 +355,10 @@ class ComicViewer(QMainWindow):
 
     def load_folder(self, folder):
         """加载文件夹中的图片"""
-        # 停掉可能仍在运行的预加载线程
+        # 停掉可能仍在运行的预加载线程（优雅退出）
         if self._preload_thread and self._preload_thread.isRunning():
-            self._preload_thread.terminate()
-            self._preload_thread.wait(1000)
+            self._preload_thread.stop()
+            self._preload_thread.wait(2000)
 
         self.preloaded_images.clear()
         self._file_sizes.clear()
@@ -381,6 +381,10 @@ class ComicViewer(QMainWindow):
         self.image_files = [os.path.join(folder, f) for f in self.image_files]
         self.current_folder = folder
         self.current_index = 0
+
+        # 更新窗口标题
+        folder_name = os.path.basename(folder) or folder
+        self.setWindowTitle(f"{folder_name} — 漫画浏览器")
 
         # 恢复阅读进度
         progress = self.history.get_progress(folder)
@@ -649,10 +653,12 @@ class ComicViewer(QMainWindow):
             super().keyPressEvent(event)
 
     def eventFilter(self, obj, event):
+        view = obj.parent()
+        if view is None:
+            return super().eventFilter(obj, event)
+
         if event.type() == QEvent.MouseButtonPress:
             pos = event.pos()
-            # obj 是 viewport，parent() 才是 QGraphicsView
-            view = obj.parent()
 
             if event.button() == Qt.MiddleButton:
                 view._drag_start = event.pos()
@@ -668,7 +674,6 @@ class ComicViewer(QMainWindow):
                 return True
 
         elif event.type() == QEvent.MouseMove:
-            view = obj.parent()
             if hasattr(view, '_drag_start') and view._drag_start is not None:
                 delta = event.pos() - view._drag_start
                 view.setTransform(view._orig_transform)
@@ -676,14 +681,12 @@ class ComicViewer(QMainWindow):
                 return True
 
         elif event.type() == QEvent.MouseButtonRelease:
-            view = obj.parent()
             if event.button() == Qt.MiddleButton and hasattr(view, '_drag_start'):
                 view.setTransform(view._orig_transform)
                 view._drag_start = None
                 return True
 
         elif event.type() == QEvent.MouseButtonDblClick:
-            view = obj.parent()
             view.resetTransform()
             scene = self.scene_left if view == self.view_left else self.scene_right
             view.fitInView(scene.itemsBoundingRect(), Qt.KeepAspectRatio)
@@ -691,7 +694,6 @@ class ComicViewer(QMainWindow):
 
         elif event.type() == QEvent.Wheel:
             delta = event.angleDelta().y()
-            view = obj.parent()
 
             if self.long_image_mode:
                 step = delta / 120 * LONG_SCROLL_STEP
