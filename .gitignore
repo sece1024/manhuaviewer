@@ -23,6 +23,10 @@ htmlcov/
 .idea/
 *.swp
 *.swo
+.cursor/
+.claude/
+.aider*
+.copilot*
 
 # PyInstaller
 *.spec

@@ -1,439 +1,40 @@
 """
-漫画浏览器 (增强版) - Comic Viewer Enhanced
+漫画浏览器 - 主窗口
 支持单页/双页/长图模式、预加载、主题切换、快捷键操作
 """
+import logging
 import os
 import sys
+
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene, QFileDialog,
     QVBoxLayout, QWidget, QHBoxLayout, QPushButton, QLabel, QCheckBox,
     QFrame, QSpacerItem, QSizePolicy, QMenu, QAction, QDialog,
-    QSlider, QColorDialog, QComboBox, QFormLayout, QDialogButtonBox, QMessageBox,
-    QProgressBar, QListWidget, QListWidgetItem, QLineEdit, QInputDialog,
-    QSplitter, QGroupBox, QGridLayout, QScrollArea, QSpinBox
+    QMessageBox, QProgressBar,
 )
-from PyQt5.QtGui import QPixmap, QImage, QIcon, QColor, QPainter, QKeySequence, QTransform
-from PyQt5.QtCore import Qt, QDir, QTimer, QSize, QSettings, QThread, pyqtSignal
+from PyQt5.QtGui import QPixmap, QIcon, QPainter, QKeySequence, QTransform, QDragEnterEvent, QDropEvent
+from PyQt5.QtCore import Qt, QDir, QTimer, QSettings, QThread, pyqtSignal
+
+from manhuaviewer.constants import SUPPORTED_FORMATS, MAX_RECENT_FILES
+from manhuaviewer.styles import STYLE_SHEET, THEMES
 from manhuaviewer.data_store import ReadingHistory, TagManager
+from manhuaviewer.preload import PreloadThread, LRUCache
+from manhuaviewer.dialogs import (
+    SettingsDialog, HistoryDialog, TagDialog, ThumbnailDialog, JumpPageDialog,
+)
 
+logger = logging.getLogger(__name__)
 
-# 支持的图片格式
-SUPPORTED_FORMATS = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp", "*.gif", "*.tiff"]
-
-# 样式表
-STYLE_SHEET = """
-    QMainWindow { background-color: #f0f0f0; }
-    QPushButton {
-        background-color: #4a86e8; color: white; border: none;
-        padding: 8px 16px; border-radius: 4px; font-size: 14px;
-    }
-    QPushButton:hover { background-color: #3a76d8; }
-    QPushButton:pressed { background-color: #2a66c8; }
-    QPushButton:disabled { background-color: #a0a0a0; }
-    QLabel { color: #333333; font-size: 14px; }
-    QCheckBox { color: #333333; font-size: 14px; spacing: 8px; }
-    QCheckBox::indicator { width: 18px; height: 18px; }
-    QGraphicsView {
-        background-color: #ffffff; border: 1px solid #dddddd; border-radius: 4px;
-    }
-    QMenuBar { background-color: #ffffff; border-bottom: 1px solid #dddddd; }
-    QMenuBar::item { padding: 4px 8px; background-color: transparent; }
-    QMenuBar::item:selected { background-color: #e0e0e0; }
-    QMenu { background-color: #ffffff; border: 1px solid #dddddd; }
-    QMenu::item { padding: 6px 20px; }
-    QMenu::item:selected { background-color: #e0e0e0; }
-    QProgressBar {
-        border: 1px solid #dddddd; border-radius: 4px; text-align: center;
-        height: 6px; background-color: #f0f0f0;
-    }
-    QProgressBar::chunk { background-color: #4a86e8; border-radius: 3px; }
-"""
-
-THEMES = {
-    "浅色": "QMainWindow { background-color: #f0f0f0; } QGraphicsView { background-color: #ffffff; }",
-    "深色": """
-        QMainWindow { background-color: #2d2d2d; }
-        QGraphicsView { background-color: #1a1a1a; }
-        QLabel { color: #ffffff; }
-        QCheckBox { color: #ffffff; }
-    """,
-    "护眼": "QMainWindow { background-color: #f0f7eb; } QGraphicsView { background-color: #ffffff; }",
-}
-
-
-class PreloadThread(QThread):
-    """后台预加载线程，使用 QImage 线程安全"""
-    loaded = pyqtSignal(int, QImage)
-
-    def __init__(self, image_files, center_index, cache):
-        super().__init__()
-        self.image_files = image_files
-        self.center_index = center_index
-        self.cache = cache
-
-    def run(self):
-        start = max(0, self.center_index - 3)
-        end = min(len(self.image_files), self.center_index + 6)
-        for i in range(start, end):
-            if i not in self.cache:
-                img = QImage(self.image_files[i])
-                if not img.isNull():
-                    self.loaded.emit(i, img)
-
-
-class SettingsDialog(QDialog):
-    """设置对话框"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("设置")
-        self.setMinimumWidth(300)
-
-        layout = QFormLayout(self)
-
-        self.scale_slider = QSlider(Qt.Horizontal)
-        self.scale_slider.setMinimum(50)
-        self.scale_slider.setMaximum(200)
-        self.scale_slider.setValue(100)
-        self.scale_slider.setTickPosition(QSlider.TicksBelow)
-        self.scale_slider.setTickInterval(10)
-        layout.addRow("图片缩放:", self.scale_slider)
-
-        self.bg_color_btn = QPushButton("选择颜色")
-        self.bg_color_btn.clicked.connect(self._choose_bg_color)
-        layout.addRow("背景颜色:", self.bg_color_btn)
-
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItems(list(THEMES.keys()))
-        layout.addRow("主题:", self.theme_combo)
-
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addRow(button_box)
-
-    def _choose_bg_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            self.bg_color_btn.setStyleSheet(
-                f"background-color: {color.name()}; border: 1px solid #cccccc; border-radius: 4px;"
-            )
-
-
-class HistoryDialog(QDialog):
-    """阅读历史对话框"""
-
-    folder_selected = pyqtSignal(str)
-
-    def __init__(self, history: ReadingHistory, tag_manager: TagManager, parent=None):
-        super().__init__(parent)
-        self.history = history
-        self.tag_manager = tag_manager
-        self.setWindowTitle("阅读历史")
-        self.setMinimumSize(600, 400)
-
-        layout = QVBoxLayout(self)
-
-        # 搜索框
-        search_layout = QHBoxLayout()
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍 搜索文件夹名称或标签...")
-        self.search_input.textChanged.connect(self._filter_list)
-        search_layout.addWidget(self.search_input)
-        layout.addLayout(search_layout)
-
-        # 标签过滤
-        tag_layout = QHBoxLayout()
-        tag_layout.addWidget(QLabel("标签筛选:"))
-        self.tag_combo = QComboBox()
-        self.tag_combo.addItem("全部")
-        self.tag_combo.addItems(tag_manager.get_all_tags())
-        self.tag_combo.currentTextChanged.connect(self._filter_list)
-        tag_layout.addWidget(self.tag_combo)
-        tag_layout.addStretch()
-        layout.addLayout(tag_layout)
-
-        # 列表
-        self.list_widget = QListWidget()
-        self.list_widget.itemDoubleClicked.connect(self._on_double_click)
-        layout.addWidget(self.list_widget)
-
-        # 按钮
-        btn_layout = QHBoxLayout()
-        btn_open = QPushButton("打开")
-        btn_open.clicked.connect(self._open_selected)
-        btn_delete = QPushButton("删除记录")
-        btn_delete.clicked.connect(self._delete_selected)
-        btn_clear = QPushButton("清空历史")
-        btn_clear.clicked.connect(self._clear_all)
-        btn_layout.addWidget(btn_open)
-        btn_layout.addWidget(btn_delete)
-        btn_layout.addStretch()
-        btn_layout.addWidget(btn_clear)
-        layout.addLayout(btn_layout)
-
-        self._load_list()
-
-    def _load_list(self):
-        self.list_widget.clear()
-        entries = self.history.get_all_history()
-        for entry in entries:
-            folder = entry["folder"]
-            page = entry["page_index"] + 1
-            total = entry["total_pages"]
-            tags = self.tag_manager.get_tags_for_folder(folder)
-            tag_str = " ".join(f"[{t}]" for t in tags) if tags else ""
-            name = os.path.basename(folder) or folder
-            display = f"{name}  —  第 {page}/{total} 页  {tag_str}"
-            item = QListWidgetItem(display)
-            item.setData(Qt.UserRole, folder)
-            self.list_widget.addItem(item)
-
-    def _filter_list(self):
-        keyword = self.search_input.text().lower()
-        tag_filter = self.tag_combo.currentText()
-
-        for i in range(self.list_widget.count()):
-            item = self.list_widget.item(i)
-            folder = item.data(Qt.UserRole)
-            text = item.text().lower()
-
-            match_keyword = not keyword or keyword in text
-            match_tag = tag_filter == "全部" or tag_filter in self.tag_manager.get_tags_for_folder(folder)
-
-            item.setHidden(not (match_keyword and match_tag))
-
-    def _get_selected_folder(self):
-        item = self.list_widget.currentItem()
-        if item:
-            return item.data(Qt.UserRole)
-        return None
-
-    def _on_double_click(self, item):
-        folder = item.data(Qt.UserRole)
-        if folder:
-            self.folder_selected.emit(folder)
-            self.accept()
-
-    def _open_selected(self):
-        folder = self._get_selected_folder()
-        if folder:
-            self.folder_selected.emit(folder)
-            self.accept()
-
-    def _delete_selected(self):
-        folder = self._get_selected_folder()
-        if folder:
-            self.history.remove_entry(folder)
-            self._load_list()
-
-    def _clear_all(self):
-        reply = QMessageBox.question(
-            self, "确认", "确定要清空所有阅读历史吗？",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            self.history.clear()
-            self._load_list()
-
-
-class TagDialog(QDialog):
-    """标签管理对话框"""
-
-    def __init__(self, folder: str, tag_manager: TagManager, parent=None):
-        super().__init__(parent)
-        self.folder = folder
-        self.tag_manager = tag_manager
-        self.setWindowTitle(f"标签管理 — {os.path.basename(folder)}")
-        self.setMinimumWidth(350)
-
-        layout = QVBoxLayout(self)
-
-        # 当前标签
-        layout.addWidget(QLabel("当前标签:"))
-        self.tag_list = QListWidget()
-        layout.addWidget(self.tag_list)
-
-        # 添加标签
-        add_layout = QHBoxLayout()
-        self.new_tag_input = QLineEdit()
-        self.new_tag_input.setPlaceholderText("输入新标签...")
-        self.new_tag_input.returnPressed.connect(self._add_tag)
-        btn_add = QPushButton("添加")
-        btn_add.clicked.connect(self._add_tag)
-        add_layout.addWidget(self.new_tag_input)
-        add_layout.addWidget(btn_add)
-        layout.addLayout(add_layout)
-
-        # 全局标签快捷添加
-        all_tags = tag_manager.get_all_tags()
-        current_tags = set(tag_manager.get_tags_for_folder(folder))
-        quick_tags = [t for t in all_tags if t not in current_tags]
-        if quick_tags:
-            layout.addWidget(QLabel("快速添加:"))
-            quick_layout = QGridLayout()
-            for i, tag in enumerate(quick_tags[:12]):
-                btn = QPushButton(tag)
-                btn.setStyleSheet(
-                    f"background-color: {tag_manager.tag_colors.get(tag, '#888888')}; "
-                    "color: white; border-radius: 3px; padding: 4px 10px;"
-                )
-                btn.clicked.connect(lambda checked, t=tag: self._quick_add(t))
-                quick_layout.addWidget(btn, i // 4, i % 4)
-            layout.addLayout(quick_layout)
-
-        # 删除按钮
-        btn_remove = QPushButton("移除选中标签")
-        btn_remove.clicked.connect(self._remove_selected)
-        layout.addWidget(btn_remove)
-
-        # 关闭
-        btn_close = QPushButton("关闭")
-        btn_close.clicked.connect(self.accept)
-        layout.addWidget(btn_close)
-
-        self._refresh_list()
-
-    def _refresh_list(self):
-        self.tag_list.clear()
-        tags = self.tag_manager.get_tags_for_folder(self.folder)
-        for tag in tags:
-            item = QListWidgetItem(tag)
-            color = self.tag_manager.tag_colors.get(tag, "#888888")
-            item.setForeground(QColor(color))
-            self.tag_list.addItem(item)
-
-    def _add_tag(self):
-        tag = self.new_tag_input.text().strip()
-        if tag:
-            self.tag_manager.add_tag(self.folder, tag)
-            self.new_tag_input.clear()
-            self._refresh_list()
-
-    def _quick_add(self, tag):
-        self.tag_manager.add_tag(self.folder, tag)
-        self._refresh_list()
-
-    def _remove_selected(self):
-        item = self.tag_list.currentItem()
-        if item:
-            self.tag_manager.remove_tag(self.folder, item.text())
-            self._refresh_list()
-
-
-class JumpPageDialog(QDialog):
-    """跳转到指定页"""
-
-    def __init__(self, current: int, total: int, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("跳转到")
-        layout = QFormLayout(self)
-
-        self.page_spin = QSlider(Qt.Horizontal)
-        self.page_spin.setMinimum(1)
-        self.page_spin.setMaximum(total)
-        self.page_spin.setValue(current + 1)
-        self.page_spin.setTickPosition(QSlider.TicksBelow)
-
-        self.page_label = QLabel(f"第 {current + 1} / {total} 页")
-        self.page_spin.valueChanged.connect(
-            lambda v: self.page_label.setText(f"第 {v} / {total} 页")
-        )
-
-        layout.addRow(self.page_label)
-        layout.addRow(self.page_spin)
-
-        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btn_box.accepted.connect(self.accept)
-        btn_box.rejected.connect(self.reject)
-        layout.addRow(btn_box)
-
-    def get_page(self) -> int:
-        return self.page_spin.value() - 1
-
-
-class ThumbnailDialog(QDialog):
-    """缩略图总览对话框"""
-
-    page_selected = pyqtSignal(int)
-
-    THUMB_SIZE = 150
-
-    def __init__(self, image_files: list[str], current_index: int, parent=None):
-        super().__init__(parent)
-        self.image_files = image_files
-        self.setWindowTitle(f"缩略图总览 ({len(image_files)} 页)")
-        self.setMinimumSize(700, 500)
-
-        layout = QVBoxLayout(self)
-
-        # 滚动区域
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-
-        container = QWidget()
-        grid = QGridLayout(container)
-        grid.setSpacing(8)
-
-        cols = 4
-        for i, filepath in enumerate(image_files):
-            thumb_widget = QWidget()
-            thumb_layout = QVBoxLayout(thumb_widget)
-            thumb_layout.setContentsMargins(4, 4, 4, 4)
-            thumb_layout.setSpacing(4)
-
-            # 缩略图
-            pixmap = QPixmap(filepath)
-            if not pixmap.isNull():
-                scaled = pixmap.scaled(
-                    self.THUMB_SIZE, self.THUMB_SIZE,
-                    Qt.KeepAspectRatio, Qt.SmoothTransformation
-                )
-                label = QLabel()
-                label.setPixmap(scaled)
-                label.setAlignment(Qt.AlignCenter)
-                if i == current_index:
-                    label.setStyleSheet("border: 3px solid #4a86e8; border-radius: 4px;")
-                else:
-                    label.setStyleSheet("border: 1px solid #dddddd; border-radius: 4px;")
-                thumb_layout.addWidget(label)
-
-            # 页码和文件名
-            name_label = QLabel(f"{i + 1}. {os.path.basename(filepath)}")
-            name_label.setAlignment(Qt.AlignCenter)
-            name_label.setStyleSheet("font-size: 11px; color: #666;")
-            name_label.setWordWrap(True)
-            thumb_layout.addWidget(name_label)
-
-            # 点击事件
-            idx = i
-            label.mousePressEvent = lambda e, x=idx: self._on_click(x)
-            label.setCursor(Qt.PointingHandCursor)
-
-            grid.addWidget(thumb_widget, i // cols, i % cols)
-
-        scroll.setWidget(container)
-        layout.addWidget(scroll)
-
-        # 跳转按钮
-        btn_close = QPushButton("关闭")
-        btn_close.clicked.connect(self.accept)
-        layout.addWidget(btn_close)
-
-    def _on_click(self, index):
-        self.page_selected.emit(index)
-        self.accept()
+APP_VERSION = "0.4.0"
 
 
 class ComicViewer(QMainWindow):
     """漫画浏览器主窗口"""
 
-    PRELOAD_COUNT = 6
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle("漫画浏览器")
-        self.setGeometry(100, 100, 1200, 800)
+        self.setAcceptDrops(True)
 
         # 状态
         self.settings = QSettings("ManhuaViewer", "ComicViewer")
@@ -443,11 +44,13 @@ class ComicViewer(QMainWindow):
         self.current_index = 0
         self.current_folder: str = ""
         self.scale_factor = 1.0
-        self.preloaded_images: dict[int, QPixmap] = {}
+        self.preloaded_images = LRUCache()
         self.double_page_mode = False
         self.long_image_mode = False
         self._is_fullscreen = False
         self._rotation = 0  # 0, 90, 180, 270
+        self._current_theme = "浅色"
+        self._bg_color = "#ffffff"
         self._preload_thread: PreloadThread | None = None
 
         self._init_ui()
@@ -458,6 +61,7 @@ class ComicViewer(QMainWindow):
 
     def _init_ui(self):
         self.setStyleSheet(STYLE_SHEET)
+        self.setGeometry(100, 100, 1200, 800)
         self._create_menu_bar()
 
         central = QWidget()
@@ -623,6 +227,17 @@ class ComicViewer(QMainWindow):
         pref_act.triggered.connect(self._show_settings)
         settings_menu.addAction(pref_act)
 
+        # 帮助
+        help_menu = menubar.addMenu("帮助")
+        shortcuts_act = QAction("快捷键列表", self)
+        shortcuts_act.setShortcut(QKeySequence("F1"))
+        shortcuts_act.triggered.connect(self._show_shortcuts)
+        help_menu.addAction(shortcuts_act)
+
+        about_act = QAction("关于", self)
+        about_act.triggered.connect(self._show_about)
+        help_menu.addAction(about_act)
+
     def _connect_signals(self):
         self.btn_open.clicked.connect(self.open_folder)
         self.btn_prev.clicked.connect(self.prev_page)
@@ -636,16 +251,46 @@ class ComicViewer(QMainWindow):
         geo = self.settings.value("geometry")
         if geo:
             self.restoreGeometry(geo)
+        # 恢复设置
+        self.scale_factor = float(self.settings.value("scale_factor", 1.0))
+        self._current_theme = self.settings.value("theme", "浅色")
+        self._bg_color = self.settings.value("bg_color", "#ffffff")
+        self._apply_theme(self._current_theme)
+        self._apply_bg_color(self._bg_color)
+        # 加载上次文件夹
         last = self.settings.value("last_folder", "")
         if last and os.path.isdir(last):
             self.load_folder(last)
 
     def _save_state(self):
         self.settings.setValue("geometry", self.saveGeometry())
+        self.settings.setValue("scale_factor", self.scale_factor)
+        self.settings.setValue("theme", self._current_theme)
+        self.settings.setValue("bg_color", self._bg_color)
 
     def closeEvent(self, event):
         self._save_state()
         super().closeEvent(event)
+
+    # ── 拖拽支持 ───────────────────────────────────────────────
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                if url.isLocalFile() and os.path.isdir(url.toLocalFile()):
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dropEvent(self, event: QDropEvent):
+        for url in event.mimeData().urls():
+            if url.isLocalFile():
+                folder = url.toLocalFile()
+                if os.path.isdir(folder):
+                    self.settings.setValue("last_folder", folder)
+                    self._add_recent(folder)
+                    self.load_folder(folder)
+                    break
 
     # ── 最近文件 ───────────────────────────────────────────────
 
@@ -681,7 +326,7 @@ class ComicViewer(QMainWindow):
         if path in recent:
             recent.remove(path)
         recent.insert(0, path)
-        self.settings.setValue("recent_files", recent[:10])
+        self.settings.setValue("recent_files", recent[:MAX_RECENT_FILES])
         self._update_recent_menu()
 
     # ── 文件夹加载 ─────────────────────────────────────────────
@@ -724,13 +369,16 @@ class ComicViewer(QMainWindow):
             saved_page = progress.get("page_index", 0)
             if saved_page < len(self.image_files):
                 self.current_index = saved_page
+                logger.info(f"恢复阅读进度: {folder} -> 第 {saved_page + 1} 页")
 
         self.btn_prev.setEnabled(True)
         self.btn_next.setEnabled(True)
-        self._show_progress(True)
+        self.progress_bar.show()
         self._load_current()
         self._start_preload()
-        self._show_progress(False)
+        self.progress_bar.hide()
+
+        logger.info(f"加载文件夹: {folder} ({len(self.image_files)} 页)")
 
     # ── 图片显示 ───────────────────────────────────────────────
 
@@ -766,16 +414,24 @@ class ComicViewer(QMainWindow):
         transform = QTransform().rotate(self._rotation)
         return pixmap.transformed(transform, Qt.SmoothTransformation)
 
+    def _apply_scale(self, view: QGraphicsView, scene: QGraphicsScene):
+        """根据 scale_factor 缩放视图"""
+        view.resetTransform()
+        view.fitInView(scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+        if self.scale_factor != 1.0:
+            view.scale(self.scale_factor, self.scale_factor)
+
     def _show_single(self):
         self.scene_left.clear()
         pixmap = self._get_pixmap(self.current_index)
         if pixmap:
             pixmap = self._apply_rotation(pixmap)
             self.scene_left.addPixmap(pixmap)
-            self.view_left.resetTransform()
             if not self.long_image_mode:
-                self.view_left.fitInView(self.scene_left.itemsBoundingRect(), Qt.KeepAspectRatio)
+                self._apply_scale(self.view_left, self.scene_left)
             else:
+                self.view_left.resetTransform()
+                self.view_left.fitInView(self.scene_left.itemsBoundingRect(), Qt.KeepAspectRatio)
                 self.view_left.verticalScrollBar().setValue(0)
 
     def _show_double(self):
@@ -792,25 +448,28 @@ class ComicViewer(QMainWindow):
             if pixmap:
                 pixmap = self._apply_rotation(pixmap)
                 scene.addPixmap(pixmap)
-                view.resetTransform()
                 if not self.long_image_mode:
-                    view.fitInView(scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+                    self._apply_scale(view, scene)
                 else:
+                    view.resetTransform()
+                    view.fitInView(scene.itemsBoundingRect(), Qt.KeepAspectRatio)
                     view.verticalScrollBar().setValue(0)
 
     def _get_pixmap(self, index):
+        """获取指定索引的图片，带异常处理"""
         if index >= len(self.image_files):
             return None
-        if index in self.preloaded_images:
-            return self.preloaded_images[index]
-        pixmap = QPixmap(self.image_files[index])
-        if not pixmap.isNull():
-            self.preloaded_images[index] = pixmap
-            return pixmap
+        cached = self.preloaded_images.get(index)
+        if cached:
+            return cached
+        try:
+            pixmap = QPixmap(self.image_files[index])
+            if not pixmap.isNull():
+                self.preloaded_images.put(index, pixmap)
+                return pixmap
+        except Exception as e:
+            logger.warning(f"加载图片失败 [{index}]: {self.image_files[index]}: {e}")
         return None
-
-    def _show_progress(self, show):
-        self.progress_bar.setVisible(show)
 
     # ── 预加载 ─────────────────────────────────────────────────
 
@@ -827,7 +486,7 @@ class ComicViewer(QMainWindow):
     def _on_preload_loaded(self, index, qimage):
         """预加载回调，将 QImage 转为 QPixmap（主线程安全）"""
         if not qimage.isNull():
-            self.preloaded_images[index] = QPixmap.fromImage(qimage)
+            self.preloaded_images.put(index, QPixmap.fromImage(qimage))
 
     # ── 模式切换 ───────────────────────────────────────────────
 
@@ -848,14 +507,32 @@ class ComicViewer(QMainWindow):
                 view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._load_current()
 
+    # ── 设置 ───────────────────────────────────────────────────
+
     def _show_settings(self):
-        dlg = SettingsDialog(self)
+        dlg = SettingsDialog(
+            self,
+            current_scale=self.scale_factor,
+            current_theme=self._current_theme,
+            bg_color=self._bg_color,
+        )
         if dlg.exec_() == QDialog.Accepted:
             self.scale_factor = dlg.scale_slider.value() / 100.0
-            theme = dlg.theme_combo.currentText()
-            if theme in THEMES:
-                self.setStyleSheet(STYLE_SHEET + THEMES[theme])
+            self._current_theme = dlg.theme_combo.currentText()
+            self._bg_color = dlg.get_bg_color()
+            self._apply_theme(self._current_theme)
+            self._apply_bg_color(self._bg_color)
             self._load_current()
+            logger.info(f"设置更新: 缩放={self.scale_factor}, 主题={self._current_theme}, 背景={self._bg_color}")
+
+    def _apply_theme(self, theme_name: str):
+        if theme_name in THEMES:
+            self.setStyleSheet(STYLE_SHEET + THEMES[theme_name])
+
+    def _apply_bg_color(self, color: str):
+        """应用背景颜色到图片显示区"""
+        for view in (self.view_left, self.view_right):
+            view.setStyleSheet(f"QGraphicsView {{ background-color: {color}; }}")
 
     # ── 翻页 ───────────────────────────────────────────────────
 
@@ -895,6 +572,7 @@ class ComicViewer(QMainWindow):
 
         if event.type() == QEvent.MouseButtonPress:
             pos = event.pos()
+            # obj 是 viewport，parent() 才是 QGraphicsView
             view = obj.parent()
 
             if event.button() == Qt.MiddleButton:
@@ -1014,6 +692,48 @@ class ComicViewer(QMainWindow):
         dlg = TagDialog(self.current_folder, self.tag_manager, self)
         dlg.exec_()
 
+    # ── 帮助 ───────────────────────────────────────────────────
+
+    def _show_shortcuts(self):
+        shortcuts_text = """
+        <h3>快捷键列表</h3>
+        <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;">
+        <tr><th>按键</th><th>功能</th></tr>
+        <tr><td>← / A</td><td>上一页</td></tr>
+        <tr><td>→ / Space</td><td>下一页</td></tr>
+        <tr><td>D</td><td>切换双页模式</td></tr>
+        <tr><td>L</td><td>切换长图模式</td></tr>
+        <tr><td>R</td><td>顺时针旋转 90°</td></tr>
+        <tr><td>Shift+R</td><td>逆时针旋转 90°</td></tr>
+        <tr><td>T</td><td>缩略图总览</td></tr>
+        <tr><td>G</td><td>跳转到指定页</td></tr>
+        <tr><td>M</td><td>管理标签</td></tr>
+        <tr><td>F11</td><td>全屏模式</td></tr>
+        <tr><td>Home</td><td>跳到第一页</td></tr>
+        <tr><td>End</td><td>跳到最后一页</td></tr>
+        <tr><td>Ctrl+O</td><td>打开文件夹</td></tr>
+        <tr><td>Ctrl+H</td><td>阅读历史</td></tr>
+        <tr><td>Ctrl+,</td><td>偏好设置</td></tr>
+        <tr><td>Ctrl+Q</td><td>退出</td></tr>
+        <tr><td>滚轮</td><td>缩放 / 长图滚动</td></tr>
+        <tr><td>双击</td><td>重置缩放</td></tr>
+        <tr><td>中键拖拽</td><td>平移图片</td></tr>
+        <tr><td>点击左1/3</td><td>上一页</td></tr>
+        <tr><td>点击右1/3</td><td>下一页</td></tr>
+        </table>
+        """
+        QMessageBox.about(self, "快捷键", shortcuts_text)
+
+    def _show_about(self):
+        QMessageBox.about(
+            self, "关于",
+            f"<h2>漫画浏览器</h2>"
+            f"<p>版本 {APP_VERSION}</p>"
+            f"<p>基于 PyQt5 的桌面漫画/图片浏览器</p>"
+            f"<p>支持单页、双页、长图模式</p>"
+            f"<p><a href='https://github.com/sece1024/manhuaviewer'>GitHub</a></p>"
+        )
+
     # ── 响应式布局 ─────────────────────────────────────────────
 
     def resizeEvent(self, event):
@@ -1024,6 +744,10 @@ class ComicViewer(QMainWindow):
 
 def main_cli():
     """命令行入口（供 pyproject.toml [project.scripts] 使用）"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     app = QApplication(sys.argv)
     viewer = ComicViewer()
     viewer.show()
