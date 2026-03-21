@@ -51,23 +51,34 @@ JPG, JPEG, PNG, BMP, WebP, GIF, TIFF
 ## 本地运行
 
 ```bash
-# 安装依赖
-uv pip install --lock
+# 克隆项目
+git clone https://github.com/sece1024/manhuaviewer.git
+cd manhuaviewer
+
+# 安装依赖 (uv 会根据当前平台生成 lock 文件)
+uv sync
 
 # 运行
-uv run comic_viewer_enhance.py
+uv run manhuaviewer
 
-# 或者通过入口文件
-uv run main.py
+# 或者用 pip
+pip install -e .
+python main.py
 ```
 
-## 打包为 exe
+## 打包为可执行文件
 
 ```bash
-uv run build.py
+# 安装打包依赖
+uv sync --extra build
+
+# 打包 (自动识别平台)
+uv run scripts/build.py
 ```
 
-生成的 `漫画浏览器.exe` 在 `dist/` 目录下。
+- Windows → `dist/漫画浏览器.exe`
+- macOS → `dist/漫画浏览器.app`
+- Linux → `dist/漫画浏览器`
 
 ## 运行测试
 
@@ -80,8 +91,7 @@ pytest tests/ -v
 
 ```
 ├── main.py                         # 入口点（兼容直接运行）
-├── pyproject.toml                  # 项目配置
-├── uv.lock                         # uv 锁文件
+├── pyproject.toml                  # 项目配置 + 依赖
 ├── LICENSE                         # MIT 许可证
 ├── README.md
 ├── .gitignore

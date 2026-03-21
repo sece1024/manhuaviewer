@@ -33,6 +33,7 @@ Thumbs.db
 
 # uv
 .uv/
+uv.lock
 
 # Python version (use pyproject.toml requires-python)
 .python-version
