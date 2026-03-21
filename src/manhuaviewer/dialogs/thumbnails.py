@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QPushButton, QLabel, QScrollArea, QWidget, QGridLayout,
 )
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import Qt, QThreadPool, QRunnable, pyqtSignal, QObject
+from PyQt5.QtCore import Qt, QThreadPool, QRunnable, pyqtSignal, QObject, QTimer
 
 from manhuaviewer.constants import THUMBNAIL_SIZE
 
@@ -106,6 +106,10 @@ class ThumbnailDialog(QDialog):
         scroll.setWidget(self._container)
         layout.addWidget(scroll)
 
+        # 自动滚动到当前页位置
+        if current_index < len(image_files):
+            QTimer.singleShot(100, lambda: self._scroll_to_current(scroll, current_index, cols))
+
         # 关闭按钮
         btn_close = QPushButton("关闭")
         btn_close.clicked.connect(self.accept)
@@ -115,6 +119,12 @@ class ThumbnailDialog(QDialog):
         self._thread_pool = QThreadPool(self)
         self._thread_pool.setMaxThreadCount(4)
         self._load_thumbnails()
+
+    def _scroll_to_current(self, scroll: QScrollArea, index: int, cols: int):
+        """滚动缩略图到当前页"""
+        if index in self._thumb_labels:
+            label = self._thumb_labels[index]
+            scroll.ensureWidgetVisible(label, 50, 50)
 
     def _load_thumbnails(self):
         """异步加载所有缩略图"""

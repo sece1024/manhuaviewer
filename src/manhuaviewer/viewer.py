@@ -15,7 +15,10 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap, QPainter, QKeySequence, QTransform, QDragEnterEvent, QDropEvent
 from PyQt5.QtCore import Qt, QDir, QSettings, QThread, pyqtSignal, QEvent, QTimer
 
-from manhuaviewer.constants import SUPPORTED_FORMATS, MAX_RECENT_FILES
+from manhuaviewer.constants import (
+    SUPPORTED_FORMATS, MAX_RECENT_FILES, ZOOM_FACTOR, LONG_SCROLL_STEP,
+    LONG_KEY_SCROLL_STEP, ZOOM_MIN, ZOOM_MAX, RESIZE_DEBOUNCE_MS,
+)
 from manhuaviewer.styles import STYLE_SHEET, THEMES
 from manhuaviewer.data_store import ReadingHistory, TagManager
 from manhuaviewer.preload import PreloadThread, LRUCache
@@ -60,7 +63,7 @@ class ComicViewer(QMainWindow):
         # resize 防抖定时器
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
-        self._resize_timer.setInterval(150)  # 150ms 防抖
+        self._resize_timer.setInterval(RESIZE_DEBOUNCE_MS)  # 防抖
         self._resize_timer.timeout.connect(self._on_resize_debounced)
 
     # ── UI 初始化 ──────────────────────────────────────────────
@@ -132,6 +135,8 @@ class ComicViewer(QMainWindow):
             view.viewport().installEventFilter(self)
             view.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
             view.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+            view.setContextMenuPolicy(Qt.CustomContextMenu)
+            view.customContextMenuRequested.connect(self._show_context_menu)
 
         self.view_left.setScene(self.scene_left)
         self.view_right.setScene(self.scene_right)
@@ -398,10 +403,25 @@ class ComicViewer(QMainWindow):
         tags = self.tag_manager.get_tags_for_folder(self.current_folder) if self.current_folder else []
         tag_str = " ".join(f"[{t}]" for t in tags) if tags else ""
         rotation_str = f" | 旋转 {self._rotation}°" if self._rotation else ""
+
+        # 图片信息
+        pixmap = self._get_pixmap(self.current_index)
+        info_str = ""
+        if pixmap:
+            info_str = f" | {pixmap.width()}×{pixmap.height()}"
+            try:
+                size_bytes = os.path.getsize(self.image_files[self.current_index])
+                if size_bytes > 1024 * 1024:
+                    info_str += f" | {size_bytes / 1024 / 1024:.1f}MB"
+                else:
+                    info_str += f" | {size_bytes / 1024:.0f}KB"
+            except OSError:
+                pass
+
         self.label_status.setText(
             f"状态: {self.current_index + 1}/{total} | "
             f"{os.path.basename(self.image_files[self.current_index])}"
-            f"{rotation_str} {tag_str}"
+            f"{info_str}{rotation_str} {tag_str}"
         )
         self.progress_bar.setValue(int((self.current_index + 1) / total * 100))
 
@@ -574,20 +594,25 @@ class ComicViewer(QMainWindow):
 
     def keyPressEvent(self, event):
         key = event.key()
-        if key == Qt.Key_Left or key == Qt.Key_A:
+        if key == Qt.Key_Escape:
+            if self._is_fullscreen:
+                self._toggle_fullscreen()
+            else:
+                super().keyPressEvent(event)
+        elif key == Qt.Key_Left or key == Qt.Key_A:
             self.prev_page()
         elif key == Qt.Key_Right:
             self.next_page()
         elif key == Qt.Key_Up:
             if self.long_image_mode:
                 view = self.view_left
-                view.verticalScrollBar().setValue(view.verticalScrollBar().value() - 80)
+                view.verticalScrollBar().setValue(view.verticalScrollBar().value() - LONG_KEY_SCROLL_STEP)
             else:
                 self.prev_page()
         elif key == Qt.Key_Down:
             if self.long_image_mode:
                 view = self.view_left
-                view.verticalScrollBar().setValue(view.verticalScrollBar().value() + 80)
+                view.verticalScrollBar().setValue(view.verticalScrollBar().value() + LONG_KEY_SCROLL_STEP)
             else:
                 self.next_page()
         elif key == Qt.Key_Home:
@@ -647,19 +672,61 @@ class ComicViewer(QMainWindow):
             view = obj.parent()
 
             if self.long_image_mode:
-                step = delta / 120 * 30
+                step = delta / 120 * LONG_SCROLL_STEP
                 view.verticalScrollBar().setValue(
                     int(view.verticalScrollBar().value() - step)
                 )
             else:
-                factor = 1.15 if delta > 0 else 1 / 1.15
+                factor = ZOOM_FACTOR if delta > 0 else 1 / ZOOM_FACTOR
                 current = view.transform().m11()
                 new_scale = current * factor
-                if 0.1 <= new_scale <= 10:
+                if ZOOM_MIN <= new_scale <= ZOOM_MAX:
                     view.scale(factor, factor)
             return True
 
         return super().eventFilter(obj, event)
+
+    # ── 右键菜单 ───────────────────────────────────────────────
+
+    def _show_context_menu(self, pos):
+        """图片区右键菜单"""
+        if not self.image_files:
+            return
+        menu = QMenu(self)
+
+        act_prev = menu.addAction("上一页")
+        act_prev.triggered.connect(self.prev_page)
+        act_next = menu.addAction("下一页")
+        act_next.triggered.connect(self.next_page)
+
+        menu.addSeparator()
+
+        act_double = menu.addAction("双页模式")
+        act_double.setCheckable(True)
+        act_double.setChecked(self.double_page_mode)
+        act_double.triggered.connect(lambda: self.check_double.setChecked(not self.check_double.isChecked()))
+
+        act_long = menu.addAction("长图模式")
+        act_long.setCheckable(True)
+        act_long.setChecked(self.long_image_mode)
+        act_long.triggered.connect(lambda: self.check_long.setChecked(not self.check_long.isChecked()))
+
+        menu.addSeparator()
+
+        act_thumb = menu.addAction("缩略图总览")
+        act_thumb.triggered.connect(self._show_thumbnails)
+
+        act_rotate = menu.addAction("顺时针旋转 90°")
+        act_rotate.triggered.connect(lambda: self._rotate(90))
+
+        menu.addSeparator()
+
+        act_open = menu.addAction("打开文件夹")
+        act_open.triggered.connect(self.open_folder)
+
+        sender = self.sender()
+        if sender:
+            menu.exec_(sender.mapToGlobal(pos))
 
     # ── 全屏 ───────────────────────────────────────────────────
 

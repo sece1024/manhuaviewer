@@ -39,8 +39,15 @@ def _load_json(path: Path) -> dict:
 
 
 def _save_json(path: Path, data: dict):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """安全写入 JSON — 先写临时文件再 rename，防止写入中断导致数据丢失"""
+    tmp_path = path.with_suffix(".tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        tmp_path.replace(path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 # ── 阅读历史 ────────────────────────────────────────────────────
