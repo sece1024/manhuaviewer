@@ -55,6 +55,7 @@ class ComicViewer(QMainWindow):
         self._current_theme = "浅色"
         self._bg_color = "#ffffff"
         self._preload_thread: PreloadThread | None = None
+        self._file_sizes: dict[int, int] = {}  # 缓存文件大小，避免重复 syscall
 
         self._init_ui()
         self._connect_signals()
@@ -354,7 +355,13 @@ class ComicViewer(QMainWindow):
 
     def load_folder(self, folder):
         """加载文件夹中的图片"""
+        # 停掉可能仍在运行的预加载线程
+        if self._preload_thread and self._preload_thread.isRunning():
+            self._preload_thread.terminate()
+            self._preload_thread.wait(1000)
+
         self.preloaded_images.clear()
+        self._file_sizes.clear()
 
         self.image_files = []
         for ext in SUPPORTED_FORMATS:
@@ -404,19 +411,22 @@ class ComicViewer(QMainWindow):
         tag_str = " ".join(f"[{t}]" for t in tags) if tags else ""
         rotation_str = f" | 旋转 {self._rotation}°" if self._rotation else ""
 
-        # 图片信息
+        # 图片信息（使用缓存避免重复 syscall）
         pixmap = self._get_pixmap(self.current_index)
         info_str = ""
         if pixmap:
             info_str = f" | {pixmap.width()}×{pixmap.height()}"
-            try:
-                size_bytes = os.path.getsize(self.image_files[self.current_index])
+            if self.current_index not in self._file_sizes:
+                try:
+                    self._file_sizes[self.current_index] = os.path.getsize(self.image_files[self.current_index])
+                except OSError:
+                    self._file_sizes[self.current_index] = 0
+            size_bytes = self._file_sizes[self.current_index]
+            if size_bytes > 0:
                 if size_bytes > 1024 * 1024:
                     info_str += f" | {size_bytes / 1024 / 1024:.1f}MB"
                 else:
                     info_str += f" | {size_bytes / 1024:.0f}KB"
-            except OSError:
-                pass
 
         self.label_status.setText(
             f"状态: {self.current_index + 1}/{total} | "
@@ -569,24 +579,36 @@ class ComicViewer(QMainWindow):
 
     def _apply_theme(self, theme_name: str):
         if theme_name in THEMES:
-            self.setStyleSheet(STYLE_SHEET + THEMES[theme_name])
+            # 将 bg_color 与主题合并，避免 setStyleSheet 覆盖
+            bg_style = f"QGraphicsView {{ background-color: {self._bg_color}; }}"
+            self.setStyleSheet(STYLE_SHEET + THEMES[theme_name] + bg_style)
 
     def _apply_bg_color(self, color: str):
-        """应用背景颜色到图片显示区"""
-        for view in (self.view_left, self.view_right):
-            view.setStyleSheet(f"QGraphicsView {{ background-color: {color}; }}")
+        """应用背景颜色到图片显示区 — 通过刷新主题样式实现"""
+        self._bg_color = color
+        self._apply_theme(self._current_theme)
 
     # ── 翻页 ───────────────────────────────────────────────────
 
     def prev_page(self):
+        if not self.image_files:
+            return
         step = 2 if self.double_page_mode else 1
-        self.current_index = max(0, self.current_index - step)
+        new_index = max(0, self.current_index - step)
+        if new_index == self.current_index:
+            return
+        self.current_index = new_index
         self._load_current()
         self._start_preload()
 
     def next_page(self):
+        if not self.image_files:
+            return
         step = 2 if self.double_page_mode else 1
-        self.current_index = min(len(self.image_files) - 1, self.current_index + step)
+        new_index = min(len(self.image_files) - 1, self.current_index + step)
+        if new_index == self.current_index:
+            return
+        self.current_index = new_index
         self._load_current()
         self._start_preload()
 
