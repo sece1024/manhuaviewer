@@ -9,6 +9,10 @@ dependencies = [
     "pyqt5>=5.15.11",
 ]
 
+[project.optional-dependencies]
+build = ["pyinstaller>=6.13.0"]
+dev = ["pytest>=8.0"]
+
 [project.scripts]
 manhuaviewer = "manhuaviewer.viewer:main_cli"
 
