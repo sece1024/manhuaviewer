@@ -55,15 +55,26 @@ JPG, JPEG, PNG, BMP, WebP, GIF, TIFF
 git clone https://github.com/sece1024/manhuaviewer.git
 cd manhuaviewer
 
-# macOS / Linux
-uv sync
-uv run manhuaviewer
+# 一键启动（自动创建 venv、安装依赖、运行）
+# Windows:
+run.bat
+# macOS / Linux:
+bash run.sh
+```
 
-# Windows (uv sync 会因 pyqt5-qt5 缺少 Windows wheel 报错，改用 uv pip)
+或手动操作：
+
+```bash
 uv venv
 uv pip install -e .
-uv run manhuaviewer
+
+# Windows
+.venv\Scripts\python main.py
+# macOS / Linux
+.venv/bin/python main.py
 ```
+
+> ⚠️ Windows 上不要用 `uv run`，它会重新解析依赖并拉到没有 Windows wheel 的 `pyqt5-qt5` 版本。用 `uv pip install` + 直接调用 python 即可。
 
 ## 打包为可执行文件
 
