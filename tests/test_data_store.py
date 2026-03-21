@@ -4,9 +4,15 @@ import os
 import tempfile
 from pathlib import Path
 
+import sys
+from pathlib import Path
+
 import pytest
 
-from data_store import ReadingHistory, TagManager
+# 确保 src 在路径中
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from manhuaviewer.data_store import ReadingHistory, TagManager
 
 
 @pytest.fixture

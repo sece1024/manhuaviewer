@@ -1,13 +1,23 @@
 [project]
 name = "manhuaviewer"
-version = "0.2.0"
+version = "0.3.0"
 description = "基于 PyQt5 的桌面漫画/图片浏览器，支持单页、双页、长图模式"
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
-    "pyinstaller>=6.13.0",
     "pyqt5>=5.15.11",
 ]
 
 [project.scripts]
-manhuaviewer = "main:main"
+manhuaviewer = "manhuaviewer.viewer:main_cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/manhuaviewer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

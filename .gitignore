@@ -13,6 +13,11 @@ build/
 venv/
 env/
 
+# Test & coverage
+.pytest_cache/
+htmlcov/
+.coverage
+
 # IDE
 .vscode/
 .idea/
@@ -28,3 +33,6 @@ Thumbs.db
 
 # uv
 .uv/
+
+# Python version (use pyproject.toml requires-python)
+.python-version

@@ -1,6 +1,6 @@
 """漫画浏览器 - 入口点"""
 import sys
-from comic_viewer_enhance import ComicViewer
+from manhuaviewer.viewer import ComicViewer
 from PyQt5.QtWidgets import QApplication
 
 

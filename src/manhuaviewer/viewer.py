@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QPixmap, QImage, QIcon, QColor, QPainter, QKeySequence, QTransform
 from PyQt5.QtCore import Qt, QDir, QTimer, QSize, QSettings, QThread, pyqtSignal
-from data_store import ReadingHistory, TagManager
+from manhuaviewer.data_store import ReadingHistory, TagManager
 
 
 # 支持的图片格式
@@ -1022,8 +1022,13 @@ class ComicViewer(QMainWindow):
             self._load_current()
 
 
-if __name__ == "__main__":
+def main_cli():
+    """命令行入口（供 pyproject.toml [project.scripts] 使用）"""
     app = QApplication(sys.argv)
     viewer = ComicViewer()
     viewer.show()
     sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main_cli()

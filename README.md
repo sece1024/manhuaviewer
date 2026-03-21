@@ -79,16 +79,21 @@ pytest tests/ -v
 ## 项目结构
 
 ```
-├── main.py                    # 入口点
-├── comic_viewer_enhance.py    # 主程序（增强版浏览器）
-├── data_store.py              # 数据持久化层（阅读历史 + 标签）
-├── build.py                   # PyInstaller 打包脚本
-├── tests/                     # 单元测试
-│   └── test_data_store.py
-├── pyproject.toml             # 项目配置
-├── requirements.txt           # 依赖列表
-├── uv.lock                    # uv 锁文件
-└── LICENSE                    # MIT 许可证
+├── main.py                         # 入口点（兼容直接运行）
+├── pyproject.toml                  # 项目配置
+├── uv.lock                         # uv 锁文件
+├── LICENSE                         # MIT 许可证
+├── README.md
+├── .gitignore
+├── src/
+│   └── manhuaviewer/
+│       ├── __init__.py
+│       ├── viewer.py               # 主程序（浏览器 UI）
+│       └── data_store.py           # 数据持久化（阅读历史 + 标签）
+├── scripts/
+│   └── build.py                    # PyInstaller 打包脚本
+└── tests/
+    └── test_data_store.py          # 单元测试（19 个）
 ```
 
 ## 数据存储
