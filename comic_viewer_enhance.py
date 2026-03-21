@@ -10,9 +10,9 @@ from PyQt5.QtWidgets import (
     QFrame, QSpacerItem, QSizePolicy, QMenu, QAction, QDialog,
     QSlider, QColorDialog, QComboBox, QFormLayout, QDialogButtonBox, QMessageBox,
     QProgressBar, QListWidget, QListWidgetItem, QLineEdit, QInputDialog,
-    QSplitter, QGroupBox, QGridLayout
+    QSplitter, QGroupBox, QGridLayout, QScrollArea, QSpinBox
 )
-from PyQt5.QtGui import QPixmap, QImage, QIcon, QColor, QPainter, QKeySequence
+from PyQt5.QtGui import QPixmap, QImage, QIcon, QColor, QPainter, QKeySequence, QTransform
 from PyQt5.QtCore import Qt, QDir, QTimer, QSize, QSettings, QThread, pyqtSignal
 from data_store import ReadingHistory, TagManager
 
@@ -352,6 +352,79 @@ class JumpPageDialog(QDialog):
         return self.page_spin.value() - 1
 
 
+class ThumbnailDialog(QDialog):
+    """缩略图总览对话框"""
+
+    page_selected = pyqtSignal(int)
+
+    THUMB_SIZE = 150
+
+    def __init__(self, image_files: list[str], current_index: int, parent=None):
+        super().__init__(parent)
+        self.image_files = image_files
+        self.setWindowTitle(f"缩略图总览 ({len(image_files)} 页)")
+        self.setMinimumSize(700, 500)
+
+        layout = QVBoxLayout(self)
+
+        # 滚动区域
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+
+        container = QWidget()
+        grid = QGridLayout(container)
+        grid.setSpacing(8)
+
+        cols = 4
+        for i, filepath in enumerate(image_files):
+            thumb_widget = QWidget()
+            thumb_layout = QVBoxLayout(thumb_widget)
+            thumb_layout.setContentsMargins(4, 4, 4, 4)
+            thumb_layout.setSpacing(4)
+
+            # 缩略图
+            pixmap = QPixmap(filepath)
+            if not pixmap.isNull():
+                scaled = pixmap.scaled(
+                    self.THUMB_SIZE, self.THUMB_SIZE,
+                    Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+                label = QLabel()
+                label.setPixmap(scaled)
+                label.setAlignment(Qt.AlignCenter)
+                if i == current_index:
+                    label.setStyleSheet("border: 3px solid #4a86e8; border-radius: 4px;")
+                else:
+                    label.setStyleSheet("border: 1px solid #dddddd; border-radius: 4px;")
+                thumb_layout.addWidget(label)
+
+            # 页码和文件名
+            name_label = QLabel(f"{i + 1}. {os.path.basename(filepath)}")
+            name_label.setAlignment(Qt.AlignCenter)
+            name_label.setStyleSheet("font-size: 11px; color: #666;")
+            name_label.setWordWrap(True)
+            thumb_layout.addWidget(name_label)
+
+            # 点击事件
+            idx = i
+            label.mousePressEvent = lambda e, x=idx: self._on_click(x)
+            label.setCursor(Qt.PointingHandCursor)
+
+            grid.addWidget(thumb_widget, i // cols, i % cols)
+
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
+
+        # 跳转按钮
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(self.accept)
+        layout.addWidget(btn_close)
+
+    def _on_click(self, index):
+        self.page_selected.emit(index)
+        self.accept()
+
+
 class ComicViewer(QMainWindow):
     """漫画浏览器主窗口"""
 
@@ -374,6 +447,7 @@ class ComicViewer(QMainWindow):
         self.double_page_mode = False
         self.long_image_mode = False
         self._is_fullscreen = False
+        self._rotation = 0  # 0, 90, 180, 270
         self._preload_thread: PreloadThread | None = None
 
         self._init_ui()
@@ -512,11 +586,28 @@ class ComicViewer(QMainWindow):
         fullscreen_act.triggered.connect(self._toggle_fullscreen)
         view_menu.addAction(fullscreen_act)
 
+        view_menu.addSeparator()
+
+        thumb_act = QAction("缩略图总览", self)
+        thumb_act.setShortcut(QKeySequence("T"))
+        thumb_act.triggered.connect(self._show_thumbnails)
+        view_menu.addAction(thumb_act)
+
+        rotate_cw = QAction("顺时针旋转 90°", self)
+        rotate_cw.setShortcut(QKeySequence("R"))
+        rotate_cw.triggered.connect(lambda: self._rotate(90))
+        view_menu.addAction(rotate_cw)
+
+        rotate_ccw = QAction("逆时针旋转 90°", self)
+        rotate_ccw.setShortcut(QKeySequence("Shift+R"))
+        rotate_ccw.triggered.connect(lambda: self._rotate(-90))
+        view_menu.addAction(rotate_ccw)
+
         # 漫画
         comic_menu = menubar.addMenu("漫画")
 
         tag_act = QAction("管理标签", self)
-        tag_act.setShortcut(QKeySequence("T"))
+        tag_act.setShortcut(QKeySequence("M"))
         tag_act.triggered.connect(self._show_tag_dialog)
         comic_menu.addAction(tag_act)
 
@@ -649,8 +740,13 @@ class ComicViewer(QMainWindow):
             return
 
         total = len(self.image_files)
+        tags = self.tag_manager.get_tags_for_folder(self.current_folder) if self.current_folder else []
+        tag_str = " ".join(f"[{t}]" for t in tags) if tags else ""
+        rotation_str = f" | 旋转 {self._rotation}°" if self._rotation else ""
         self.label_status.setText(
-            f"状态: {self.current_index + 1}/{total} | {os.path.basename(self.image_files[self.current_index])}"
+            f"状态: {self.current_index + 1}/{total} | "
+            f"{os.path.basename(self.image_files[self.current_index])}"
+            f"{rotation_str} {tag_str}"
         )
         self.progress_bar.setValue(int((self.current_index + 1) / total * 100))
 
@@ -663,10 +759,18 @@ class ComicViewer(QMainWindow):
         else:
             self._show_double()
 
+    def _apply_rotation(self, pixmap: QPixmap) -> QPixmap:
+        """应用旋转"""
+        if self._rotation == 0 or pixmap.isNull():
+            return pixmap
+        transform = QTransform().rotate(self._rotation)
+        return pixmap.transformed(transform, Qt.SmoothTransformation)
+
     def _show_single(self):
         self.scene_left.clear()
         pixmap = self._get_pixmap(self.current_index)
         if pixmap:
+            pixmap = self._apply_rotation(pixmap)
             self.scene_left.addPixmap(pixmap)
             self.view_left.resetTransform()
             if not self.long_image_mode:
@@ -686,6 +790,7 @@ class ComicViewer(QMainWindow):
             (self.view_right, self.scene_right, px_right),
         ]:
             if pixmap:
+                pixmap = self._apply_rotation(pixmap)
                 scene.addPixmap(pixmap)
                 view.resetTransform()
                 if not self.long_image_mode:
@@ -855,6 +960,26 @@ class ComicViewer(QMainWindow):
         else:
             self.showFullScreen()
             self._is_fullscreen = True
+
+    # ── 缩略图 ─────────────────────────────────────────────────
+
+    def _show_thumbnails(self):
+        if not self.image_files:
+            return
+        dlg = ThumbnailDialog(self.image_files, self.current_index, self)
+        dlg.page_selected.connect(self._on_thumb_select)
+        dlg.exec_()
+
+    def _on_thumb_select(self, index):
+        self.current_index = index
+        self._load_current()
+        self._start_preload()
+
+    # ── 旋转 ───────────────────────────────────────────────────
+
+    def _rotate(self, degrees: int):
+        self._rotation = (self._rotation + degrees) % 360
+        self._load_current()
 
     # ── 跳转到页 ───────────────────────────────────────────────
 
