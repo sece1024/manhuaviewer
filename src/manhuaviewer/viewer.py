@@ -130,6 +130,7 @@ class ComicViewer(QMainWindow):
         self.view_left.setScene(self.scene_left)
         self.view_right.setScene(self.scene_right)
         view_layout.addWidget(self.view_left)
+        view_layout.addWidget(self.view_right)
         self.view_right.hide()
 
         root_layout.addWidget(view_frame)
