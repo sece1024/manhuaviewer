@@ -7,6 +7,7 @@
   --accent-hover: #3a76d8;
   --border: #dddddd;
   --radius: 8px;
+  --sidebar-width: 220px;
 }
 
 [data-theme="dark"] {
@@ -32,6 +33,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: var(--bg-primary);
   color: var(--text-primary);
+  -webkit-tap-highlight-color: transparent;
 }
 
 .app-layout {
@@ -41,12 +43,13 @@ body {
 
 /* ── Sidebar ── */
 .sidebar {
-  width: 220px;
+  width: var(--sidebar-width);
   background: var(--bg-secondary);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   padding: 16px 0;
+  flex-shrink: 0;
 }
 
 .sidebar-brand {
@@ -71,17 +74,24 @@ body {
 .sidebar-nav a:hover { background: var(--bg-primary); }
 .sidebar-nav a.active { background: var(--accent); color: #fff; }
 
+/* 移动端侧边栏遮罩 */
+.sidebar-overlay {
+  display: none;
+}
+
 /* ── Main ── */
 .main-content {
   flex: 1;
   overflow-y: auto;
   padding: 24px;
+  min-width: 0;
 }
 
 /* ── Buttons ── */
 .btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 8px 16px;
   border: none;
@@ -91,6 +101,9 @@ body {
   font-size: 14px;
   cursor: pointer;
   transition: background 0.15s;
+  white-space: nowrap;
+  min-height: 40px;
+  -webkit-tap-highlight-color: transparent;
 }
 .btn:hover { background: var(--accent-hover); }
 .btn:disabled { background: #a0a0a0; cursor: not-allowed; }
@@ -98,6 +111,10 @@ body {
 .btn-secondary:hover { background: var(--border); }
 .btn-danger { background: #e74c3c; }
 .btn-danger:hover { background: #c0392b; }
+.btn-icon {
+  padding: 8px;
+  min-width: 40px;
+}
 
 /* ── Cards ── */
 .card {
@@ -112,7 +129,7 @@ input, select {
   padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 16px; /* 防止 iOS 缩放 */
   background: var(--bg-secondary);
   color: var(--text-primary);
   outline: none;
@@ -164,4 +181,157 @@ input:focus, select:focus { border-color: var(--accent); }
   font-size: 12px;
   color: #fff;
   margin-right: 4px;
+}
+
+/* ── 阅读器工具栏 ── */
+.reader-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.reader-toolbar .status-text {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* ── 底部操作栏（移动端） ── */
+.mobile-bottom-bar {
+  display: none;
+}
+
+/* ══════════════════════════════════════
+   响应式 — 平板 (< 1024px)
+   ══════════════════════════════════════ */
+@media (max-width: 1024px) {
+  .sidebar {
+    width: 180px;
+  }
+  .reader-toolbar .status-text {
+    width: 100%;
+    margin-left: 0;
+    order: 10;
+  }
+}
+
+/* ══════════════════════════════════════
+   响应式 — 手机 (< 768px)
+   ══════════════════════════════════════ */
+@media (max-width: 768px) {
+  .app-layout {
+    flex-direction: column;
+  }
+
+  /* 侧边栏 → 底部导航 */
+  .sidebar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    padding: 0;
+    border-right: none;
+    border-top: 1px solid var(--border);
+    z-index: 50;
+    transform: translateY(100%);
+    transition: transform 0.2s ease;
+  }
+  .sidebar.open {
+    transform: translateY(0);
+  }
+
+  .sidebar-brand { display: none; }
+
+  .sidebar-nav {
+    display: flex;
+    flex: 1;
+    justify-content: space-around;
+  }
+  .sidebar-nav a {
+    margin: 8px 4px;
+    font-size: 13px;
+    padding: 8px 12px;
+    text-align: center;
+  }
+
+  .sidebar .theme-select-wrapper {
+    display: none;
+  }
+
+  /* 遮罩层 */
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 49;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .sidebar-overlay.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* 主内容区 */
+  .main-content {
+    padding: 16px 12px;
+    padding-bottom: 80px; /* 给底部导航留空间 */
+  }
+
+  /* 阅读器工具栏精简 */
+  .reader-toolbar {
+    gap: 6px;
+  }
+  .reader-toolbar .btn {
+    padding: 6px 10px;
+    font-size: 13px;
+    min-height: 36px;
+  }
+  .reader-toolbar .toolbar-group-secondary {
+    display: none;
+  }
+
+  /* 底部操作栏（阅读器） */
+  .mobile-bottom-bar {
+    display: flex;
+    position: fixed;
+    bottom: 52px; /* 在底部导航上方 */
+    left: 0;
+    right: 0;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border);
+    padding: 8px 12px;
+    gap: 8px;
+    justify-content: center;
+    z-index: 48;
+  }
+
+  /* Toast 适配 */
+  .toast-container {
+    top: 12px;
+    right: 12px;
+    left: 12px;
+  }
+}
+
+/* ══════════════════════════════════════
+   响应式 — 小手机 (< 480px)
+   ══════════════════════════════════════ */
+@media (max-width: 480px) {
+  .main-content {
+    padding: 12px 8px;
+    padding-bottom: 80px;
+  }
+
+  .sidebar-nav a {
+    font-size: 12px;
+    padding: 6px 8px;
+  }
 }
