@@ -1,22 +1,22 @@
 const express = require('express');
 const router = express.Router();
 
-const configRoutes = require('./configRoutes');
-const folderRoutes = require('./folderRoutes');
+const archiveRoutes = require('./archiveRoutes');
 const imageRoutes = require('./imageRoutes');
-const historyRoutes = require('./historyRoutes');
 const tagRoutes = require('./tagRoutes');
+const categoryRoutes = require('./categoryRoutes');
+const historyRoutes = require('./historyRoutes');
 const settingsRoutes = require('./settingsRoutes');
 
 router.get('/', (req, res) => {
-  res.json({ message: 'MangaViewer API', version: '0.1.0' });
+  res.json({ message: 'MangaViewer API v2', version: '2.0.0' });
 });
 
-router.use('/', configRoutes);
-router.use('/', folderRoutes);
+router.use('/', archiveRoutes);
 router.use('/', imageRoutes);
-router.use('/', historyRoutes);
 router.use('/', tagRoutes);
+router.use('/', categoryRoutes);
+router.use('/', historyRoutes);
 router.use('/', settingsRoutes);
 
 module.exports = router;

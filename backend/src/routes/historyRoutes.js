@@ -1,3 +1,6 @@
+/**
+ * historyRoutes.js — 阅读历史
+ */
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db/database');
@@ -6,44 +9,56 @@ const { getDb } = require('../db/database');
 router.get('/history', (req, res) => {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT h.folder_id, h.page_index, h.total_pages, h.updated_at,
-           f.name, f.path, f.image_count
+    SELECT h.archive_id, h.page_index, h.total_pages, h.updated_at,
+           a.title, a.path, a.page_count, a.archive_type
     FROM history h
-    JOIN folders f ON f.id = h.folder_id
+    JOIN archives a ON a.id = h.archive_id
     ORDER BY h.updated_at DESC
   `).all();
 
   const tagStmt = db.prepare(`
-    SELECT t.name, t.color FROM folder_tags ft
-    JOIN tags t ON t.id = ft.tag_id WHERE ft.folder_id = ?
+    SELECT t.namespace, t.name, t.color FROM archive_tags at2
+    JOIN tags t ON t.id = at2.tag_id WHERE at2.archive_id = ?
   `);
 
-  const result = rows.map((r) => ({ ...r, tags: tagStmt.all(r.folder_id) }));
+  const result = rows.map(r => ({
+    ...r,
+    cover_url: `/api/archives/${r.archive_id}/cover`,
+    tags: tagStmt.all(r.archive_id),
+  }));
+
   res.json(result);
 });
 
 // 保存/更新阅读进度
 router.post('/history', (req, res) => {
-  const { folder_id, page_index, total_pages } = req.body;
-  if (!folder_id || page_index == null) {
-    return res.status(400).json({ error: 'folder_id 和 page_index 必填' });
+  const { archive_id, page_index, total_pages } = req.body;
+  if (!archive_id || page_index == null) {
+    return res.status(400).json({ error: 'archive_id 和 page_index 必填' });
   }
   const db = getDb();
   db.prepare(`
-    INSERT INTO history (folder_id, page_index, total_pages, updated_at)
+    INSERT INTO history (archive_id, page_index, total_pages, updated_at)
     VALUES (?, ?, ?, datetime('now'))
-    ON CONFLICT(folder_id) DO UPDATE SET
+    ON CONFLICT(archive_id) DO UPDATE SET
       page_index = excluded.page_index,
       total_pages = excluded.total_pages,
       updated_at = excluded.updated_at
-  `).run(folder_id, page_index, total_pages || 0);
+  `).run(archive_id, page_index, total_pages || 0);
   res.json({ success: true });
 });
 
 // 删除历史记录
-router.delete('/history/:folderId', (req, res) => {
+router.delete('/history/:archiveId', (req, res) => {
   const db = getDb();
-  db.prepare('DELETE FROM history WHERE folder_id = ?').run(parseInt(req.params.folderId));
+  db.prepare('DELETE FROM history WHERE archive_id = ?').run(parseInt(req.params.archiveId));
+  res.json({ success: true });
+});
+
+// 清空所有历史
+router.delete('/history', (req, res) => {
+  const db = getDb();
+  db.prepare('DELETE FROM history').run();
   res.json({ success: true });
 });
 
