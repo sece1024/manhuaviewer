@@ -20,34 +20,49 @@ const api = {
   // Scan
   scan: () => request('/scan', { method: 'POST' }),
 
-  // Folders
-  getFolders: (params = {}) => {
+  // Archives
+  getArchives: (params = {}) => {
     const qs = new URLSearchParams(params).toString();
-    return request(`/folders${qs ? '?' + qs : ''}`);
+    return request(`/archives${qs ? '?' + qs : ''}`);
   },
-
-  // Images
-  getImages: (folderId) => request(`/folders/${folderId}/images`),
-  imageUrl: (id) => `${BASE}/images/${id}`,
-  thumbUrl: (id) => `${BASE}/images/${id}/thumbnail`,
+  getArchive: (id) => request(`/archives/${id}`),
+  getPages: (archiveId) => request(`/archives/${archiveId}/pages`),
+  pageUrl: (archiveId, pageIndex) => `${BASE}/archives/${archiveId}/pages/${pageIndex}`,
+  pageThumbUrl: (archiveId, pageIndex) => `${BASE}/archives/${archiveId}/pages/${pageIndex}/thumb`,
+  coverUrl: (archiveId) => `${BASE}/archives/${archiveId}/cover`,
+  deleteArchive: (id) => request(`/archives/${id}`, { method: 'DELETE' }),
 
   // History
   getHistory: () => request('/history'),
-  saveHistory: (folder_id, page_index, total_pages) =>
-    request('/history', { method: 'POST', body: JSON.stringify({ folder_id, page_index, total_pages }) }),
-  deleteHistory: (folderId) => request(`/history/${folderId}`, { method: 'DELETE' }),
+  saveHistory: (archive_id, page_index, total_pages) =>
+    request('/history', { method: 'POST', body: JSON.stringify({ archive_id, page_index, total_pages }) }),
+  deleteHistory: (archiveId) => request(`/history/${archiveId}`, { method: 'DELETE' }),
+  clearHistory: () => request('/history', { method: 'DELETE' }),
 
   // Tags
-  getTags: () => request('/tags'),
-  createTag: (name, color) => request('/tags', { method: 'POST', body: JSON.stringify({ name, color }) }),
+  getTags: (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/tags${qs ? '?' + qs : ''}`);
+  },
+  getNamespaces: () => request('/tags/namespaces'),
+  createTag: (data) => request('/tags', { method: 'POST', body: JSON.stringify(data) }),
   updateTag: (id, data) => request(`/tags/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteTag: (id) => request(`/tags/${id}`, { method: 'DELETE' }),
-  assignTag: (folder_id, tag_id) => request('/tags/assign', { method: 'POST', body: JSON.stringify({ folder_id, tag_id }) }),
-  removeFolderTag: (folderId, tagId) => request(`/tags/${folderId}/${tagId}`, { method: 'DELETE' }),
+  assignTag: (archive_id, tag_id) => request('/tags/assign', { method: 'POST', body: JSON.stringify({ archive_id, tag_id }) }),
+  removeTag: (archiveId, tagId) => request(`/tags/${archiveId}/${tagId}`, { method: 'DELETE' }),
+
+  // Categories
+  getCategories: () => request('/categories'),
+  createCategory: (data) => request('/categories', { method: 'POST', body: JSON.stringify(data) }),
+  updateCategory: (id, data) => request(`/categories/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteCategory: (id) => request(`/categories/${id}`, { method: 'DELETE' }),
+  assignCategory: (archive_id, category_id) => request('/categories/assign', { method: 'POST', body: JSON.stringify({ archive_id, category_id }) }),
+  removeCategory: (archiveId, categoryId) => request(`/categories/${archiveId}/${categoryId}`, { method: 'DELETE' }),
 
   // Settings
   getSettings: () => request('/settings'),
   updateSettings: (data) => request('/settings', { method: 'PUT', body: JSON.stringify(data) }),
+  getStats: () => request('/stats'),
 };
 
 export default api;

@@ -9,9 +9,7 @@ export default function History() {
   const navigate = useNavigate();
   const toast = useToast();
 
-  useEffect(() => {
-    loadHistory();
-  }, []);
+  useEffect(() => { loadHistory(); }, []);
 
   const loadHistory = async () => {
     try {
@@ -22,65 +20,85 @@ export default function History() {
     }
   };
 
-  const handleDelete = async (folderId) => {
+  const handleDelete = async (archiveId) => {
     if (!window.confirm('确定删除该记录？')) return;
     try {
-      await api.deleteHistory(folderId);
+      await api.deleteHistory(archiveId);
       loadHistory();
     } catch (e) {
       toast(e.message, 'error');
     }
   };
 
-  const filtered = history.filter((h) => {
+  const handleClearAll = async () => {
+    if (!window.confirm('确定清空所有阅读记录？')) return;
+    try {
+      await api.clearHistory();
+      setHistory([]);
+      toast('已清空所有记录', 'success');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  const filtered = history.filter(h => {
     if (!search) return true;
     const s = search.toLowerCase();
-    return h.name.toLowerCase().includes(s) || h.tags.some((t) => t.name.toLowerCase().includes(s));
+    return h.title.toLowerCase().includes(s) || h.tags.some(t => t.name.toLowerCase().includes(s));
   });
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>阅读历史</h2>
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+        <h2 style={{ fontWeight: 700 }}>阅读历史</h2>
+        <div style={{ flex: 1 }} />
         <input
-          placeholder="🔍 搜索文件夹名称或标签..."
+          className="search-input"
+          placeholder="搜索文件夹名称或标签..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{ width: 400 }}
+          style={{ maxWidth: 320 }}
         />
+        {history.length > 0 && (
+          <button className="btn btn-danger btn-sm" onClick={handleClearAll}>清空全部</button>
+        )}
       </div>
 
       {filtered.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>暂无阅读记录</div>
+        <div className="empty-state">
+          <div className="empty-state-icon">📖</div>
+          <div className="empty-state-text">{search ? '没有匹配的记录' : '暂无阅读记录'}</div>
+        </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {filtered.map((h) => (
-            <div
-              key={h.folder_id}
-              className="card"
-              style={{ display: 'flex', alignItems: 'center', gap: 16, cursor: 'pointer' }}
-              onClick={() => navigate(`/reader/${h.folder_id}`)}
-            >
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600 }}>{h.name}</div>
-                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                  第 {h.page_index + 1}/{h.total_pages} 页 · {h.image_count} 张图片
+        <div className="history-list">
+          {filtered.map(h => (
+            <div key={h.archive_id} className="history-item" onClick={() => navigate(`/reader/${h.archive_id}`)}>
+              <div className="history-thumb">
+                <CoverImage src={h.cover_url} alt={h.title} />
+              </div>
+              <div className="history-info">
+                <div className="history-title">{h.title}</div>
+                <div className="history-meta">
+                  第 {h.page_index + 1}/{h.total_pages || h.page_count} 页 · {h.page_count} 张图片
+                  {h.archive_type !== 'folder' && ` · ${h.archive_type.toUpperCase()}`}
                 </div>
                 {h.tags.length > 0 && (
-                  <div style={{ marginTop: 4 }}>
-                    {h.tags.map((t) => (
-                      <span key={t.name} className="tag" style={{ background: t.color }}>{t.name}</span>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                    {h.tags.map(t => (
+                      <span key={t.name} className="tag" style={{ background: t.color }}>
+                        {t.namespace && <span className="tag-namespace">{t.namespace}:</span>}
+                        {t.name}
+                      </span>
                     ))}
                   </div>
                 )}
               </div>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                {h.updated_at ? new Date(h.updated_at).toLocaleString() : ''}
+              <div className="history-date">
+                {h.updated_at ? formatRelativeTime(h.updated_at) : ''}
               </div>
               <button
-                className="btn btn-danger"
-                style={{ padding: '4px 10px', fontSize: 12 }}
-                onClick={(e) => { e.stopPropagation(); handleDelete(h.folder_id); }}
+                className="btn btn-danger btn-sm"
+                onClick={(e) => { e.stopPropagation(); handleDelete(h.archive_id); }}
               >
                 删除
               </button>
@@ -90,4 +108,25 @@ export default function History() {
       )}
     </div>
   );
+}
+
+function CoverImage({ src, alt }) {
+  const [error, setError] = useState(false);
+  if (error || !src) return <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: 'var(--text-tertiary)' }}>📖</div>;
+  return <img src={src} alt={alt} onError={() => setError(true)} loading="lazy" />;
+}
+
+function formatRelativeTime(dateStr) {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffHour = Math.floor(diffMs / 3600000);
+  const diffDay = Math.floor(diffMs / 86400000);
+
+  if (diffMin < 1) return '刚刚';
+  if (diffMin < 60) return `${diffMin} 分钟前`;
+  if (diffHour < 24) return `${diffHour} 小时前`;
+  if (diffDay < 7) return `${diffDay} 天前`;
+  return date.toLocaleDateString();
 }

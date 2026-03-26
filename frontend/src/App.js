@@ -1,30 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink, useLocation } from 'react-router-dom';
-import FolderList from './pages/FolderList';
+import Library from './pages/Library';
 import Reader from './pages/Reader';
 import History from './pages/History';
+import Settings from './pages/Settings';
 import { ToastProvider } from './components/Toast';
 
 function AppContent() {
-  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light');
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
 
-  // 路由切换时关闭侧边栏
-  useEffect(() => {
-    setSidebarOpen(false);
-  }, [location.pathname]);
+  useEffect(() => { setSidebarOpen(false); }, [location.pathname]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('theme', theme);
   }, [theme]);
 
-  // 检测是否为移动端（无需 state，用 CSS 控制即可，这里只控制 open 状态）
-
   return (
     <div className="app-layout">
-      {/* 移动端遮罩 */}
       <div
         className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`}
         onClick={() => setSidebarOpen(false)}
@@ -33,10 +28,20 @@ function AppContent() {
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-brand">Manga<span>Viewer</span></div>
         <nav className="sidebar-nav">
-          <NavLink to="/" end>📚 漫画库</NavLink>
-          <NavLink to="/history">📖 历史</NavLink>
+          <NavLink to="/" end>
+            <span className="nav-icon">📚</span>
+            <span>漫画库</span>
+          </NavLink>
+          <NavLink to="/history">
+            <span className="nav-icon">📖</span>
+            <span>历史</span>
+          </NavLink>
+          <NavLink to="/settings">
+            <span className="nav-icon">⚙️</span>
+            <span>设置</span>
+          </NavLink>
         </nav>
-        <div className="theme-select-wrapper" style={{ padding: '0 16px', marginTop: 'auto' }}>
+        <div className="sidebar-footer">
           <select value={theme} onChange={(e) => setTheme(e.target.value)} style={{ width: '100%' }}>
             <option value="light">☀️ 浅色</option>
             <option value="dark">🌙 深色</option>
@@ -47,9 +52,10 @@ function AppContent() {
 
       <main className="main-content">
         <Routes>
-          <Route path="/" element={<FolderList />} />
-          <Route path="/reader/:folderId" element={<Reader />} />
+          <Route path="/" element={<Library />} />
+          <Route path="/reader/:archiveId" element={<Reader />} />
           <Route path="/history" element={<History />} />
+          <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
     </div>
