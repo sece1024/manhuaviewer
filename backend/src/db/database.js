@@ -68,7 +68,7 @@ function initDatabase() {
     );
 
     -- 档案-标签 关联
-    CREATE TABLE IF IF NOT EXISTS archive_tags (
+    CREATE TABLE IF NOT EXISTS archive_tags (
       archive_id INTEGER NOT NULL,
       tag_id INTEGER NOT NULL,
       PRIMARY KEY (archive_id, tag_id),
