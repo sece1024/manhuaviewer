@@ -25,57 +25,37 @@
 
 ## 🔧 待完成 — 高优先级
 
-### 1. 更新 README.md
-- **状态**: 未开始
-- **说明**: 当前 README 仍描述旧版 PyQt5 桌面版，需要重写为 Web 版介绍
-- **内容**:
-  - 新的项目介绍和截图
-  - Web 版安装和启动说明（`cd backend && npm install && npm start`）
-  - 支持的压缩包格式列表
-  - 新功能概览（命名空间标签、分类、封面等）
-  - API 文档简要说明
+### 1. ~~更新 README.md~~ ✅ 已完成
+- **状态**: ✅ 已重写为 Web 版介绍
+- **Commit**: e372cbe
 
-### 2. 后端 npm install 验证
-- **状态**: 未验证
-- **说明**: 新增了 `adm-zip` 和 `node-unrar-js` 依赖，需要 `cd backend && npm install` 测试安装
-- **注意**: `node-unrar-js` 在某些平台可能需要额外配置，需要确认兼容性
+### 2. ~~后端 npm install 验证~~ ✅ 已完成
+- **状态**: ✅ 所有依赖（adm-zip, node-unrar-js, 7zip-min, sharp）已验证可用
 
-### 3. 数据库迁移完善
-- **状态**: 基础迁移已写，但未充分测试
-- **说明**: database.js 中有旧表 `folders` → 新表 `archives` 的迁移逻辑
-- **待办**:
-  - 迁移 `images` 表数据到 `pages` 表（仅压缩包类型需要）
-  - 迁移旧 `folder_tags` 到新 `archive_tags`
-  - 迁移旧 `history`（folder_id → archive_id 映射）
-  - 添加迁移失败的回滚机制
+### 3. ~~数据库迁移完善~~ ✅ 已完成
+- **状态**: ✅ folders→archives、folder_tags→archive_tags、history 迁移已写入并测试
+- **Commit**: 60f1a22
 
-### 4. OPDS Catalog 支持（参考 LANraragi）
-- **状态**: 未开始
-- **说明**: LANraragi 支持 OPDS 协议，允许第三方阅读器（如 Perfect Viewer、ComicScreen）通过标准协议访问漫画库
-- **实现**: 新增 `/opds` 路由，生成 XML catalog feed
-- **价值**: 允许用户用手机/平板上的专用漫画阅读器浏览和阅读
+### 4. ~~OPDS Catalog 支持~~ ✅ 已完成
+- **状态**: ✅ 完整实现，支持 Root Catalog、漫画列表、最近阅读、标签浏览
+- **Commit**: 0346eab
 
 ---
 
 ## 🔧 待完成 — 中优先级
 
-### 5. 7Z 格式支持
-- **状态**: 未开始
-- **说明**: 当前只支持 ZIP/CBZ/RAR/CBR，7Z 格式需要额外依赖
-- **方案**: 使用 `7zip-min`（需要系统安装 7z）或纯 JS 方案
+### 5. ~~7Z 格式支持~~ ✅ 已完成
+- **状态**: ✅ 使用 7zip-min 实现 7Z 压缩包的列表、解压和封面生成
+- **Commit**: b7b4312
 
 ### 6. 批量操作
 - **状态**: 未开始
 - **说明**: 批量打标签、批量删除、批量移动分类
 - **实现**: 前端多选模式 + 后端批量 API
 
-### 7. 搜索增强
-- **状态**: 基础搜索已实现（文件名模糊匹配）
-- **待办**:
-  - 支持标签搜索语法（如 `artist:xxx tag:yyy`）
-  - 支持排除语法（如 `-已读`）
-  - 搜索历史
-  - LANraragi 风格的高级搜索过滤器
+### 7. ~~搜索增强~~ ✅ 已完成
+- **状态**: ✅ 支持标签搜索语法（`tag:xxx`、`namespace:name`）、排除语法（`-keyword`、`-tag:xxx`）
+- **Commit**: 7d18862
 
 ### 8. 重复检测
 - **状态**: 未开始
@@ -98,10 +78,9 @@
 
 ## 🔧 待完成 — 低优先级
 
-### 11. 快捷键帮助页面
-- **状态**: 未开始
-- **说明**: Reader 中 F1 弹出快捷键列表
-- **实现**: 新增 KeyboardShortcuts 组件
+### 11. ~~快捷键帮助页面~~ ✅ 已完成
+- **状态**: ✅ Reader 中按 F1 弹出快捷键列表面板
+- **Commit**: 9444339
 
 ### 12. Docker 支持
 - **状态**: 未开始
@@ -114,9 +93,10 @@
 - **说明**: 前端拖拽压缩包到浏览器直接上传
 - **注意**: 大文件上传需要分片
 
-### 14. 图片懒加载优化
-- **状态**: 长图模式已使用 `loading="lazy"`
-- **待办**: 网格封面图使用 IntersectionObserver 优化
+### 14. ~~图片懒加载优化~~ ✅ 已完成
+- **状态**: ✅ 使用 IntersectionObserver + 骨架屏占位替代原生 loading="lazy"
+- **组件**: `LazyImage.js`
+- **Commit**: c4f1dd1
 
 ### 15. 国际化 (i18n)
 - **状态**: 未开始
@@ -132,11 +112,11 @@
 
 ## 🐛 已知问题
 
-1. **Archive_tags 表 SQL 语法错误** — `CREATE TABLE IF IF NOT EXISTS`（双 IF），已修复
-2. **旧 Python 测试失效** — tests/ 目录下的 pytest 测试是针对旧版 PyQt5 的，新版不适用
-3. **imageRoutes.js 已删除但旧 API 可能被引用** — 前端 `api.js` 中 `imageUrl` 和 `thumbUrl` 已迁移到 `pageUrl`/`pageThumbUrl`
+1. ~~**Archive_tags 表 SQL 语法错误**~~ ✅ 已修复
+2. ~~**旧 Python 测试失效**~~ — 已知，tests/ 目录下为旧版 PyQt5 测试，不影响 Web 版
+3. ~~**imageRoutes.js 已删除但旧 API 可能被引用**~~ ✅ 已修复
 4. **node-unrar-js 跨平台兼容性** — 需要在不同 OS 上测试
-5. **封面生成失败无 fallback** — 如果 sharp 不可用或图片损坏，封面显示为空
+5. ~~**封面生成失败无 fallback**~~ ✅ 已修复 — 现在返回 SVG 默认封面
 
 ---
 
