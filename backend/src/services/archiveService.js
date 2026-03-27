@@ -5,8 +5,10 @@
 const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
+const _7z = require('7zip-min');
 const logger = require('../config/logger');
 const { DATA_DIR } = require('../db/database');
+const os = require('os');
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif', '.tiff', '.avif']);
 
@@ -16,6 +18,14 @@ const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif', '.
 function isArchive(filename) {
   const ext = path.extname(filename).toLowerCase();
   return ['.zip', '.cbz', '.rar', '.cbr', '.7z'].includes(ext);
+}
+
+/**
+ * 判断是否为 7z 格式
+ */
+function is7z(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  return ext === '.7z';
 }
 
 /**
@@ -35,6 +45,8 @@ async function getImageList(archivePath) {
     return getImageListZip(archivePath);
   } else if (['.rar', '.cbr'].includes(ext)) {
     return getImageListRar(archivePath);
+  } else if (ext === '.7z') {
+    return getImageList7z(archivePath);
   }
 
   throw new Error(`不支持的格式: ${ext}`);
@@ -86,6 +98,34 @@ async function getImageListRar(archivePath) {
 }
 
 /**
+ * 获取 7z 压缩包内的图片列表
+ */
+async function getImageList7z(archivePath) {
+  return new Promise((resolve) => {
+    _7z.list(archivePath, (err, files) => {
+      if (err) {
+        logger.warn(`7Z 解析失败: ${archivePath} — ${err.message}`);
+        return resolve([]);
+      }
+      const images = [];
+      for (const file of files) {
+        // 7zip-min 的 list 返回的属性名取决于平台实现
+        const name = file.name || '';
+        if (!name.endsWith('/') && !name.endsWith('\\') && isImage(name)) {
+          images.push({
+            name: path.basename(name),
+            path: name,
+            size: file.size || 0,
+          });
+        }
+      }
+      images.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      resolve(images);
+    });
+  });
+}
+
+/**
  * 从压缩包提取单个文件，返回 Buffer
  */
 async function extractFile(archivePath, entryPath) {
@@ -95,6 +135,8 @@ async function extractFile(archivePath, entryPath) {
     return extractFileZip(archivePath, entryPath);
   } else if (['.rar', '.cbr'].includes(ext)) {
     return extractFileRar(archivePath, entryPath);
+  } else if (ext === '.7z') {
+    return extractFile7z(archivePath, entryPath);
   }
 
   throw new Error(`不支持的格式: ${ext}`);
@@ -120,6 +162,36 @@ async function extractFileRar(archivePath, entryPath) {
   if (!result || !result.extraction) throw new Error('解压失败');
 
   return Buffer.from(result.extraction);
+}
+
+/**
+ * 从 7z 压缩包提取单个文件，返回 Buffer
+ */
+async function extractFile7z(archivePath, entryPath) {
+  // 7zip-min 需要先解压到临时目录再读取
+  const tmpDir = path.join(os.tmpdir(), `mv7z_${Date.now()}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  try {
+    await new Promise((resolve, reject) => {
+      _7z.unpack(archivePath, tmpDir, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    // 在解压目录中找到目标文件
+    const targetPath = path.join(tmpDir, entryPath);
+    if (!fs.existsSync(targetPath)) {
+      throw new Error(`找不到条目: ${entryPath}`);
+    }
+    return fs.readFileSync(targetPath);
+  } finally {
+    // 清理临时目录
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {}
+  }
 }
 
 /**
@@ -182,6 +254,7 @@ async function extractFolderCover(folderPath, archiveId) {
 
 module.exports = {
   isArchive,
+  is7z,
   isImage,
   getImageList,
   extractFile,

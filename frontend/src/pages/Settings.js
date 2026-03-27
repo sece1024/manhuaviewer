@@ -128,7 +128,7 @@ export default function Settings() {
           />
           <button className="btn btn-sm" onClick={handleSaveRoot}>保存</button>
         </div>
-        <div className="settings-row-desc">支持文件夹和 ZIP/CBZ/RAR/CBR 压缩包</div>
+        <div className="settings-row-desc">支持文件夹和 ZIP/CBZ/RAR/CBR/7Z 压缩包</div>
       </div>
 
       {/* 阅读器设置 */}

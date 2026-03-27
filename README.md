@@ -69,7 +69,7 @@ npm start
 | 类型 | 格式 |
 |------|------|
 | 图片 | JPG, PNG, BMP, WebP, GIF, TIFF, AVIF |
-| 压缩包 | ZIP, CBZ, RAR, CBR |
+| 压缩包 | ZIP, CBZ, RAR, CBR, 7Z |
 | 文件夹 | 直接包含图片的文件夹 |
 
 ## ⌨️ 快捷键

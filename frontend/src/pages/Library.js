@@ -95,7 +95,7 @@ export default function Library() {
         <p style={{ color: 'var(--text-secondary)', marginBottom: 24, fontSize: 14 }}>
           请先配置漫画存放的根目录<br />
           <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-            支持文件夹、ZIP/CBZ、RAR/CBR 压缩包
+            支持文件夹、ZIP/CBZ、RAR/CBR、7Z 压缩包
           </span>
         </p>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>

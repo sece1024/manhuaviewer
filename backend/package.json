@@ -8,6 +8,7 @@
     "dev": "nodemon src/index.js"
   },
   "dependencies": {
+    "7zip-min": "^3.0.1",
     "adm-zip": "^0.5.16",
     "better-sqlite3": "^11.7.0",
     "cors": "^2.8.5",
