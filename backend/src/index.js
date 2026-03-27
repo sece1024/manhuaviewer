@@ -24,6 +24,10 @@ app.use(express.static(staticDir));
 // API 路由
 app.use('/api', apiRoutes);
 
+// OPDS 路由（根路径，第三方阅读器需要）
+const opdsRoutes = require('./routes/opdsRoutes');
+app.use('/', opdsRoutes);
+
 // 所有未匹配路由返回 index.html（SPA 支持）
 app.get('*', (req, res) => {
   res.sendFile(path.join(staticDir, 'index.html'));
