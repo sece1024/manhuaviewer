@@ -171,7 +171,7 @@ export default function Library() {
         <div className="library-header">
           <input
             className="search-input"
-            placeholder="搜索漫画..."
+            placeholder="搜索漫画... (支持 tag:xxx、-排除)"
             value={search}
             onChange={(e) => handleSearch(e.target.value)}
             style={{ maxWidth: 280 }}

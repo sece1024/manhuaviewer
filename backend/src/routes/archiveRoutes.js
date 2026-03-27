@@ -9,6 +9,43 @@ const { getDb } = require('../db/database');
 const { scanRoot } = require('../services/scanService');
 const archiveService = require('../services/archiveService');
 
+// 解析搜索语法
+// 支持格式:
+//   "keyword"         — 普通文本搜索
+//   "tag:xxx"         — 搜索标签（无命名空间）
+//   "artist:xxx"      — 搜索命名空间标签
+//   "-tag:xxx"        — 排除标签
+//   "-keyword"        — 排除关键词
+//   以上可组合使用，如 "artist:mika -已读"
+function parseSearchSyntax(searchStr) {
+  const textTerms = [];
+  const includeTags = [];
+  const excludeTags = [];
+  const excludeText = [];
+
+  if (!searchStr) return { textTerms, includeTags, excludeTags, excludeText };
+
+  const tokens = searchStr.split(/\s+/).filter(Boolean);
+  for (const token of tokens) {
+    if (token.startsWith('-')) {
+      // 排除语法
+      const inner = token.slice(1);
+      if (inner.includes(':')) {
+        excludeTags.push(inner);
+      } else if (inner) {
+        excludeText.push(inner);
+      }
+    } else if (token.includes(':') && !token.startsWith(':')) {
+      // 标签搜索语法
+      includeTags.push(token);
+    } else {
+      textTerms.push(token);
+    }
+  }
+
+  return { textTerms, includeTags, excludeTags, excludeText };
+}
+
 // 获取档案列表（支持搜索、标签筛选、排序）
 router.get('/archives', (req, res) => {
   const db = getDb();
@@ -18,13 +55,17 @@ router.get('/archives', (req, res) => {
   settingsRow.forEach(r => settings[r.key] = r.value);
 
   let sql = `
-    SELECT a.*, h.page_index as read_page, h.total_pages as read_total, h.updated_at as last_read
+    SELECT DISTINCT a.*, h.page_index as read_page, h.total_pages as read_total, h.updated_at as last_read
     FROM archives a
     LEFT JOIN history h ON h.archive_id = a.id
   `;
   const params = [];
   const conditions = [];
 
+  // 解析搜索语法
+  const parsed = parseSearchSyntax(search);
+
+  // 通过侧边栏 tag 参数筛选
   if (tag) {
     sql += ` INNER JOIN archive_tags at2 ON at2.archive_id = a.id
              INNER JOIN tags t ON t.id = at2.tag_id `;
@@ -38,6 +79,33 @@ router.get('/archives', (req, res) => {
     }
   }
 
+  // 搜索框中的标签包含 (tag:xxx 或 namespace:xxx)
+  for (const tagExpr of parsed.includeTags) {
+    sql += ` INNER JOIN archive_tags at_inc ON at_inc.archive_id = a.id
+             INNER JOIN tags t_inc ON t_inc.id = at_inc.tag_id `;
+    if (tagExpr.includes(':')) {
+      const [ns, name] = tagExpr.split(':');
+      conditions.push('(t_inc.namespace = ? AND t_inc.name = ?)');
+      params.push(ns, name);
+    } else {
+      conditions.push('t_inc.name = ?');
+      params.push(tagExpr);
+    }
+  }
+
+  // 排除标签 (-tag:xxx 或 -namespace:xxx)
+  for (const tagExpr of parsed.excludeTags) {
+    if (tagExpr.includes(':')) {
+      const [ns, name] = tagExpr.split(':');
+      conditions.push(`a.id NOT IN (SELECT at_ex.archive_id FROM archive_tags at_ex JOIN tags t_ex ON t_ex.id = at_ex.tag_id WHERE t_ex.namespace = ? AND t_ex.name = ?)`);
+      params.push(ns, name);
+    } else {
+      conditions.push(`a.id NOT IN (SELECT at_ex.archive_id FROM archive_tags at_ex JOIN tags t_ex ON t_ex.id = at_ex.tag_id WHERE t_ex.name = ?)`);
+      params.push(tagExpr);
+    }
+  }
+
+  // 分类筛选
   if (category) {
     sql += ` INNER JOIN archive_categories ac ON ac.archive_id = a.id
              INNER JOIN categories c ON c.id = ac.category_id `;
@@ -45,9 +113,18 @@ router.get('/archives', (req, res) => {
     params.push(category);
   }
 
-  if (search) {
-    conditions.push('(a.title LIKE ? OR a.path LIKE ?)');
-    params.push(`%${search}%`, `%${search}%`);
+  // 普通文本搜索
+  if (parsed.textTerms.length > 0) {
+    for (const term of parsed.textTerms) {
+      conditions.push('(a.title LIKE ? OR a.path LIKE ?)');
+      params.push(`%${term}%`, `%${term}%`);
+    }
+  }
+
+  // 排除文本 (-keyword)
+  for (const term of parsed.excludeText) {
+    conditions.push('(a.title NOT LIKE ? AND a.path NOT LIKE ?)');
+    params.push(`%${term}%`, `%${term}%`);
   }
 
   if (conditions.length > 0) {
