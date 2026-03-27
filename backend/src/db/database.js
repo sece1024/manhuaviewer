@@ -106,20 +106,54 @@ function initDatabase() {
     const oldTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='folders'").all();
     if (oldTables.length > 0) {
       logger.info('检测到旧版数据表，执行迁移...');
+
       // 将旧 folders 数据迁移到 archives
       const oldFolders = db.prepare('SELECT * FROM folders').all();
+      let migrated = 0;
       for (const folder of oldFolders) {
         try {
           db.prepare(`INSERT OR IGNORE INTO archives (title, path, archive_type, page_count, created_at)
-            VALUES (?, ?, 'folder', ?, datetime('now'))`).run(folder.name, folder.path, folder.image_count);
-        } catch {}
+            VALUES (?, ?, 'folder', ?, datetime('now'))`).run(folder.name || folder.title || '', folder.path, folder.image_count || folder.page_count || 0);
+          migrated++;
+        } catch (e) {
+          logger.debug(`迁移文件夹失败: ${folder.path} — ${e.message}`);
+        }
       }
-      // 迁移旧的 history
+
+      // 迁移旧的 folder_tags 到 archive_tags
       try {
-        const oldHistory = db.prepare('SELECT * FROM history_old OR history').all();
-        // This is best-effort, old data is preserved
+        const hasFolderTags = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='folder_tags'").all();
+        if (hasFolderTags.length > 0) {
+          const oldFT = db.prepare('SELECT * FROM folder_tags').all();
+          for (const ft of oldFT) {
+            try {
+              const archive = db.prepare('SELECT id FROM archives WHERE path = (SELECT path FROM folders WHERE id = ?)').get(ft.folder_id);
+              if (archive) {
+                db.prepare('INSERT OR IGNORE INTO archive_tags (archive_id, tag_id) VALUES (?, ?)').run(archive.id, ft.tag_id);
+              }
+            } catch {}
+          }
+        }
       } catch {}
-      logger.info(`迁移了 ${oldFolders.length} 个文件夹`);
+
+      // 迁移旧的 history（folder_id → archive_id 映射）
+      try {
+        const hasOldHistory = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='read_history'").all();
+        if (hasOldHistory.length > 0) {
+          const oldHistory = db.prepare('SELECT * FROM read_history').all();
+          for (const h of oldHistory) {
+            try {
+              const archive = db.prepare('SELECT id FROM archives WHERE path = (SELECT path FROM folders WHERE id = ?)').get(h.folder_id);
+              if (archive) {
+                db.prepare(`INSERT OR IGNORE INTO history (archive_id, page_index, total_pages, updated_at)
+                  VALUES (?, ?, ?, datetime('now'))`).run(archive.id, h.page_index || 0, h.total_pages || 0);
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+
+      logger.info(`迁移了 ${migrated} 个文件夹`);
     }
   } catch (e) {
     // 迁移失败不影响启动
