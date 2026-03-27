@@ -31,6 +31,15 @@ router.put('/settings', (req, res) => {
   });
 
   doUpdate();
+
+  // 如果更新了自动扫描间隔，重启定时器
+  if ('auto_scan_interval' in updates) {
+    try {
+      const { startAutoScanTimer } = require('../index');
+      startAutoScanTimer();
+    } catch {}
+  }
+
   res.json({ success: true });
 });
 

@@ -135,6 +135,20 @@ export default function Settings() {
           </div>
           <input type="color" value={settings.reader_bg || '#1a1a1a'} onChange={(e) => updateSetting('reader_bg', e.target.value)} style={{ width: 50, padding: 2 }} />
         </div>
+        <div className="settings-row">
+          <div>
+            <div className="settings-row-label">自动扫描间隔</div>
+            <div className="settings-row-desc">定时自动扫描漫画目录（0=关闭）</div>
+          </div>
+          <select value={settings.auto_scan_interval || '0'} onChange={(e) => updateSetting('auto_scan_interval', e.target.value)}>
+            <option value="0">关闭</option>
+            <option value="5">5 分钟</option>
+            <option value="15">15 分钟</option>
+            <option value="30">30 分钟</option>
+            <option value="60">1 小时</option>
+            <option value="120">2 小时</option>
+          </select>
+        </div>
       </div>
 
       {/* 外观设置 */}
