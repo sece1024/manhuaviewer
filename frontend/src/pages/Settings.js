@@ -12,6 +12,7 @@ export default function Settings() {
   const [categories, setCategories] = useState([]);
   const [newCatName, setNewCatName] = useState('');
   const [newCatColor, setNewCatColor] = useState('#6366f1');
+  const [importing, setImporting] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
@@ -85,6 +86,30 @@ export default function Settings() {
     } catch (e) {
       toast(e.message, 'error');
     }
+  };
+
+  const handleExportBackup = () => {
+    window.open(api.exportBackup());
+  };
+
+  const handleImportBackup = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const result = await api.importBackup(data);
+      toast(`恢复成功: ${result.restored.archives} 漫画, ${result.restored.tags} 标签`, 'success');
+      // 重新加载数据
+      api.getStats().then(setStats).catch(() => {});
+      api.getTags().then(setTags).catch(() => {});
+      api.getCategories().then(setCategories).catch(() => {});
+    } catch (err) {
+      toast(`导入失败: ${err.message}`, 'error');
+    }
+    setImporting(false);
+    e.target.value = '';
   };
 
   return (
@@ -248,6 +273,22 @@ export default function Settings() {
           </div>
         </div>
       )}
+
+      {/* 备份与恢复 */}
+      <div className="settings-section">
+        <div className="settings-section-title">💾 备份与恢复</div>
+        <div className="settings-row-desc" style={{ marginBottom: 12 }}>
+          导出所有漫画元数据、标签、分类和阅读历史（不含图片文件）
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn btn-sm" onClick={handleExportBackup}>📦 导出备份</button>
+          <label className="btn btn-sm btn-secondary" style={{ cursor: 'pointer', margin: 0 }}>
+            📥 导入备份
+            <input type="file" accept=".json" onChange={handleImportBackup} style={{ display: 'none' }} disabled={importing} />
+          </label>
+          {importing && <span style={{ fontSize: 13, color: 'var(--text-secondary)', alignSelf: 'center' }}>导入中...</span>}
+        </div>
+      </div>
     </div>
   );
 }

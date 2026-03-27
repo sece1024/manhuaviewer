@@ -63,6 +63,10 @@ const api = {
   getSettings: () => request('/settings'),
   updateSettings: (data) => request('/settings', { method: 'PUT', body: JSON.stringify(data) }),
   getStats: () => request('/stats'),
+
+  // Backup & Restore
+  exportBackup: () => `${BASE}/backup`,
+  importBackup: (data) => request('/restore', { method: 'POST', body: JSON.stringify(data) }),
 };
 
 export default api;
