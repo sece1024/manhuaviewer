@@ -19,6 +19,7 @@ export default function Reader() {
   const [showThumbnails, setShowThumbnails] = useState(false);
   const [jumpPage, setJumpPage] = useState('');
   const [showJump, setShowJump] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [pageDirection, setPageDirection] = useState(() => localStorage.getItem('pageDirection') || 'rtl');
   const [overlayText, setOverlayText] = useState('');
@@ -129,13 +130,18 @@ export default function Reader() {
             return next;
           });
           break;
+        case 'F1':
+          e.preventDefault();
+          setShowHelp(v => !v);
+          break;
         case 'F11':
           e.preventDefault();
           if (document.fullscreenElement) document.exitFullscreen();
           else containerRef.current?.requestFullscreen();
           break;
         case 'Escape':
-          if (showThumbnails) setShowThumbnails(false);
+          if (showHelp) setShowHelp(false);
+          else if (showThumbnails) setShowThumbnails(false);
           else if (showJump) setShowJump(false);
           else if (showMenu) setShowMenu(false);
           break;
@@ -467,6 +473,50 @@ export default function Reader() {
                 placeholder="页码" autoFocus style={{ flex: 1 }} />
               <button className="btn" onClick={handleJump}>跳转</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 快捷键帮助面板 */}
+      {showHelp && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
+          onClick={() => setShowHelp(false)}>
+          <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', padding: 24, maxWidth: 480, maxHeight: '80vh', overflow: 'auto' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h3>⌨️ 快捷键</h3>
+              <button className="btn btn-secondary btn-sm" onClick={() => setShowHelp(false)}>关闭</button>
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+              <tbody>
+                {[
+                  ['← / →', '翻页（方向取决于 RTL/LTR 设置）'],
+                  ['Space', '下一页'],
+                  ['↑ / ↓', '翻页（非长图模式）'],
+                  ['Home / End', '第一页 / 最后一页'],
+                  ['', ''],
+                  ['D', '切换双页模式'],
+                  ['L', '切换长图模式'],
+                  ['W', '循环切换适应模式（高度/宽度/原始）'],
+                  ['R / Shift+R', '旋转（顺时针/逆时针）'],
+                  ['', ''],
+                  ['T', '缩略图总览'],
+                  ['G', '跳转到指定页'],
+                  ['F1', '快捷键帮助（当前面板）'],
+                  ['F11', '全屏模式'],
+                  ['Esc', '关闭弹出面板'],
+                ].map(([key, desc], i) => (
+                  key === '' ? (
+                    <tr key={i}><td colSpan={2} style={{ height: 8 }} /></tr>
+                  ) : (
+                    <tr key={i}>
+                      <td style={{ padding: '6px 12px 6px 0', fontFamily: 'monospace', fontWeight: 600, whiteSpace: 'nowrap', color: 'var(--accent)' }}>{key}</td>
+                      <td style={{ padding: '6px 0', color: 'var(--text-secondary)' }}>{desc}</td>
+                    </tr>
+                  )
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
