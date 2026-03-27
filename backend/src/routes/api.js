@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 
 const archiveRoutes = require('./archiveRoutes');
-const imageRoutes = require('./imageRoutes');
 const tagRoutes = require('./tagRoutes');
 const categoryRoutes = require('./categoryRoutes');
 const historyRoutes = require('./historyRoutes');
@@ -13,7 +12,6 @@ router.get('/', (req, res) => {
 });
 
 router.use('/', archiveRoutes);
-router.use('/', imageRoutes);
 router.use('/', tagRoutes);
 router.use('/', categoryRoutes);
 router.use('/', historyRoutes);
