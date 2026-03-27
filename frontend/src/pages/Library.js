@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 import { useToast } from '../components/Toast';
+import LazyImage from '../components/LazyImage';
 
 export default function Library() {
   const [archives, setArchives] = useState([]);
@@ -214,7 +215,7 @@ export default function Library() {
             {archives.map(a => (
               <div key={a.id} className="archive-card" onClick={() => navigate(`/reader/${a.id}`)}>
                 <div className="archive-card-cover">
-                  <CoverImage src={a.cover_url} alt={a.title} />
+                  <LazyImage src={a.cover_url} alt={a.title} />
                   <div className="archive-card-type">{a.archive_type === 'folder' ? '📁' : '📦'}</div>
                   {a.read_page > 0 && (
                     <div className="archive-card-progress">
