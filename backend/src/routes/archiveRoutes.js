@@ -189,6 +189,20 @@ router.get('/archives/:id', (req, res) => {
   });
 });
 
+// 生成默认封面 SVG（作为 fallback）
+function generateDefaultCover(title, type) {
+  const emoji = type === 'folder' ? '📁' : '📦';
+  const safeTitle = (title || '?').replace(/[<>&"']/g, c => ({ '<':'&lt;', '>':'&gt;', '&':'&amp;', '"':'&quot;', "'":'&#39;' }[c]));
+  const truncated = safeTitle.length > 15 ? safeTitle.slice(0, 14) + '…' : safeTitle;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="420" viewBox="0 0 300 420">
+  <rect width="300" height="420" fill="#252528"/>
+  <text x="150" y="170" text-anchor="middle" font-size="64">${emoji}</text>
+  <text x="150" y="240" text-anchor="middle" font-size="16" fill="#a0a0a0" font-family="sans-serif">${truncated}</text>
+  <text x="150" y="270" text-anchor="middle" font-size="12" fill="#666" font-family="sans-serif">封面未生成</text>
+</svg>`;
+}
+
 // 获取档案封面
 router.get('/archives/:id/cover', (req, res) => {
   const db = getDb();
@@ -203,8 +217,11 @@ router.get('/archives/:id/cover', (req, res) => {
     return res.sendFile(path.resolve(thumbPath));
   }
 
-  // 没有封面，返回默认图
-  res.status(404).json({ error: '封面未生成' });
+  // 没有封面，返回默认 SVG
+  const svg = generateDefaultCover(archive.title, archive.archive_type);
+  res.set('Content-Type', 'image/svg+xml');
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.send(svg);
 });
 
 // 获取档案页面（图片列表）
