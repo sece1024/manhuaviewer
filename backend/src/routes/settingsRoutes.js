@@ -1,9 +1,7 @@
-/**
- * settingsRoutes.js — 系统设置
- */
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db/database');
+const { startAutoScanTimer } = require('../services/scanTimer');
 
 // 获取所有设置
 router.get('/settings', (req, res) => {
@@ -34,10 +32,7 @@ router.put('/settings', (req, res) => {
 
   // 如果更新了自动扫描间隔，重启定时器
   if ('auto_scan_interval' in updates) {
-    try {
-      const { startAutoScanTimer } = require('../index');
-      startAutoScanTimer();
-    } catch {}
+    startAutoScanTimer();
   }
 
   res.json({ success: true });

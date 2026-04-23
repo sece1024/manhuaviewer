@@ -31,6 +31,8 @@ export default function Reader() {
   const touchRef = useRef({ startX: 0, startY: 0, startTime: 0, lastTapTime: 0, pinchDist: 0 });
   const containerRef = useRef(null);
   const saveTimerRef = useRef(null);
+  // 预加载缓存：持有 Image 对象引用防止被 GC
+  const preloadCacheRef = useRef({});
 
   // 显示 overlay 信息
   const showOverlay = useCallback((text) => {
@@ -68,15 +70,27 @@ export default function Reader() {
     }, 1000);
   }, [currentIndex, archive, pages.length, archiveId]);
 
-  // 预加载图片
+  // 预加载图片（持久化引用防止 GC）
   useEffect(() => {
     if (pages.length === 0) return;
+    const cache = preloadCacheRef.current;
     const start = Math.max(0, currentIndex - 2);
     const end = Math.min(pages.length, currentIndex + 5);
     for (let i = start; i < end; i++) {
       if (i === currentIndex) continue;
-      const img = new Image();
-      img.src = pages[i].url;
+      const url = pages[i].url;
+      if (!cache[url]) {
+        const img = new Image();
+        img.src = url;
+        cache[url] = img;
+      }
+    }
+    // 清理远离当前页的缓存（保留窗口外 10 页范围）
+    for (const url of Object.keys(cache)) {
+      const idx = pages.findIndex(p => p.url === url);
+      if (idx !== -1 && (idx < currentIndex - 10 || idx > currentIndex + 10)) {
+        delete cache[url];
+      }
     }
   }, [currentIndex, pages]);
 
@@ -313,7 +327,7 @@ export default function Reader() {
           <input type="checkbox" checked={longImage} onChange={(e) => setLongImage(e.target.checked)} /> 长图
         </label>
 
-        <div className="toolbar-group-secondary" style={{ display: 'contents' }}>
+        <div className="toolbar-group-secondary">
           <select value={fitMode} onChange={(e) => { setFitMode(e.target.value); localStorage.setItem('readerFit', e.target.value); }} style={{ minWidth: 70, fontSize: 13 }}>
             <option value="height">适应高度</option>
             <option value="width">适应宽度</option>
@@ -328,8 +342,8 @@ export default function Reader() {
           </button>
         </div>
 
-        {/* 移动端菜单 */}
-        <button className="btn btn-secondary btn-icon" style={{ display: 'none' }} onClick={() => setShowMenu(v => !v)} id="menu-toggle">⋯</button>
+        {/* 移动端：折叠次要工具按钮 */}
+        <button className="btn btn-secondary btn-icon toolbar-menu-btn" onClick={() => setShowMenu(v => !v)} title="更多">⋯</button>
 
         <span className="status-text">
           {currentIndex + 1}/{pages.length} · {Math.round(scale * 100)}% · {fitMode === 'height' ? '适应高' : fitMode === 'width' ? '适应宽' : '原始'}
@@ -390,21 +404,43 @@ export default function Reader() {
             ))}
           </div>
         ) : doublePage && currentIndex + 1 < pages.length ? (
+          // 双页模式：RTL（日漫）右页=当前页，左页=下一页；LTR 反之
           <div style={{ display: 'flex', gap: 4, height: '100%', alignItems: 'center' }}>
-            <img
-              src={pages[currentIndex]?.url}
-              alt={pages[currentIndex]?.filename}
-              className="reader-image"
-              style={getImgStyle()}
-              draggable={false}
-            />
-            <img
-              src={pages[currentIndex + 1]?.url}
-              alt={pages[currentIndex + 1]?.filename}
-              className="reader-image"
-              style={getImgStyle()}
-              draggable={false}
-            />
+            {pageDirection === 'rtl' ? (
+              <>
+                <img
+                  src={pages[currentIndex + 1]?.url}
+                  alt={pages[currentIndex + 1]?.filename}
+                  className="reader-image"
+                  style={getImgStyle()}
+                  draggable={false}
+                />
+                <img
+                  src={pages[currentIndex]?.url}
+                  alt={pages[currentIndex]?.filename}
+                  className="reader-image"
+                  style={getImgStyle()}
+                  draggable={false}
+                />
+              </>
+            ) : (
+              <>
+                <img
+                  src={pages[currentIndex]?.url}
+                  alt={pages[currentIndex]?.filename}
+                  className="reader-image"
+                  style={getImgStyle()}
+                  draggable={false}
+                />
+                <img
+                  src={pages[currentIndex + 1]?.url}
+                  alt={pages[currentIndex + 1]?.filename}
+                  className="reader-image"
+                  style={getImgStyle()}
+                  draggable={false}
+                />
+              </>
+            )}
           </div>
         ) : (
           <img

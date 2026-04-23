@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
+import { formatSize } from '../utils/format';
 import { useToast } from '../components/Toast';
 import LazyImage from '../components/LazyImage';
 
@@ -16,6 +17,7 @@ export default function Library() {
   const [tags, setTags] = useState([]);
   const [selectedTag, setSelectedTag] = useState('');
   const [showSidebar, setShowSidebar] = useState(true);
+  const searchDebounceRef = useRef(null);
   const navigate = useNavigate();
   const toast = useToast();
 
@@ -61,10 +63,13 @@ export default function Library() {
     setLoading(false);
   };
 
-  const handleSearch = (val) => {
+  const handleSearch = useCallback((val) => {
     setSearch(val);
-    loadArchives({ search: val, tag: selectedTag });
-  };
+    clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      loadArchives({ search: val, tag: selectedTag });
+    }, 300);
+  }, [selectedTag]); // eslint-disable-line
 
   const handleViewMode = (mode) => {
     setViewMode(mode);
@@ -80,7 +85,7 @@ export default function Library() {
   const tagsByNamespace = useMemo(() => {
     const map = {};
     for (const t of tags) {
-      const ns = t.namespace || '_other';
+      const ns = t.namespace || NS_OTHER;
       if (!map[ns]) map[ns] = [];
       map[ns].push(t);
     }
@@ -145,7 +150,7 @@ export default function Library() {
           {Object.entries(tagsByNamespace).map(([ns, nsTags]) => (
             <div className="filter-section" key={ns}>
               <div className="filter-section-title">
-                {ns === '_other' ? '标签' : ns}
+                {ns === NS_OTHER ? '标签' : ns}
               </div>
               {nsTags.map(t => {
                 const fullName = t.namespace ? `${t.namespace}:${t.name}` : t.name;
@@ -249,7 +254,7 @@ export default function Library() {
             {archives.map(a => (
               <div key={a.id} className="archive-list-item" onClick={() => navigate(`/reader/${a.id}`)}>
                 <div className="archive-list-thumb">
-                  <CoverImage src={a.cover_url} alt={a.title} />
+                  <LazyImage src={a.cover_url} alt={a.title} />
                 </div>
                 <div className="archive-list-info">
                   <div className="archive-list-title">{a.title}</div>
@@ -278,19 +283,5 @@ export default function Library() {
   );
 }
 
-// 封面图组件（带 fallback）
-function CoverImage({ src, alt }) {
-  const [error, setError] = useState(false);
-  if (error || !src) {
-    return <div className="no-cover">📖</div>;
-  }
-  return <img src={src} alt={alt} onError={() => setError(true)} loading="lazy" />;
-}
-
-// 格式化文件大小
-function formatSize(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
-}
+// 命名空间标签默认分组 key
+const NS_OTHER = '_other';

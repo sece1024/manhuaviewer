@@ -568,6 +568,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
+.toolbar-group-secondary {
+  display: contents; /* 桌面端：内容直接参与 flex 布局 */
+}
+.toolbar-menu-btn {
+  display: none; /* 桌面端隐藏折叠按钮 */
+}
 
 .reader-container {
   flex: 1;
@@ -834,6 +840,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
     gap: 8px;
     justify-content: center;
     z-index: 48;
+  }
+
+  /* 移动端：隐藏工具栏次要按钮组，显示折叠按钮 */
+  .toolbar-group-secondary {
+    display: none;
+  }
+  .toolbar-menu-btn {
+    display: flex !important;
   }
 
   .toast-container { top: 12px; right: 12px; left: 12px; }

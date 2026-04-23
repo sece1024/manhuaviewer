@@ -8,43 +8,7 @@ const path = require('path');
 const { getDb } = require('../db/database');
 const { scanRoot } = require('../services/scanService');
 const archiveService = require('../services/archiveService');
-
-// 解析搜索语法
-// 支持格式:
-//   "keyword"         — 普通文本搜索
-//   "tag:xxx"         — 搜索标签（无命名空间）
-//   "artist:xxx"      — 搜索命名空间标签
-//   "-tag:xxx"        — 排除标签
-//   "-keyword"        — 排除关键词
-//   以上可组合使用，如 "artist:mika -已读"
-function parseSearchSyntax(searchStr) {
-  const textTerms = [];
-  const includeTags = [];
-  const excludeTags = [];
-  const excludeText = [];
-
-  if (!searchStr) return { textTerms, includeTags, excludeTags, excludeText };
-
-  const tokens = searchStr.split(/\s+/).filter(Boolean);
-  for (const token of tokens) {
-    if (token.startsWith('-')) {
-      // 排除语法
-      const inner = token.slice(1);
-      if (inner.includes(':')) {
-        excludeTags.push(inner);
-      } else if (inner) {
-        excludeText.push(inner);
-      }
-    } else if (token.includes(':') && !token.startsWith(':')) {
-      // 标签搜索语法
-      includeTags.push(token);
-    } else {
-      textTerms.push(token);
-    }
-  }
-
-  return { textTerms, includeTags, excludeTags, excludeText };
-}
+const { parseSearchSyntax } = require('../utils/searchParser');
 
 // 获取档案列表（支持搜索、标签筛选、排序）
 router.get('/archives', (req, res) => {
@@ -145,17 +109,27 @@ router.get('/archives', (req, res) => {
 
   const archives = db.prepare(sql).all(...params);
 
-  // 获取每个档案的标签
-  const tagStmt = db.prepare(`
-    SELECT t.namespace, t.name, t.color FROM archive_tags at2
-    JOIN tags t ON t.id = at2.tag_id
-    WHERE at2.archive_id = ?
-  `);
+  // 批量获取所有相关档案的标签（避免 N+1 查询）
+  let tagMap = {};
+  if (archives.length > 0) {
+    const placeholders = archives.map(() => '?').join(',');
+    const allTags = db.prepare(`
+      SELECT at2.archive_id, t.namespace, t.name, t.color
+      FROM archive_tags at2
+      JOIN tags t ON t.id = at2.tag_id
+      WHERE at2.archive_id IN (${placeholders})
+    `).all(...archives.map(a => a.id));
+
+    for (const tag of allTags) {
+      if (!tagMap[tag.archive_id]) tagMap[tag.archive_id] = [];
+      tagMap[tag.archive_id].push({ namespace: tag.namespace, name: tag.name, color: tag.color });
+    }
+  }
 
   const result = archives.map(a => ({
     ...a,
     cover_url: `/api/archives/${a.id}/cover`,
-    tags: tagStmt.all(a.id),
+    tags: tagMap[a.id] || [],
   }));
 
   res.json(result);
