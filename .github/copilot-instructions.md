@@ -40,6 +40,8 @@ Root npm scripts (concurrently)
 │       └── opdsRoutes.js     Mounted at / (not /api) for OPDS protocol compatibility
 └── frontend/         React 19 + React Router v7 (CRA)
     ├── src/utils/api.js      Single API client — all components call this, never fetch directly
+    ├── src/hooks/            Custom hooks (useReaderKeyboard.js)
+    ├── src/components/       Shared components (LazyImage, Toast, ErrorBoundary)
     ├── src/App.js            Router, theme state, sidebar layout
     ├── src/pages/            Library, Reader, History, Settings
     └── src/index.css         All CSS vars / theme switching via data-theme attribute on <html>
