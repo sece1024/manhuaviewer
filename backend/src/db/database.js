@@ -184,6 +184,41 @@ function initDatabase() {
     logger.debug(`history 表迁移跳过: ${e.message}`);
   }
 
+  // 修复旧版 tags 表（添加 namespace 列）
+  try {
+    const tagsInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='tags'").get();
+    if (tagsInfo && !tagsInfo.sql.includes('namespace')) {
+      logger.info('检测到旧版 tags 表，添加 namespace 列...');
+      db.exec("ALTER TABLE tags ADD COLUMN namespace TEXT DEFAULT ''");
+      logger.info('tags 表迁移完成');
+    }
+  } catch (e) {
+    logger.debug(`tags 表迁移跳过: ${e.message}`);
+  }
+
+  // 迁移 folder_tags 数据到 archive_tags
+  try {
+    const hasFolderTags = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='folder_tags'").all();
+    if (hasFolderTags.length > 0) {
+      logger.info('检测到旧版 folder_tags，迁移到 archive_tags...');
+      const oldFT = db.prepare('SELECT * FROM folder_tags').all();
+      const stmt = db.prepare('INSERT OR IGNORE INTO archive_tags (archive_id, tag_id) VALUES (?, ?)');
+      for (const ft of oldFT) {
+        try {
+          // folder_tags.folder_id → archives.id（通过 folders.path 关联）
+          const archive = db.prepare("SELECT a.id FROM archives a JOIN folders f ON f.path = a.path WHERE f.id = ?").get(ft.folder_id);
+          if (archive) {
+            stmt.run(archive.id, ft.tag_id);
+          }
+        } catch {}
+      }
+      db.exec('DROP TABLE folder_tags');
+      logger.info('folder_tags 迁移完成');
+    }
+  } catch (e) {
+    logger.debug(`folder_tags 迁移跳过: ${e.message}`);
+  }
+
   // 确保设置存在
   const defaults = {
     root_dir: process.env.ROOT_DIR || '',
