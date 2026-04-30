@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [web-rewrite-v2, main]
+  pull_request:
+    branches: [web-rewrite-v2, main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18, 20]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install backend dependencies
+        run: npm install
+        working-directory: backend
+
+      - name: Run backend tests
+        run: npx jest --verbose
+        working-directory: backend
+
+      - name: Install frontend dependencies
+        run: npm install
+        working-directory: frontend
+
+      - name: Run frontend tests
+        run: CI=true npx react-scripts test --watchAll=false --verbose
+        working-directory: frontend
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend

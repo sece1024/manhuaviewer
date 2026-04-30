@@ -17,13 +17,13 @@ npm run build
 # Backend only
 cd backend && npm run dev   # nodemon (auto-reload)
 cd backend && npm start     # plain node
+cd backend && npm test      # Jest unit tests
 
 # Frontend only
 cd frontend && npm start    # CRA dev server
 cd frontend && npm run build
+cd frontend && npm test     # React Testing Library tests
 ```
-
-No test suite exists. (Backend has `searchParser.test.js` unit tests via Jest.)
 
 ## Architecture
 
