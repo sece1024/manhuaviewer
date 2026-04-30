@@ -43,7 +43,7 @@ function AppContent() {
           </NavLink>
         </nav>
         <div className="sidebar-footer">
-          <select value={theme} onChange={(e) => setTheme(e.target.value)} style={{ width: '100%' }}>
+          <select value={theme} onChange={(e) => setTheme(e.target.value)} style={{ width: '100%' }} aria-label="主题切换">
             <option value="light">☀️ 浅色</option>
             <option value="dark">🌙 深色</option>
             <option value="eye-care">🌿 护眼</option>

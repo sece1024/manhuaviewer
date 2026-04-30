@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 import { useToast } from '../components/Toast';
+import useReaderKeyboard from '../hooks/useReaderKeyboard';
 
 export default function Reader() {
   const { archiveId } = useParams();
@@ -54,7 +55,7 @@ export default function Reader() {
           setCurrentIndex(data.read_page);
         }
       } catch (e) {
-        toast(e.message, 'error');
+        if (!cancelled) setLoadError(e.message || '加载失败');
       }
     }
     load();
@@ -125,55 +126,17 @@ export default function Reader() {
     goPage(currentIndex + step * dir);
   }, [currentIndex, doublePage, pageDirection, goPage]);
 
-  // 快捷键
-  useEffect(() => {
-    const handler = (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-      const dir = pageDirection === 'rtl' ? 1 : -1;
-      switch (e.key) {
-        case 'ArrowLeft': goPrev(); break;
-        case 'ArrowRight': goNext(); break;
-        case 'ArrowUp': if (!longImage) goPrev(); break;
-        case 'ArrowDown': if (!longImage) goNext(); break;
-        case ' ': e.preventDefault(); goNext(); break;
-        case 'd': case 'D': if (!e.ctrlKey) setDoublePage(v => !v); break;
-        case 'Home': goPage(0); break;
-        case 'End': goPage(pages.length - 1); break;
-        case 'l': case 'L': setLongImage(v => !v); break;
-        case 'r': case 'R':
-          setRotation(r => (e.shiftKey ? (r - 90 + 360) % 360 : (r + 90) % 360));
-          break;
-        case 't': case 'T': setShowThumbnails(v => !v); break;
-        case 'g': case 'G': setShowJump(true); break;
-        case 'w': case 'W':
-          setFitMode(m => {
-            const next = m === 'height' ? 'width' : m === 'width' ? 'original' : 'height';
-            localStorage.setItem('readerFit', next);
-            showOverlay(`适应: ${next === 'height' ? '高度' : next === 'width' ? '宽度' : '原始'}`);
-            return next;
-          });
-          break;
-        case 'F1':
-          e.preventDefault();
-          setShowHelp(v => !v);
-          break;
-        case 'F11':
-          e.preventDefault();
-          if (document.fullscreenElement) document.exitFullscreen();
-          else containerRef.current?.requestFullscreen();
-          break;
-        case 'Escape':
-          if (showHelp) setShowHelp(false);
-          else if (showThumbnails) setShowThumbnails(false);
-          else if (showJump) setShowJump(false);
-          else if (showMenu) setShowMenu(false);
-          break;
-        default: break;
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [goPrev, goNext, goPage, longImage, pages.length, showThumbnails, showJump, showMenu, pageDirection, showOverlay]);
+  // 快捷键（通过自定义 hook 管理，减少组件依赖数量）
+  useReaderKeyboard({
+    goPrev, goNext, goPage, pagesLength: pages.length,
+    longImage, pageDirection,
+    showThumbnails, setShowThumbnails,
+    showJump, setShowJump,
+    showHelp, setShowHelp,
+    showMenu, setShowMenu,
+    setDoublePage, setLongImage, setRotation, setFitMode,
+    showOverlay, containerRef,
+  });
 
   // 触摸手势
   const getTouchDist = (touches) => {
@@ -312,7 +275,9 @@ export default function Reader() {
     return { ...base, maxHeight: 'none', maxWidth: 'none' };
   }, [scale, rotation, translate, longImage, fitMode]);
 
-  if (!archive || pages.length === 0) {
+  const [loadError, setLoadError] = useState(null);
+
+  if (!archive && !loadError) {
     return (
       <div className="empty-state">
         <div className="empty-state-icon">⏳</div>
@@ -321,13 +286,32 @@ export default function Reader() {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="empty-state">
+        <div className="empty-state-icon">😵</div>
+        <div className="empty-state-text">{loadError}</div>
+        <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={() => navigate('/')}>返回</button>
+      </div>
+    );
+  }
+
+  if (!archive || pages.length === 0) {
+    return (
+      <div className="empty-state">
+        <div className="empty-state-icon">📭</div>
+        <div className="empty-state-text">无可用页面</div>
+      </div>
+    );
+  }
+
   return (
     <div ref={containerRef} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* 工具栏 */}
       <div className="reader-toolbar">
-        <button className="btn btn-secondary btn-icon" onClick={() => navigate('/')}>←</button>
-        <button className="btn btn-secondary btn-icon" onClick={goPrev}>‹</button>
-        <button className="btn btn-secondary btn-icon" onClick={goNext}>›</button>
+        <button className="btn btn-secondary btn-icon" onClick={() => navigate('/')} aria-label="返回书库">←</button>
+        <button className="btn btn-secondary btn-icon" onClick={goPrev} aria-label="上一页">‹</button>
+        <button className="btn btn-secondary btn-icon" onClick={goNext} aria-label="下一页">›</button>
 
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
           <input type="checkbox" checked={doublePage} onChange={(e) => setDoublePage(e.target.checked)} /> 双页
@@ -482,11 +466,11 @@ export default function Reader() {
 
       {/* 缩略图面板 */}
       {showThumbnails && (
-        <div className="thumbnail-panel" onClick={() => setShowThumbnails(false)}>
+        <div className="thumbnail-panel" onClick={() => setShowThumbnails(false)} role="dialog" aria-modal="true" aria-label="缩略图总览">
           <div className="thumbnail-panel-inner" onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h3>缩略图 ({pages.length} 页)</h3>
-              <button className="btn btn-secondary btn-sm" onClick={() => setShowThumbnails(false)}>关闭</button>
+              <h3 id="thumbnail-title">缩略图 ({pages.length} 页)</h3>
+              <button className="btn btn-secondary btn-sm" onClick={() => setShowThumbnails(false)} aria-label="关闭缩略图面板">关闭</button>
             </div>
             <div className="thumbnail-grid">
               {pages.map((p, i) => (
@@ -507,7 +491,7 @@ export default function Reader() {
       {/* 跳转对话框 */}
       {showJump && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
-          onClick={() => setShowJump(false)}>
+          onClick={() => setShowJump(false)} role="dialog" aria-modal="true" aria-label="跳转到页">
           <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', padding: 24, minWidth: 280 }}
             onClick={e => e.stopPropagation()}>
             <h3 style={{ marginBottom: 12 }}>跳转到页 (1-{pages.length})</h3>
@@ -525,12 +509,12 @@ export default function Reader() {
       {/* 快捷键帮助面板 */}
       {showHelp && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
-          onClick={() => setShowHelp(false)}>
+          onClick={() => setShowHelp(false)} role="dialog" aria-modal="true" aria-label="快捷键帮助">
           <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', padding: 24, maxWidth: 480, maxHeight: '80vh', overflow: 'auto' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <h3>⌨️ 快捷键</h3>
-              <button className="btn btn-secondary btn-sm" onClick={() => setShowHelp(false)}>关闭</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setShowHelp(false)} aria-label="关闭帮助面板">关闭</button>
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
               <tbody>

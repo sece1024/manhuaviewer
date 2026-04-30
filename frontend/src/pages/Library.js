@@ -18,8 +18,12 @@ export default function Library() {
   const [selectedTag, setSelectedTag] = useState('');
   const [showSidebar, setShowSidebar] = useState(true);
   const searchDebounceRef = useRef(null);
+  const sortByRef = useRef(sortBy);
   const navigate = useNavigate();
   const toast = useToast();
+
+  // 保持 sortByRef 同步
+  useEffect(() => { sortByRef.current = sortBy; }, [sortBy]);
 
   useEffect(() => {
     api.getConfig().then(c => setRootDir(c.root_dir));
@@ -30,7 +34,7 @@ export default function Library() {
 
   const loadArchives = async (params = {}) => {
     try {
-      const data = await api.getArchives({ sort_by: sortBy, ...params });
+      const data = await api.getArchives({ sort_by: sortByRef.current, ...params });
       setArchives(data);
     } catch (e) {
       toast(e.message, 'error');
@@ -39,7 +43,7 @@ export default function Library() {
 
   useEffect(() => {
     loadArchives({ search, tag: selectedTag });
-  }, [sortBy, selectedTag]); // eslint-disable-line
+  }, [sortBy, selectedTag]);
 
   const handleSaveRoot = async () => {
     try {
@@ -70,7 +74,7 @@ export default function Library() {
     searchDebounceRef.current = setTimeout(() => {
       loadArchives({ search: val, tag: selectedTag });
     }, 300);
-  }, [selectedTag]); // eslint-disable-line
+  }, [selectedTag]);
 
   const handleViewMode = (mode) => {
     setViewMode(mode);

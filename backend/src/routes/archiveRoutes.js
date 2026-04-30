@@ -215,11 +215,12 @@ router.get('/archives/:id/pages', async (req, res) => {
   let pages = [];
 
   if (archive.archive_type === 'folder') {
-    // 文件夹类型：实时扫描
+    // 文件夹类型：异步扫描
     if (!fs.existsSync(archive.path)) {
       return res.status(404).json({ error: '文件夹不存在' });
     }
-    const files = fs.readdirSync(archive.path)
+    const allFiles = await fs.promises.readdir(archive.path);
+    const files = allFiles
       .filter(f => archiveService.isImage(f))
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
@@ -266,8 +267,9 @@ router.get('/archives/:archiveId/pages/:pageIndex', async (req, res) => {
 
   try {
     if (archive.archive_type === 'folder') {
-      // 文件夹：直接读文件
-      const files = fs.readdirSync(archive.path)
+      // 文件夹：异步读文件
+      const allFiles = await fs.promises.readdir(archive.path);
+      const files = allFiles
         .filter(f => archiveService.isImage(f))
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
@@ -319,11 +321,12 @@ router.get('/archives/:archiveId/pages/:pageIndex/thumb', async (req, res) => {
   try {
     let imageData;
     if (archive.archive_type === 'folder') {
-      const files = fs.readdirSync(archive.path)
+      const allFiles = await fs.promises.readdir(archive.path);
+      const files = allFiles
         .filter(f => archiveService.isImage(f))
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
       if (pageIndex >= files.length) return res.status(404).end();
-      imageData = fs.readFileSync(path.join(archive.path, files[pageIndex]));
+      imageData = await fs.promises.readFile(path.join(archive.path, files[pageIndex]));
     } else {
       const page = db.prepare('SELECT * FROM pages WHERE archive_id = ? AND sort_order = ?').get(archiveId, pageIndex);
       if (!page) return res.status(404).end();

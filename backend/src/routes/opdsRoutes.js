@@ -109,7 +109,7 @@ router.get('/opds/catalog', (req, res) => {
 /**
  * OPDS Archive 详情 — 单个漫画的页面列表
  */
-router.get('/opds/archive/:id', (req, res) => {
+router.get('/opds/archive/:id', async (req, res) => {
   const db = getDb();
   const baseUrl = `${req.protocol}://${req.get('host')}`;
   const id = parseInt(req.params.id);
@@ -123,7 +123,8 @@ router.get('/opds/archive/:id', (req, res) => {
     const path = require('path');
     const archiveService = require('../services/archiveService');
     try {
-      const files = fs.readdirSync(archive.path)
+      const allFiles = await fs.promises.readdir(archive.path);
+      const files = allFiles
         .filter(f => archiveService.isImage(f))
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
       pages = files.map((f, i) => ({

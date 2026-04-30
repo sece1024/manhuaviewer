@@ -47,11 +47,15 @@
   --bg-tertiary: #f8fcf5;
   --text-primary: #2d4a1e;
   --text-secondary: #5a7a48;
+  --text-tertiary: #7a9a68;
   --accent: #4ade80;
   --accent-hover: #22c55e;
   --accent-light: #f0fdf4;
   --border: #d0e0c8;
   --border-hover: #b0c8a0;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -856,4 +860,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 @media (max-width: 480px) {
   .main-content { padding: 12px 8px; padding-bottom: 80px; }
   .archive-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+}
+
+/* ── 减少动画模式 ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
