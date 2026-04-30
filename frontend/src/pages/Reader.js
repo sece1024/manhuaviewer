@@ -371,6 +371,7 @@ export default function Reader() {
           border: '1px solid var(--border)',
           cursor: longImage ? 'default' : (scale > 1.05 ? 'grab' : 'pointer'),
           touchAction: longImage ? 'pan-y' : 'none',
+          overflow: longImage ? 'auto' : 'hidden',
         }}
         onClick={handleClick}
         onDoubleClick={handleDblClick}
