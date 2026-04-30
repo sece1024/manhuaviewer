@@ -160,6 +160,30 @@ function initDatabase() {
     logger.debug('迁移检查完成');
   }
 
+  // 修复旧版 history 表（folder_id → archive_id）
+  try {
+    const historyInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='history'").get();
+    if (historyInfo && historyInfo.sql.includes('folder_id')) {
+      logger.info('检测到旧版 history 表，执行迁移...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS history_new (
+          archive_id INTEGER PRIMARY KEY,
+          page_index INTEGER DEFAULT 0,
+          total_pages INTEGER DEFAULT 0,
+          updated_at TEXT DEFAULT (datetime('now')),
+          FOREIGN KEY (archive_id) REFERENCES archives(id) ON DELETE CASCADE
+        );
+        INSERT OR IGNORE INTO history_new (archive_id, page_index, total_pages, updated_at)
+          SELECT folder_id, page_index, total_pages, updated_at FROM history;
+        DROP TABLE history;
+        ALTER TABLE history_new RENAME TO history;
+      `);
+      logger.info('history 表迁移完成');
+    }
+  } catch (e) {
+    logger.debug(`history 表迁移跳过: ${e.message}`);
+  }
+
   // 确保设置存在
   const defaults = {
     root_dir: process.env.ROOT_DIR || '',
