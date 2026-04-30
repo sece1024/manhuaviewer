@@ -12,8 +12,9 @@ const { parseSearchSyntax } = require('../utils/searchParser');
 
 // 获取档案列表（支持搜索、标签筛选、排序）
 router.get('/archives', (req, res) => {
-  const db = getDb();
-  const { search, tag, category, sort_by, sort_order } = req.query;
+  try {
+    const db = getDb();
+    const { search, tag, category, sort_by, sort_order } = req.query;
   const settingsRow = db.prepare("SELECT key, value FROM settings WHERE key IN ('sort_by','sort_order')").all();
   const settings = {};
   settingsRow.forEach(r => settings[r.key] = r.value);
@@ -133,12 +134,16 @@ router.get('/archives', (req, res) => {
   }));
 
   res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: '查询档案列表失败' });
+  }
 });
 
 // 获取单个档案详情
 router.get('/archives/:id', (req, res) => {
   const db = getDb();
   const id = parseInt(req.params.id);
+  if (isNaN(id)) return res.status(400).json({ error: '无效的 ID' });
   const archive = db.prepare('SELECT * FROM archives WHERE id = ?').get(id);
   if (!archive) return res.status(404).json({ error: '档案不存在' });
 
@@ -181,6 +186,7 @@ function generateDefaultCover(title, type) {
 router.get('/archives/:id/cover', (req, res) => {
   const db = getDb();
   const id = parseInt(req.params.id);
+  if (isNaN(id)) return res.status(400).json({ error: '无效的 ID' });
   const archive = db.prepare('SELECT * FROM archives WHERE id = ?').get(id);
   if (!archive) return res.status(404).json({ error: '档案不存在' });
 
@@ -202,6 +208,7 @@ router.get('/archives/:id/cover', (req, res) => {
 router.get('/archives/:id/pages', async (req, res) => {
   const db = getDb();
   const id = parseInt(req.params.id);
+  if (isNaN(id)) return res.status(400).json({ error: '无效的 ID' });
   const archive = db.prepare('SELECT * FROM archives WHERE id = ?').get(id);
   if (!archive) return res.status(404).json({ error: '档案不存在' });
 
@@ -353,6 +360,25 @@ router.post('/scan', async (req, res) => {
 router.delete('/archives/:id', (req, res) => {
   const db = getDb();
   const id = parseInt(req.params.id);
+  if (isNaN(id)) return res.status(400).json({ error: '无效的 ID' });
+
+  // 清理缩略图文件
+  const { DATA_DIR } = require('../db/database');
+  try {
+    const coverPath = path.join(DATA_DIR, 'thumbnails', `${id}_cover.jpg`);
+    if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);
+    // 清理页面缩略图
+    const pagesDir = path.join(DATA_DIR, 'thumbnails', 'pages');
+    if (fs.existsSync(pagesDir)) {
+      const pageThumbs = fs.readdirSync(pagesDir).filter(f => f.startsWith(`${id}_`));
+      for (const f of pageThumbs) {
+        fs.unlinkSync(path.join(pagesDir, f));
+      }
+    }
+  } catch (e) {
+    // 缩略图清理失败不影响删除操作
+  }
+
   db.prepare('DELETE FROM archives WHERE id = ?').run(id);
   res.json({ success: true });
 });

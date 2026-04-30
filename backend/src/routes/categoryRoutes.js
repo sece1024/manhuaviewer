@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db/database');
+const logger = require('../config/logger');
 
 // 获取所有分类
 router.get('/categories', (req, res) => {
@@ -61,7 +62,9 @@ router.post('/categories/assign', (req, res) => {
   const db = getDb();
   try {
     db.prepare('INSERT INTO archive_categories (archive_id, category_id) VALUES (?, ?)').run(archive_id, category_id);
-  } catch {}
+  } catch (e) {
+    if (!e.message.includes('UNIQUE')) logger.warn(`分类分配失败: ${e.message}`);
+  }
   res.json({ success: true });
 });
 

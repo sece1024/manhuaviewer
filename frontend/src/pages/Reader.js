@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 import { useToast } from '../components/Toast';
@@ -61,6 +61,14 @@ export default function Reader() {
     return () => { cancelled = true; };
   }, [archiveId, toast]);
 
+  // 组件卸载时清理所有定时器
+  useEffect(() => {
+    return () => {
+      clearTimeout(overlayTimer.current);
+      clearTimeout(saveTimerRef.current);
+    };
+  }, []);
+
   // 保存进度（防抖）
   useEffect(() => {
     if (!archive || pages.length === 0) return;
@@ -68,6 +76,7 @@ export default function Reader() {
     saveTimerRef.current = setTimeout(() => {
       api.saveHistory(parseInt(archiveId), currentIndex, pages.length).catch(() => {});
     }, 1000);
+    return () => clearTimeout(saveTimerRef.current);
   }, [currentIndex, archive, pages.length, archiveId]);
 
   // 预加载图片（持久化引用防止 GC）
@@ -287,8 +296,8 @@ export default function Reader() {
     }
   };
 
-  // 图片样式
-  const getImgStyle = () => {
+  // 图片样式（memoized 避免每次渲染重建）
+  const imgStyle = useMemo(() => {
     const base = {
       transform: `scale(${scale}) rotate(${rotation}deg) translate(${translate.x / scale}px, ${translate.y / scale}px)`,
       transition: dragRef.current.active ? 'none' : 'transform 0.15s',
@@ -301,7 +310,7 @@ export default function Reader() {
     if (fitMode === 'height') return { ...base, maxHeight: '100%', maxWidth: '100%' };
     if (fitMode === 'width') return { ...base, maxWidth: '100%', height: 'auto' };
     return { ...base, maxHeight: 'none', maxWidth: 'none' };
-  };
+  }, [scale, rotation, translate, longImage, fitMode]);
 
   if (!archive || pages.length === 0) {
     return (
@@ -398,7 +407,7 @@ export default function Reader() {
                 src={p.url}
                 alt={p.filename}
                 loading="lazy"
-                style={getImgStyle()}
+                style={imgStyle}
                 onError={(e) => { e.target.style.display = 'none'; }}
               />
             ))}
@@ -412,14 +421,14 @@ export default function Reader() {
                   src={pages[currentIndex + 1]?.url}
                   alt={pages[currentIndex + 1]?.filename}
                   className="reader-image"
-                  style={getImgStyle()}
+                  style={imgStyle}
                   draggable={false}
                 />
                 <img
                   src={pages[currentIndex]?.url}
                   alt={pages[currentIndex]?.filename}
                   className="reader-image"
-                  style={getImgStyle()}
+                  style={imgStyle}
                   draggable={false}
                 />
               </>
@@ -429,14 +438,14 @@ export default function Reader() {
                   src={pages[currentIndex]?.url}
                   alt={pages[currentIndex]?.filename}
                   className="reader-image"
-                  style={getImgStyle()}
+                  style={imgStyle}
                   draggable={false}
                 />
                 <img
                   src={pages[currentIndex + 1]?.url}
                   alt={pages[currentIndex + 1]?.filename}
                   className="reader-image"
-                  style={getImgStyle()}
+                  style={imgStyle}
                   draggable={false}
                 />
               </>
@@ -447,7 +456,7 @@ export default function Reader() {
             src={pages[currentIndex]?.url}
             alt={pages[currentIndex]?.filename}
             className="reader-image"
-            style={getImgStyle()}
+            style={imgStyle}
             draggable={false}
             onLoad={() => setImageLoaded(true)}
           />

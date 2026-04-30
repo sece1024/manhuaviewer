@@ -25,6 +25,7 @@ export default function Library() {
     api.getConfig().then(c => setRootDir(c.root_dir));
     loadArchives();
     api.getTags().then(setTags).catch(() => {});
+    return () => clearTimeout(searchDebounceRef.current);
   }, []);
 
   const loadArchives = async (params = {}) => {

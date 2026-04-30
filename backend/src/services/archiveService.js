@@ -180,8 +180,11 @@ async function extractFile7z(archivePath, entryPath) {
       });
     });
 
-    // 在解压目录中找到目标文件
-    const targetPath = path.join(tmpDir, entryPath);
+    // 在解压目录中找到目标文件（防止路径穿越）
+    const targetPath = path.resolve(tmpDir, entryPath);
+    if (!targetPath.startsWith(path.resolve(tmpDir))) {
+      throw new Error('非法路径');
+    }
     if (!fs.existsSync(targetPath)) {
       throw new Error(`找不到条目: ${entryPath}`);
     }
@@ -190,7 +193,9 @@ async function extractFile7z(archivePath, entryPath) {
     // 清理临时目录
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
-    } catch {}
+    } catch (e) {
+      logger.warn(`清理临时目录失败: ${tmpDir} — ${e.message}`);
+    }
   }
 }
 

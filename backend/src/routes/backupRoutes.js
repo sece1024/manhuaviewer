@@ -4,6 +4,7 @@
  */
 const express = require('express');
 const router = express.Router();
+const path = require('path');
 const { getDb } = require('../db/database');
 const logger = require('../config/logger');
 
@@ -53,7 +54,25 @@ router.post('/restore', (req, res) => {
     return res.status(400).json({ error: '无效的备份格式' });
   }
 
+  // 校验备份版本
+  if (backup.version && !backup.version.startsWith('2.')) {
+    return res.status(400).json({ error: '不兼容的备份版本' });
+  }
+
   const { archives, tags, categories, archive_tags, archive_categories, history, settings } = backup.data;
+
+  // 校验 settings 中的 root_dir 路径（如果存在）
+  if (settings && Array.isArray(settings)) {
+    const rootDirSetting = settings.find(s => s.key === 'root_dir');
+    if (rootDirSetting && rootDirSetting.value) {
+      const resolved = path.resolve(rootDirSetting.value);
+      // 基本路径安全检查：不允许指向系统敏感目录
+      const blocked = ['/etc', '/proc', '/sys', '/dev'];
+      if (blocked.some(p => resolved.startsWith(p))) {
+        return res.status(400).json({ error: '不允许的根目录路径' });
+      }
+    }
+  }
 
   try {
     const doRestore = db.transaction(() => {

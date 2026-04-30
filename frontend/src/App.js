@@ -5,6 +5,7 @@ import Reader from './pages/Reader';
 import History from './pages/History';
 import Settings from './pages/Settings';
 import { ToastProvider } from './components/Toast';
+import ErrorBoundary from './components/ErrorBoundary';
 
 function AppContent() {
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
@@ -64,11 +65,13 @@ function AppContent() {
 
 function App() {
   return (
-    <ToastProvider>
-      <Router>
-        <AppContent />
-      </Router>
-    </ToastProvider>
+    <ErrorBoundary>
+      <ToastProvider>
+        <Router>
+          <AppContent />
+        </Router>
+      </ToastProvider>
+    </ErrorBoundary>
   );
 }
 

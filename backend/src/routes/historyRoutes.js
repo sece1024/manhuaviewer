@@ -16,15 +16,28 @@ router.get('/history', (req, res) => {
     ORDER BY h.updated_at DESC
   `).all();
 
-  const tagStmt = db.prepare(`
-    SELECT t.namespace, t.name, t.color FROM archive_tags at2
-    JOIN tags t ON t.id = at2.tag_id WHERE at2.archive_id = ?
-  `);
+  // 批量获取标签（避免 N+1 查询）
+  let tagMap = {};
+  if (rows.length > 0) {
+    const archiveIds = rows.map(r => r.archive_id);
+    const placeholders = archiveIds.map(() => '?').join(',');
+    const allTags = db.prepare(`
+      SELECT at2.archive_id, t.namespace, t.name, t.color
+      FROM archive_tags at2
+      JOIN tags t ON t.id = at2.tag_id
+      WHERE at2.archive_id IN (${placeholders})
+    `).all(...archiveIds);
+
+    for (const tag of allTags) {
+      if (!tagMap[tag.archive_id]) tagMap[tag.archive_id] = [];
+      tagMap[tag.archive_id].push({ namespace: tag.namespace, name: tag.name, color: tag.color });
+    }
+  }
 
   const result = rows.map(r => ({
     ...r,
     cover_url: `/api/archives/${r.archive_id}/cover`,
-    tags: tagStmt.all(r.archive_id),
+    tags: tagMap[r.archive_id] || [],
   }));
 
   res.json(result);
@@ -50,8 +63,10 @@ router.post('/history', (req, res) => {
 
 // 删除历史记录
 router.delete('/history/:archiveId', (req, res) => {
+  const archiveId = parseInt(req.params.archiveId);
+  if (isNaN(archiveId)) return res.status(400).json({ error: '无效的 archiveId' });
   const db = getDb();
-  db.prepare('DELETE FROM history WHERE archive_id = ?').run(parseInt(req.params.archiveId));
+  db.prepare('DELETE FROM history WHERE archive_id = ?').run(archiveId);
   res.json({ success: true });
 });
 

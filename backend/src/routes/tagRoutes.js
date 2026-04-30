@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db/database');
+const logger = require('../config/logger');
 
 // 获取所有标签（可按命名空间筛选）
 router.get('/tags', (req, res) => {
@@ -95,7 +96,9 @@ router.post('/tags/assign', (req, res) => {
   const db = getDb();
   try {
     db.prepare('INSERT INTO archive_tags (archive_id, tag_id) VALUES (?, ?)').run(archive_id, tag_id);
-  } catch {}
+  } catch (e) {
+    if (!e.message.includes('UNIQUE')) logger.warn(`标签分配失败: ${e.message}`);
+  }
   res.json({ success: true });
 });
 
