@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 import { useToast } from '../components/Toast';
+import LazyImage from '../components/LazyImage';
 
 export default function History() {
   const [history, setHistory] = useState([]);
@@ -74,7 +75,7 @@ export default function History() {
           {filtered.map(h => (
             <div key={h.archive_id} className="history-item" onClick={() => navigate(`/reader/${h.archive_id}`)}>
               <div className="history-thumb">
-                <CoverImage src={h.cover_url} alt={h.title} />
+                <LazyImage src={h.cover_url} alt={h.title} style={{ width: '100%', height: '100%' }} />
               </div>
               <div className="history-info">
                 <div className="history-title">{h.title}</div>
@@ -108,12 +109,6 @@ export default function History() {
       )}
     </div>
   );
-}
-
-function CoverImage({ src, alt }) {
-  const [error, setError] = useState(false);
-  if (error || !src) return <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: 'var(--text-tertiary)' }}>📖</div>;
-  return <img src={src} alt={alt} onError={() => setError(true)} loading="lazy" />;
 }
 
 function formatRelativeTime(dateStr) {

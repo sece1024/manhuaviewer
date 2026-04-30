@@ -23,7 +23,7 @@ cd frontend && npm start    # CRA dev server
 cd frontend && npm run build
 ```
 
-No test suite exists.
+No test suite exists. (Backend has `searchParser.test.js` unit tests via Jest.)
 
 ## Architecture
 
@@ -34,7 +34,8 @@ Root npm scripts (concurrently)
 │   ├── src/db/database.js    SQLite schema + init + legacy migration
 │   ├── src/services/
 │   │   ├── archiveService.js Archive reading (ZIP/RAR/7Z) + cover generation via sharp
-│   │   └── scanService.js    Root dir scan → upserts archives table
+│   │   ├── scanService.js    Root dir scan → upserts archives table
+│   │   └── scanTimer.js      Auto-scan timer (extracted from index.js to avoid circular deps)
 │   └── src/routes/           One file per resource, all mounted at /api via api.js
 │       └── opdsRoutes.js     Mounted at / (not /api) for OPDS protocol compatibility
 └── frontend/         React 19 + React Router v7 (CRA)
@@ -67,7 +68,7 @@ Root npm scripts (concurrently)
 
 **Theme is client-side only.** Stored in `localStorage`, applied as `data-theme` attribute on `<html>`. CSS variables for all three themes (`light`, `dark`, `eye-care`) are defined in `index.css`.
 
-**Auto-scan timer** lives in `index.js` and restarts whenever settings change via `PUT /api/settings` (the settings route calls `startAutoScanTimer()` on update).
+**Auto-scan timer** lives in `services/scanTimer.js` (started from `index.js` on boot) and restarts whenever settings change via `PUT /api/settings` (the settings route calls `startAutoScanTimer()` on update).
 
 **OPDS routes** are mounted at `/` (not `/api`), so they must not conflict with Express static file serving — the static middleware runs before OPDS in `index.js`.
 
