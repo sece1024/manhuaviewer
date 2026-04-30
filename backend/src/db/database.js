@@ -228,6 +228,7 @@ function initDatabase() {
     reader_fit: 'height',      // height | width | original
     reader_bg: '#1a1a1a',
     auto_scan_interval: '0',   // 自动扫描间隔(分钟)，0=关闭
+    scan_depth: '1',           // 扫描递归深度(层)，0=仅根目录，1=默认
     page_direction: 'rtl',     // rtl (右到左) | ltr (左到右)
     theme: 'dark',
   };

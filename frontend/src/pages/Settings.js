@@ -129,6 +129,20 @@ export default function Settings() {
           />
           <button className="btn btn-sm" onClick={handleSaveRoot}>保存</button>
         </div>
+        <div className="settings-row">
+          <div>
+            <div className="settings-row-label">扫描深度</div>
+            <div className="settings-row-desc">递归扫描子目录的层数（0=仅根目录，1=默认扫描一层子目录）</div>
+          </div>
+          <select value={settings.scan_depth || '1'} onChange={(e) => updateSetting('scan_depth', e.target.value)}>
+            <option value="0">0 — 仅根目录</option>
+            <option value="1">1 — 一层子目录</option>
+            <option value="2">2 — 两层子目录</option>
+            <option value="3">3 — 三层子目录</option>
+            <option value="4">4 — 四层子目录</option>
+            <option value="5">5 — 五层子目录</option>
+          </select>
+        </div>
         <div className="settings-row-desc">支持文件夹和 ZIP/CBZ/RAR/CBR/7Z 压缩包</div>
       </div>
 

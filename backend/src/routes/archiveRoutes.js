@@ -350,9 +350,11 @@ router.post('/scan', async (req, res) => {
   const db = getDb();
   const rootRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('root_dir');
   const rootDir = rootRow ? rootRow.value : '';
+  const depthRow = db.prepare("SELECT value FROM settings WHERE key = 'scan_depth'").get();
+  const maxDepth = depthRow ? parseInt(depthRow.value) || 0 : 0;
 
   try {
-    const result = await scanRoot(rootDir);
+    const result = await scanRoot(rootDir, maxDepth);
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });

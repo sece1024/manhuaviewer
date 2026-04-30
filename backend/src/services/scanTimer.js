@@ -22,9 +22,11 @@ function startAutoScanTimer() {
     try {
       const rootRow = db.prepare("SELECT value FROM settings WHERE key = 'root_dir'").get();
       const rootDir = rootRow ? rootRow.value : '';
+      const depthRow = db.prepare("SELECT value FROM settings WHERE key = 'scan_depth'").get();
+      const maxDepth = depthRow ? parseInt(depthRow.value) || 0 : 0;
       if (rootDir) {
         logger.info('自动扫描触发...');
-        const result = await scanRoot(rootDir);
+        const result = await scanRoot(rootDir, maxDepth);
         logger.info(`自动扫描完成: ${result.message}`);
       }
     } catch (err) {
