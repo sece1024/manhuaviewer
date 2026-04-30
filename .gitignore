@@ -1,22 +1,14 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-*.egg-info/
+# Dependencies
+node_modules/
+
+# Build output
+frontend/build/
 dist/
-build/
-*.egg
 
 # Virtual environment
 .venv/
 venv/
 env/
-
-# Test & coverage
-.pytest_cache/
-htmlcov/
-.coverage
 
 # IDE
 .vscode/
@@ -28,16 +20,11 @@ htmlcov/
 .aider*
 .copilot*
 
-# PyInstaller
-*.spec
-
 # OS
 .DS_Store
 Thumbs.db
 
-# uv
-.uv/
-uv.lock
-
-# Python version (use pyproject.toml requires-python)
-.python-version
+# Environment
+.env
+.env.local
+.env.*.local
