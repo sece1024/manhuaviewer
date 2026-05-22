@@ -20,6 +20,9 @@ const api = {
   // Scan
   scan: () => request('/scan', { method: 'POST' }),
 
+  // Direct open
+  openFile: (filePath) => request('/open', { method: 'POST', body: JSON.stringify({ filePath }) }),
+
   // Archives
   getArchives: (params = {}) => {
     const qs = new URLSearchParams(params).toString();

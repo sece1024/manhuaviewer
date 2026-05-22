@@ -17,6 +17,9 @@ export default function Library() {
   const [tags, setTags] = useState([]);
   const [selectedTag, setSelectedTag] = useState('');
   const [showSidebar, setShowSidebar] = useState(true);
+  const [showOpenModal, setShowOpenModal] = useState(false);
+  const [openPath, setOpenPath] = useState('');
+  const [opening, setOpening] = useState(false);
   const searchDebounceRef = useRef(null);
   const sortByRef = useRef(sortBy);
   const navigate = useNavigate();
@@ -84,6 +87,21 @@ export default function Library() {
   const handleTagFilter = (tagName) => {
     const next = selectedTag === tagName ? '' : tagName;
     setSelectedTag(next);
+  };
+
+  const handleOpenFile = async () => {
+    if (!openPath.trim()) return;
+    setOpening(true);
+    try {
+      const result = await api.openFile(openPath.trim());
+      setShowOpenModal(false);
+      setOpenPath('');
+      toast(result.message || '已打开', 'success');
+      navigate(`/reader/${result.id}`);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+    setOpening(false);
   };
 
   // 按命名空间分组标签
@@ -207,6 +225,10 @@ export default function Library() {
             {showSidebar ? '◁' : '▷'}
           </button>
 
+          <button className="btn btn-secondary" onClick={() => setShowOpenModal(true)}>
+            📂 打开文件
+          </button>
+
           <button className="btn" onClick={handleScan} disabled={loading}>
             {loading ? '扫描中...' : '🔄 扫描'}
           </button>
@@ -284,6 +306,33 @@ export default function Library() {
           </div>
         )}
       </div>
+      {/* 打开文件弹窗 */}
+      {showOpenModal && (
+        <div className="modal-overlay" onClick={() => setShowOpenModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-title">打开漫画文件</div>
+            <div className="modal-body">
+              <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>
+                输入文件或文件夹的绝对路径，支持图片文件夹和压缩包 (ZIP/CBZ/RAR/CBR/7Z)
+              </p>
+              <input
+                className="modal-input"
+                placeholder="例: /Users/me/manga/comic.cbz"
+                value={openPath}
+                onChange={(e) => setOpenPath(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleOpenFile()}
+                autoFocus
+              />
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setShowOpenModal(false)}>取消</button>
+              <button className="btn" onClick={handleOpenFile} disabled={opening || !openPath.trim()}>
+                {opening ? '打开中...' : '打开'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

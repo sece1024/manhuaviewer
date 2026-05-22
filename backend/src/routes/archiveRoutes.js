@@ -190,8 +190,8 @@ router.get('/archives/:id/cover', (req, res) => {
   const archive = db.prepare('SELECT * FROM archives WHERE id = ?').get(id);
   if (!archive) return res.status(404).json({ error: '档案不存在' });
 
-  const { DATA_DIR } = require('../db/database');
-  const thumbPath = path.join(DATA_DIR, 'thumbnails', `${id}_cover.jpg`);
+  const { getDataDir } = require('../db/database');
+  const thumbPath = path.join(getDataDir(), 'thumbnails', `${id}_cover.jpg`);
 
   if (fs.existsSync(thumbPath)) {
     return res.sendFile(path.resolve(thumbPath));
@@ -305,8 +305,8 @@ router.get('/archives/:archiveId/pages/:pageIndex/thumb', async (req, res) => {
   const archiveId = parseInt(req.params.archiveId);
   const pageIndex = parseInt(req.params.pageIndex);
 
-  const { DATA_DIR } = require('../db/database');
-  const thumbDir = path.join(DATA_DIR, 'thumbnails', 'pages');
+  const { getDataDir } = require('../db/database');
+  const thumbDir = path.join(getDataDir(), 'thumbnails', 'pages');
   fs.mkdirSync(thumbDir, { recursive: true });
   const thumbPath = path.join(thumbDir, `${archiveId}_${pageIndex}.jpg`);
 
@@ -345,6 +345,94 @@ router.get('/archives/:archiveId/pages/:pageIndex/thumb', async (req, res) => {
   }
 });
 
+// 直接打开文件/文件夹路径
+router.post('/open', async (req, res) => {
+  try {
+    const { filePath } = req.body;
+    if (!filePath) return res.status(400).json({ error: '请提供文件路径' });
+
+    const db = getDb();
+    const resolved = path.resolve(filePath);
+
+    // 检查路径是否存在
+    if (!fs.existsSync(resolved)) {
+      return res.status(404).json({ error: `路径不存在: ${resolved}` });
+    }
+
+    // 检查是否已在数据库中
+    const existing = db.prepare('SELECT id FROM archives WHERE path = ?').get(resolved);
+    if (existing) {
+      return res.json({ id: existing.id, message: '文件已存在于库中' });
+    }
+
+    const stat = fs.statSync(resolved);
+
+    if (stat.isDirectory()) {
+      // 文件夹：检查是否包含图片
+      const allFiles = await fs.promises.readdir(resolved);
+      const images = allFiles.filter(f => archiveService.isImage(f));
+      if (images.length === 0) {
+        return res.status(400).json({ error: '文件夹中没有找到图片文件' });
+      }
+
+      const sorted = images.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      let totalSize = 0;
+      for (const f of images) {
+        try { totalSize += fs.statSync(path.join(resolved, f)).size; } catch {}
+      }
+
+      const title = path.basename(resolved);
+      const info = db.prepare(`INSERT INTO archives (title, path, archive_type, page_count, file_size)
+        VALUES (?, ?, 'folder', ?, ?)`).run(title, resolved, sorted.length, totalSize);
+
+      const archiveId = info.lastInsertRowid;
+      archiveService.extractFolderCover(resolved, archiveId).catch(() => {});
+
+      return res.json({ id: archiveId, title, archive_type: 'folder' });
+    } else {
+      // 压缩包文件
+      if (!archiveService.isArchive(path.basename(resolved))) {
+        return res.status(400).json({ error: '不支持的文件格式，请选择图片文件夹或压缩包 (ZIP/CBZ/RAR/CBR/7Z)' });
+      }
+
+      let images;
+      try {
+        images = await archiveService.getImageList(resolved);
+      } catch (err) {
+        return res.status(400).json({ error: `无法读取压缩包: ${err.message}` });
+      }
+      if (images.length === 0) {
+        return res.status(400).json({ error: '压缩包中没有图片' });
+      }
+
+      const ext = path.extname(resolved).toLowerCase().replace('.', '');
+      const archiveType = ext === 'cbz' ? 'zip' : ext === 'cbr' ? 'rar' : ext;
+      const title = path.basename(resolved, path.extname(resolved));
+
+      const result = db.prepare(`INSERT INTO archives (title, path, archive_type, page_count, file_size)
+        VALUES (?, ?, ?, ?, ?)`).run(title, resolved, archiveType, images.length, stat.size);
+      const archiveId = result.lastInsertRowid;
+
+      // 写入 pages 表
+      const insertPage = db.prepare(
+        'INSERT INTO pages (archive_id, filename, filepath, sort_order, file_size) VALUES (?, ?, ?, ?, ?)'
+      );
+      const insertAll = db.transaction(() => {
+        for (let i = 0; i < images.length; i++) {
+          insertPage.run(archiveId, images[i].name, images[i].path, i, images[i].size);
+        }
+      });
+      insertAll();
+
+      archiveService.extractCover(resolved, archiveId).catch(() => {});
+
+      return res.json({ id: archiveId, title, archive_type: archiveType });
+    }
+  } catch (err) {
+    res.status(500).json({ error: `打开失败: ${err.message}` });
+  }
+});
+
 // 扫描根目录
 router.post('/scan', async (req, res) => {
   const db = getDb();
@@ -368,12 +456,12 @@ router.delete('/archives/:id', (req, res) => {
   if (isNaN(id)) return res.status(400).json({ error: '无效的 ID' });
 
   // 清理缩略图文件
-  const { DATA_DIR } = require('../db/database');
+  const { getDataDir } = require('../db/database');
   try {
-    const coverPath = path.join(DATA_DIR, 'thumbnails', `${id}_cover.jpg`);
+    const coverPath = path.join(getDataDir(), 'thumbnails', `${id}_cover.jpg`);
     if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);
     // 清理页面缩略图
-    const pagesDir = path.join(DATA_DIR, 'thumbnails', 'pages');
+    const pagesDir = path.join(getDataDir(), 'thumbnails', 'pages');
     if (fs.existsSync(pagesDir)) {
       const pageThumbs = fs.readdirSync(pagesDir).filter(f => f.startsWith(`${id}_`));
       for (const f of pageThumbs) {
