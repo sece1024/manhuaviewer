@@ -14,6 +14,7 @@
 - 🎨 **主题系统** — 浅色/深色/护眼三套主题
 - 📱 **移动端适配** — 响应式布局，触摸手势（缩放/双击/滑动翻页）
 - ⌨️ **快捷键** — 完整的键盘操作支持
+- 🖥️ **桌面应用** — 支持打包为独立可执行的 macOS 应用
 
 ## 🚀 快速开始
 
@@ -63,6 +64,24 @@ npm start
 ```
 
 访问 http://localhost:5002 即可。
+
+### 桌面应用（Electron）
+
+```bash
+# 安装依赖（包括 Electron）
+npm install
+
+# 开发模式运行 Electron
+npm run electron
+
+# 打包为 macOS 应用（.dmg + .zip）
+npm run build:electron
+
+# 仅打包目录（不生成安装器，用于测试）
+npm run pack
+```
+
+打包后的应用位于 `out/` 目录。
 
 ## 📁 支持格式
 
@@ -123,6 +142,9 @@ frontend/
 │   │   └── Settings.js             # 设置页面（标签/分类管理+统计）
 │   └── utils/api.js                # API 客户端
 └── package.json
+
+electron/
+└── main.js                         # Electron 主进程
 ```
 
 ## 📡 API 文档
@@ -135,6 +157,7 @@ frontend/
 | `/api/archives/:id/pages/:index` | GET | 读取单页图片 |
 | `/api/archives/:id/cover` | GET | 获取封面缩略图 |
 | `/api/archives/:id` | DELETE | 删除档案 |
+| `/api/open` | POST | 直接打开文件/文件夹路径 |
 | `/api/scan` | POST | 扫描根目录 |
 | `/api/tags` | GET/POST | 标签列表 / 创建标签 |
 | `/api/tags/:id` | PUT/DELETE | 更新 / 删除标签 |
