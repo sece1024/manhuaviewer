@@ -7,7 +7,7 @@ const path = require('path');
 const AdmZip = require('adm-zip');
 const _7z = require('7zip-min');
 const logger = require('../config/logger');
-const { DATA_DIR } = require('../db/database');
+const { getDataDir } = require('../db/database');
 const os = require('os');
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif', '.tiff', '.avif']);
@@ -206,7 +206,7 @@ async function extractCover(archivePath, archiveId) {
   const images = await getImageList(archivePath);
   if (images.length === 0) return null;
 
-  const thumbDir = path.join(DATA_DIR, 'thumbnails');
+  const thumbDir = path.join(getDataDir(), 'thumbnails');
   fs.mkdirSync(thumbDir, { recursive: true });
 
   const thumbPath = path.join(thumbDir, `${archiveId}_cover.jpg`);
@@ -231,7 +231,7 @@ async function extractCover(archivePath, archiveId) {
  * 扫描文件夹类型的封面（第 1 张图片）
  */
 async function extractFolderCover(folderPath, archiveId) {
-  const thumbDir = path.join(DATA_DIR, 'thumbnails');
+  const thumbDir = path.join(getDataDir(), 'thumbnails');
   fs.mkdirSync(thumbDir, { recursive: true });
   const thumbPath = path.join(thumbDir, `${archiveId}_cover.jpg`);
 

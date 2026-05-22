@@ -3,10 +3,15 @@ const path = require('path');
 const fs = require('fs');
 const logger = require('../config/logger');
 
-const DATA_DIR = path.join(__dirname, '../../data');
-const DB_PATH = path.join(DATA_DIR, 'manhuaviewer.db');
+let DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../../data');
+let DB_PATH = path.join(DATA_DIR, 'manhuaviewer.db');
 
 let db;
+
+function setDataDir(dir) {
+  DATA_DIR = dir;
+  DB_PATH = path.join(dir, 'manhuaviewer.db');
+}
 
 function getDb() {
   if (!db) {
@@ -243,4 +248,4 @@ function initDatabase() {
   logger.info('数据库初始化完成');
 }
 
-module.exports = { getDb, initDatabase, DATA_DIR };
+module.exports = { getDb, initDatabase, setDataDir, getDataDir: () => DATA_DIR };

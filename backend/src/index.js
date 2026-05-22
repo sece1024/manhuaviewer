@@ -5,12 +5,10 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 const logger = require('./config/logger');
-const { initDatabase, getDb } = require('./db/database');
+const { initDatabase, getDb, setDataDir } = require('./db/database');
 const apiRoutes = require('./routes/api');
 const errorHandler = require('./middleware/errorHandler');
 const { startAutoScanTimer } = require('./services/scanTimer');
-
-const PORT = process.env.PORT || 5002;
 
 const app = express();
 
@@ -48,13 +46,28 @@ app.get('*', (req, res) => {
 // 错误处理
 app.use(errorHandler);
 
-// 启动
-async function startServer() {
+// 启动服务器，返回 Promise 供 Electron 等外部调用
+async function startServer(port) {
+  // 支持通过环境变量设置数据目录（Electron 使用）
+  if (process.env.DATA_DIR) {
+    setDataDir(process.env.DATA_DIR);
+  }
+
   await initDatabase();
-  app.listen(PORT, () => {
-    logger.info(`MangaViewer v2 运行在 http://localhost:${PORT}`);
-    startAutoScanTimer();
+
+  const listenPort = port || process.env.PORT || 5002;
+  return new Promise((resolve) => {
+    const server = app.listen(listenPort, () => {
+      logger.info(`MangaViewer v2 运行在 http://localhost:${listenPort}`);
+      startAutoScanTimer();
+      resolve(server);
+    });
   });
 }
 
-startServer();
+// 直接运行时启动服务器
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { app, startServer };
