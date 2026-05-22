@@ -1,15 +1,47 @@
 {
-  "name": "manhuaviewer-web",
-  "version": "0.1.0",
-  "description": "MangaViewer Web 版",
+  "name": "manhuaviewer",
+  "version": "2.0.0",
+  "description": "MangaViewer — 漫画阅读管理系统",
+  "main": "electron/main.js",
   "scripts": {
     "start:backend": "cd backend && npm start",
     "start:frontend": "cd frontend && npm start",
     "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
+    "dev": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
     "build": "cd frontend && npm run build",
-    "dev": "concurrently \"npm run start:backend\" \"npm run start:frontend\""
+    "electron": "cd frontend && npm run build && cd .. && electron .",
+    "build:electron": "cd frontend && npm run build && cd .. && electron-builder --mac",
+    "pack": "cd frontend && npm run build && cd .. && electron-builder --mac --dir",
+    "postinstall": "electron-rebuild"
+  },
+  "dependencies": {
+    "concurrently": "^9.1.2"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
+    "@electron/rebuild": "^3.7.1"
+  },
+  "build": {
+    "appId": "com.sece1024.manhuaviewer",
+    "productName": "MangaViewer",
+    "directories": {
+      "output": "out"
+    },
+    "files": [
+      "electron/**/*",
+      "backend/src/**/*",
+      "backend/package.json",
+      "backend/node_modules/**/*",
+      "frontend/build/**/*"
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.entertainment"
+    },
+    "npmRebuild": true
   }
 }
