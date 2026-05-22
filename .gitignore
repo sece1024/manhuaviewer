@@ -5,11 +5,6 @@ node_modules/
 frontend/build/
 dist/
 
-# Virtual environment
-.venv/
-venv/
-env/
-
 # IDE
 .vscode/
 .idea/
@@ -17,8 +12,6 @@ env/
 *.swo
 .cursor/
 .claude/
-.aider*
-.copilot*
 
 # OS
 .DS_Store
@@ -28,3 +21,6 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+# Runtime data
+backend/data/
