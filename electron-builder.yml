@@ -1,0 +1,40 @@
+appId: com.sece1024.manhuaviewer
+productName: MangaViewer
+copyright: Copyright © 2026 sece1024
+
+directories:
+  output: out
+
+files:
+  - electron/**/*
+  - backend/src/**/*
+  - backend/package.json
+  - backend/node_modules/**/*
+  - frontend/build/**/*
+  - "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,LICENSE,license,License}"
+  - "!**/node_modules/.cache/**"
+
+extraResources:
+  - from: backend/data/
+    to: data/
+    filter:
+      - "**/*"
+      - "!**/node_modules/**"
+
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.entertainment
+  icon: electron/icon.icns
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+npmRebuild: true
