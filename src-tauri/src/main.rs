@@ -63,9 +63,7 @@ async fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(state)
-        .setup(move |app| {
-            let handle = app.handle();
-            
+        .setup(move |_app| {
             // Start embedded web server
             tokio::spawn(async move {
                 let port: u16 = std::env::var("PORT")
