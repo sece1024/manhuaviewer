@@ -4,23 +4,19 @@
   "description": "MangaViewer — 漫画阅读管理系统",
   "main": "electron/main.js",
   "scripts": {
-    "start:backend": "cd backend && npm start",
-    "start:frontend": "cd frontend && npm start",
-    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
-    "dev": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
-    "build": "cd frontend && npm run build",
-    "electron": "cd frontend && npm run build && cd .. && electron .",
-    "build:electron": "cd frontend && npm run build && cd .. && electron-builder --mac",
-    "pack": "cd frontend && npm run build && cd .. && electron-builder --mac --dir",
-    "postinstall": "electron-rebuild"
+    "start:backend": "pnpm --filter manhuaviewer-backend start",
+    "start:frontend": "pnpm --filter manhuaviewer-frontend start",
+    "start": "pnpm run start:backend & pnpm run start:frontend",
+    "dev": "pnpm run start:backend & pnpm run start:frontend",
+    "build": "pnpm --filter manhuaviewer-frontend build",
+    "electron": "pnpm run build && electron .",
+    "build:electron": "pnpm run build && electron-builder --mac",
+    "pack": "pnpm run build && electron-builder --mac --dir"
   },
-  "dependencies": {
-    "concurrently": "^9.1.2"
-  },
+  "dependencies": {},
   "devDependencies": {
     "electron": "^33.0.0",
-    "electron-builder": "^25.1.8",
-    "@electron/rebuild": "^3.7.1"
+    "electron-builder": "^25.1.8"
   },
   "build": {
     "appId": "com.sece1024.manhuaviewer",
