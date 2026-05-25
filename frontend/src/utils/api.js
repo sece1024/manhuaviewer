@@ -1,15 +1,40 @@
 const BASE = '/api';
+const MAX_RETRIES = 10;
+const RETRY_DELAY = 1000; // 1 second
 
 async function request(url, options = {}) {
-  const res = await fetch(`${BASE}${url}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${res.status}`);
+  let lastError;
+  
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetch(`${BASE}${url}`, {
+        headers: { 'Content-Type': 'application/json' },
+        ...options,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      return res.json();
+    } catch (err) {
+      lastError = err;
+      
+      // Only retry on connection errors
+      if (err.message.includes('Failed to fetch') || 
+          err.message.includes('ECONNREFUSED') ||
+          err.message.includes('NetworkError')) {
+        if (attempt < MAX_RETRIES - 1) {
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+          continue;
+        }
+      }
+      
+      // Don't retry for other errors
+      throw err;
+    }
   }
-  return res.json();
+  
+  throw lastError;
 }
 
 const api = {
