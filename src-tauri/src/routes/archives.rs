@@ -141,11 +141,9 @@ pub async fn list_pages(
                             }).collect();
                             
                             Json(serde_json::json!({
-                                "data": {
-                                    "archive": archive,
-                                    "pages": page_list,
-                                    "read_page": null
-                                }
+                                "archive": archive,
+                                "pages": page_list,
+                                "read_page": null
                             })).into_response()
                         },
                         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
