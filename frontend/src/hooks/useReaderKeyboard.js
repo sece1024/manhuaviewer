@@ -10,7 +10,6 @@ export default function useReaderKeyboard({
   goPage,
   pagesLength,
   longImage,
-  pageDirection,
   showThumbnails,
   setShowThumbnails,
   showJump,
@@ -69,7 +68,7 @@ export default function useReaderKeyboard({
       default: break;
     }
   }, [
-    goPrev, goNext, goPage, pagesLength, longImage, pageDirection,
+    goPrev, goNext, goPage, pagesLength, longImage,
     showThumbnails, showJump, showMenu, showHelp,
     setDoublePage, setLongImage, setRotation, setFitMode, showOverlay, containerRef,
   ]);

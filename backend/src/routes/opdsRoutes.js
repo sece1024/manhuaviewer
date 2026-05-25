@@ -5,6 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db/database');
+const archiveService = require('../services/archiveService');
 
 const OPDS_NS = 'http://www.w3.org/2005/Atom';
 const OPDS_ACQUISITION = 'http://opds-spec.org/acquisition';
@@ -119,14 +120,8 @@ router.get('/opds/archive/:id', async (req, res) => {
 
   let pages = [];
   if (archive.archive_type === 'folder') {
-    const fs = require('fs');
-    const path = require('path');
-    const archiveService = require('../services/archiveService');
     try {
-      const allFiles = await fs.promises.readdir(archive.path);
-      const files = allFiles
-        .filter(f => archiveService.isImage(f))
-        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      const files = await archiveService.listFolderImages(archive.path);
       pages = files.map((f, i) => ({
         filename: f,
         sort_order: i,
@@ -145,8 +140,7 @@ router.get('/opds/archive/:id', async (req, res) => {
   let entries = '';
   for (const p of pages) {
     const ext = p.filename.split('.').pop().toLowerCase();
-    const mimeMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', bmp: 'image/bmp' };
-    const mime = mimeMap[ext] || 'image/jpeg';
+    const mime = archiveService.MIME_TYPES[ext] || 'image/jpeg';
 
     entries += `
   <entry>

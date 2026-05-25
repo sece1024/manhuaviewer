@@ -4,10 +4,7 @@
   "description": "MangaViewer — 漫画阅读管理系统",
   "main": "electron/main.js",
   "scripts": {
-    "start:backend": "pnpm --filter manhuaviewer-backend start",
-    "start:frontend": "pnpm --filter manhuaviewer-frontend start",
-    "start": "pnpm run start:backend & pnpm run start:frontend",
-    "dev": "pnpm run start:backend & pnpm run start:frontend",
+    "start": "pnpm --filter manhuaviewer-backend start & pnpm --filter manhuaviewer-frontend start",
     "build": "pnpm --filter manhuaviewer-frontend build",
     "electron": "pnpm run build && electron .",
     "build:electron": "pnpm run build && electron-builder --mac",

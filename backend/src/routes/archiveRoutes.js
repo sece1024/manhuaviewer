@@ -5,7 +5,7 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
-const { getDb } = require('../db/database');
+const { getDb, getDataDir } = require('../db/database');
 const { scanRoot } = require('../services/scanService');
 const archiveService = require('../services/archiveService');
 const { parseSearchSyntax } = require('../utils/searchParser');
@@ -190,7 +190,6 @@ router.get('/archives/:id/cover', (req, res) => {
   const archive = db.prepare('SELECT * FROM archives WHERE id = ?').get(id);
   if (!archive) return res.status(404).json({ error: '档案不存在' });
 
-  const { getDataDir } = require('../db/database');
   const thumbPath = path.join(getDataDir(), 'thumbnails', `${id}_cover.jpg`);
 
   if (fs.existsSync(thumbPath)) {
@@ -219,10 +218,7 @@ router.get('/archives/:id/pages', async (req, res) => {
     if (!fs.existsSync(archive.path)) {
       return res.status(404).json({ error: '文件夹不存在' });
     }
-    const allFiles = await fs.promises.readdir(archive.path);
-    const files = allFiles
-      .filter(f => archiveService.isImage(f))
-      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const files = await archiveService.listFolderImages(archive.path);
 
     pages = files.map((f, i) => ({
       id: `${archive.id}_${i}`,
@@ -268,10 +264,7 @@ router.get('/archives/:archiveId/pages/:pageIndex', async (req, res) => {
   try {
     if (archive.archive_type === 'folder') {
       // 文件夹：异步读文件
-      const allFiles = await fs.promises.readdir(archive.path);
-      const files = allFiles
-        .filter(f => archiveService.isImage(f))
-        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      const files = await archiveService.listFolderImages(archive.path);
 
       if (pageIndex >= files.length) return res.status(404).json({ error: '页码超出范围' });
 
@@ -288,9 +281,8 @@ router.get('/archives/:archiveId/pages/:pageIndex', async (req, res) => {
 
       const data = await archiveService.extractFile(archive.path, page.filepath);
       const ext = path.extname(page.filename).toLowerCase().replace('.', '');
-      const mimeMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', bmp: 'image/bmp', avif: 'image/avif' };
 
-      res.set('Content-Type', mimeMap[ext] || 'image/jpeg');
+      res.set('Content-Type', archiveService.MIME_TYPES[ext] || 'image/jpeg');
       res.set('Cache-Control', 'public, max-age=3600');
       return res.send(data);
     }
@@ -305,7 +297,6 @@ router.get('/archives/:archiveId/pages/:pageIndex/thumb', async (req, res) => {
   const archiveId = parseInt(req.params.archiveId);
   const pageIndex = parseInt(req.params.pageIndex);
 
-  const { getDataDir } = require('../db/database');
   const thumbDir = path.join(getDataDir(), 'thumbnails', 'pages');
   fs.mkdirSync(thumbDir, { recursive: true });
   const thumbPath = path.join(thumbDir, `${archiveId}_${pageIndex}.jpg`);
@@ -321,10 +312,7 @@ router.get('/archives/:archiveId/pages/:pageIndex/thumb', async (req, res) => {
   try {
     let imageData;
     if (archive.archive_type === 'folder') {
-      const allFiles = await fs.promises.readdir(archive.path);
-      const files = allFiles
-        .filter(f => archiveService.isImage(f))
-        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      const files = await archiveService.listFolderImages(archive.path);
       if (pageIndex >= files.length) return res.status(404).end();
       imageData = await fs.promises.readFile(path.join(archive.path, files[pageIndex]));
     } else {
@@ -369,13 +357,11 @@ router.post('/open', async (req, res) => {
 
     if (stat.isDirectory()) {
       // 文件夹：检查是否包含图片
-      const allFiles = await fs.promises.readdir(resolved);
-      const images = allFiles.filter(f => archiveService.isImage(f));
+      const images = await archiveService.listFolderImages(resolved);
       if (images.length === 0) {
         return res.status(400).json({ error: '文件夹中没有找到图片文件' });
       }
 
-      const sorted = images.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
       let totalSize = 0;
       for (const f of images) {
         try { totalSize += fs.statSync(path.join(resolved, f)).size; } catch {}
@@ -383,7 +369,7 @@ router.post('/open', async (req, res) => {
 
       const title = path.basename(resolved);
       const info = db.prepare(`INSERT INTO archives (title, path, archive_type, page_count, file_size)
-        VALUES (?, ?, 'folder', ?, ?)`).run(title, resolved, sorted.length, totalSize);
+        VALUES (?, ?, 'folder', ?, ?)`).run(title, resolved, images.length, totalSize);
 
       const archiveId = info.lastInsertRowid;
       archiveService.extractFolderCover(resolved, archiveId).catch(() => {});
@@ -406,7 +392,7 @@ router.post('/open', async (req, res) => {
       }
 
       const ext = path.extname(resolved).toLowerCase().replace('.', '');
-      const archiveType = ext === 'cbz' ? 'zip' : ext === 'cbr' ? 'rar' : ext;
+      const archiveType = archiveService.mapArchiveType(ext);
       const title = path.basename(resolved, path.extname(resolved));
 
       const result = db.prepare(`INSERT INTO archives (title, path, archive_type, page_count, file_size)
@@ -456,7 +442,6 @@ router.delete('/archives/:id', (req, res) => {
   if (isNaN(id)) return res.status(400).json({ error: '无效的 ID' });
 
   // 清理缩略图文件
-  const { getDataDir } = require('../db/database');
   try {
     const coverPath = path.join(getDataDir(), 'thumbnails', `${id}_cover.jpg`);
     if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);

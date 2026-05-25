@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 const logger = require('./config/logger');
-const { initDatabase, getDb, setDataDir } = require('./db/database');
+const { initDatabase, setDataDir } = require('./db/database');
 const apiRoutes = require('./routes/api');
 const errorHandler = require('./middleware/errorHandler');
 const { startAutoScanTimer } = require('./services/scanTimer');

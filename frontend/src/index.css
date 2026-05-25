@@ -163,30 +163,12 @@ body {
 }
 .btn-secondary:hover { background: var(--bg-tertiary); border-color: var(--border-hover); }
 
-.btn-ghost {
-  background: transparent;
-  color: var(--text-secondary);
-  padding: 6px 10px;
-  min-height: auto;
-}
-.btn-ghost:hover { background: var(--bg-primary); color: var(--text-primary); }
-
 .btn-danger { background: #ef4444; }
 .btn-danger:hover { background: #dc2626; }
 
 .btn-icon { padding: 8px; min-width: 38px; min-height: 38px; }
 
 .btn-sm { padding: 6px 12px; font-size: 13px; min-height: 32px; }
-
-/* ── Cards ── */
-.card {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-  transition: all var(--transition);
-}
-.card:hover { box-shadow: var(--shadow-md); border-color: var(--border-hover); }
 
 /* ── Forms ── */
 input, select, textarea {
@@ -289,21 +271,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 }
 .empty-state-icon { font-size: 48px; margin-bottom: 12px; }
 .empty-state-text { font-size: 15px; }
-
-/* ── Badge ── */
-.badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  font-size: 11px;
-  font-weight: 600;
-  background: var(--accent);
-  color: #fff;
-}
 
 /* ── Toggle Button ── */
 .toggle-group {

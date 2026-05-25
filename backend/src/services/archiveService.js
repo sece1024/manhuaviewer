@@ -1,6 +1,5 @@
 /**
- * archiveService.js — 压缩包解压服务
- * 支持 ZIP/CBZ 和 RAR/CBR 格式，提取图片并生成封面
+ * archiveService.js — 压缩包解压服务 + 共享工具函数
  */
 const fs = require('fs');
 const path = require('path');
@@ -12,20 +11,33 @@ const os = require('os');
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif', '.tiff', '.avif']);
 
+const MIME_TYPES = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+  webp: 'image/webp', gif: 'image/gif', bmp: 'image/bmp', avif: 'image/avif',
+};
+
+/** 自然排序比较器（数字感知） */
+const naturalSort = (a, b) => a.localeCompare(b, undefined, { numeric: true });
+
+/** 压缩包扩展名 → 内部类型映射 */
+function mapArchiveType(ext) {
+  if (ext === 'cbz') return 'zip';
+  if (ext === 'cbr') return 'rar';
+  return ext;
+}
+
+/** 读取文件夹中的图片列表（自然排序） */
+async function listFolderImages(folderPath) {
+  const allFiles = await fs.promises.readdir(folderPath);
+  return allFiles.filter(f => isImage(f)).sort(naturalSort);
+}
+
 /**
  * 判断文件是否为支持的压缩包
  */
 function isArchive(filename) {
   const ext = path.extname(filename).toLowerCase();
   return ['.zip', '.cbz', '.rar', '.cbr', '.7z'].includes(ext);
-}
-
-/**
- * 判断是否为 7z 格式
- */
-function is7z(filename) {
-  const ext = path.extname(filename).toLowerCase();
-  return ext === '.7z';
 }
 
 /**
@@ -259,11 +271,13 @@ async function extractFolderCover(folderPath, archiveId) {
 
 module.exports = {
   isArchive,
-  is7z,
   isImage,
   getImageList,
   extractFile,
   extractCover,
   extractFolderCover,
-  IMAGE_EXTS,
+  listFolderImages,
+  naturalSort,
+  mapArchiveType,
+  MIME_TYPES,
 };

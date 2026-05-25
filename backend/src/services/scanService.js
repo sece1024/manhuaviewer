@@ -28,9 +28,7 @@ async function scanDir(dirPath, depth, maxDepth) {
 
     if (entry.isDirectory()) {
       // 检查当前子目录是否包含图片（作为漫画文件夹）
-      const files = fs.readdirSync(fullPath)
-        .filter(f => archiveService.isImage(f))
-        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      const files = await archiveService.listFolderImages(fullPath);
 
       if (files.length > 0) {
         // 当前目录包含图片，注册为漫画
@@ -63,7 +61,7 @@ async function scanDir(dirPath, depth, maxDepth) {
       if (images.length === 0) continue;
 
       const ext = path.extname(entry.name).toLowerCase().replace('.', '');
-      const archiveType = ext === 'cbz' ? 'zip' : ext === 'cbr' ? 'rar' : ext;
+      const archiveType = archiveService.mapArchiveType(ext);
       const title = path.basename(entry.name, path.extname(entry.name));
       results.push({ type: 'archive', path: fullPath, name: title, archiveType, images, fileSize });
     }
@@ -82,14 +80,14 @@ async function scanRoot(rootDir, maxDepth) {
     throw new Error('根目录未配置或不存在');
   }
 
+  const db = getDb();
+
   // 如果未传入 maxDepth，从数据库读取
   if (maxDepth === undefined) {
-    const db = getDb();
     const row = db.prepare("SELECT value FROM settings WHERE key = 'scan_depth'").get();
     maxDepth = row ? parseInt(row.value) || 0 : 0;
   }
 
-  const db = getDb();
   let scanned = 0;
 
   // 从根目录开始扫描，depth=0 表示只扫描根目录本身
