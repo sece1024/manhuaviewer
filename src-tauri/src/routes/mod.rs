@@ -59,7 +59,18 @@ pub fn create_router(state: AppState) -> Router {
         .route("/backup", get(settings::export_backup))
         .route("/restore", post(settings::import_backup));
 
+    // OPDS routes
+    let opds_routes = Router::new()
+        .route("/", get(opds::root_catalog))
+        .route("/catalog", get(opds::catalog))
+        .route("/archive/:id", get(opds::archive_detail))
+        .route("/recent", get(opds::recent))
+        .route("/tags", get(opds::tags_list))
+        .route("/tag/:tag_id", get(opds::tag_archives))
+        .route("/categories", get(opds::categories_list));
+
     Router::new()
         .nest("/api", api_routes)
+        .nest("/opds", opds_routes)
         .with_state(Arc::new(state))
 }
