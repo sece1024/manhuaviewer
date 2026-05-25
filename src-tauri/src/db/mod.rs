@@ -468,3 +468,259 @@ impl Database {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    fn setup_test_db() -> Database {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_str().unwrap();
+        let db = Database::new(path).unwrap();
+        db.init().unwrap();
+        db
+    }
+
+    #[test]
+    fn test_database_creation() {
+        let db = setup_test_db();
+        let conn = db.get_conn();
+        
+        // Verify tables exist
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        
+        assert!(tables.contains(&"archives".to_string()));
+        assert!(tables.contains(&"tags".to_string()));
+        assert!(tables.contains(&"categories".to_string()));
+        assert!(tables.contains(&"history".to_string()));
+        assert!(tables.contains(&"settings".to_string()));
+    }
+
+    #[test]
+    fn test_default_settings() {
+        let db = setup_test_db();
+        let settings = db.get_settings().unwrap();
+        
+        assert_eq!(settings.get("view_mode").unwrap(), "grid");
+        assert_eq!(settings.get("sort_by").unwrap(), "updated");
+        assert_eq!(settings.get("sort_order").unwrap(), "desc");
+        assert_eq!(settings.get("theme").unwrap(), "dark");
+    }
+
+    #[test]
+    fn test_insert_and_get_archive() {
+        let db = setup_test_db();
+        
+        let id = db.insert_archive(
+            "Test Manga",
+            "/path/to/manga",
+            "zip",
+            10,
+            1024,
+        ).unwrap();
+        
+        assert!(id > 0);
+        
+        let archive = db.get_archive(id).unwrap();
+        assert!(archive.is_some());
+        
+        let archive = archive.unwrap();
+        assert_eq!(archive.title, "Test Manga");
+        assert_eq!(archive.path, "/path/to/manga");
+        assert_eq!(archive.archive_type, "zip");
+        assert_eq!(archive.page_count, 10);
+        assert_eq!(archive.file_size, 1024);
+    }
+
+    #[test]
+    fn test_list_archives() {
+        let db = setup_test_db();
+        
+        db.insert_archive("Manga A", "/path/a", "zip", 5, 500).unwrap();
+        db.insert_archive("Manga B", "/path/b", "folder", 10, 1000).unwrap();
+        db.insert_archive("Manga C", "/path/c", "rar", 15, 1500).unwrap();
+        
+        let (archives, total) = db.list_archives(None, "title", "asc", 10, 0).unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(archives.len(), 3);
+        assert_eq!(archives[0].title, "Manga A");
+        assert_eq!(archives[1].title, "Manga B");
+        assert_eq!(archives[2].title, "Manga C");
+    }
+
+    #[test]
+    fn test_list_archives_with_search() {
+        let db = setup_test_db();
+        
+        db.insert_archive("Naruto", "/path/naruto", "zip", 100, 5000).unwrap();
+        db.insert_archive("One Piece", "/path/onepiece", "zip", 200, 10000).unwrap();
+        db.insert_archive("Dragon Ball", "/path/db", "folder", 50, 2500).unwrap();
+        
+        let (archives, total) = db.list_archives(Some("Naruto"), "title", "asc", 10, 0).unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(archives.len(), 1);
+        assert_eq!(archives[0].title, "Naruto");
+    }
+
+    #[test]
+    fn test_delete_archive() {
+        let db = setup_test_db();
+        
+        let id = db.insert_archive("Test", "/path", "zip", 5, 500).unwrap();
+        assert!(db.get_archive(id).unwrap().is_some());
+        
+        db.delete_archive(id).unwrap();
+        assert!(db.get_archive(id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_tag_operations() {
+        let db = setup_test_db();
+        
+        // Create tag
+        let tag_id = db.create_tag("artist", "mika", "#ff0000").unwrap();
+        assert!(tag_id > 0);
+        
+        // List tags
+        let tags = db.list_tags().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].name, "mika");
+        assert_eq!(tags[0].namespace, "artist");
+        assert_eq!(tags[0].color, "#ff0000");
+        
+        // List namespaces
+        let namespaces = db.list_namespaces().unwrap();
+        assert_eq!(namespaces.len(), 1);
+        assert_eq!(namespaces[0], "artist");
+        
+        // Delete tag
+        db.delete_tag(tag_id).unwrap();
+        let tags = db.list_tags().unwrap();
+        assert_eq!(tags.len(), 0);
+    }
+
+    #[test]
+    fn test_category_operations() {
+        let db = setup_test_db();
+        
+        // Create category
+        let cat_id = db.create_category("Action", "#00ff00", false, "").unwrap();
+        assert!(cat_id > 0);
+        
+        // List categories
+        let categories = db.list_categories().unwrap();
+        assert_eq!(categories.len(), 1);
+        assert_eq!(categories[0].name, "Action");
+        assert_eq!(categories[0].color, "#00ff00");
+        
+        // Delete category
+        db.delete_category(cat_id).unwrap();
+        let categories = db.list_categories().unwrap();
+        assert_eq!(categories.len(), 0);
+    }
+
+    #[test]
+    fn test_archive_tag_assignment() {
+        let db = setup_test_db();
+        
+        let archive_id = db.insert_archive("Test", "/path", "zip", 5, 500).unwrap();
+        let tag_id = db.create_tag("", "favorite", "#ff0000").unwrap();
+        
+        // Assign tag to archive
+        db.assign_tag(archive_id, tag_id).unwrap();
+        
+        // Remove tag from archive
+        db.remove_tag(archive_id, tag_id).unwrap();
+    }
+
+    #[test]
+    fn test_history_operations() {
+        let db = setup_test_db();
+        
+        let archive_id = db.insert_archive("Test", "/path", "zip", 10, 500).unwrap();
+        
+        // Save history
+        db.save_history(archive_id, 5, 10).unwrap();
+        
+        // Get history
+        let history = db.get_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].0.archive_id, archive_id);
+        assert_eq!(history[0].0.page_index, 5);
+        assert_eq!(history[0].0.total_pages, 10);
+        
+        // Delete history
+        db.delete_history(archive_id).unwrap();
+        let history = db.get_history().unwrap();
+        assert_eq!(history.len(), 0);
+    }
+
+    #[test]
+    fn test_update_settings() {
+        let db = setup_test_db();
+        
+        let mut settings = std::collections::HashMap::new();
+        settings.insert("theme".to_string(), "light".to_string());
+        settings.insert("view_mode".to_string(), "list".to_string());
+        
+        db.update_settings(&settings).unwrap();
+        
+        let updated = db.get_settings().unwrap();
+        assert_eq!(updated.get("theme").unwrap(), "light");
+        assert_eq!(updated.get("view_mode").unwrap(), "list");
+    }
+
+    #[test]
+    fn test_get_stats() {
+        let db = setup_test_db();
+        
+        db.insert_archive("A", "/a", "zip", 10, 500).unwrap();
+        db.insert_archive("B", "/b", "folder", 20, 1000).unwrap();
+        db.create_tag("", "tag1", "#ff0000").unwrap();
+        db.create_category("Cat1", "#00ff00", false, "").unwrap();
+        
+        let stats = db.get_stats().unwrap();
+        assert_eq!(stats["total_archives"], 2);
+        assert_eq!(stats["total_pages"], 30);
+        assert_eq!(stats["total_tags"], 1);
+        assert_eq!(stats["total_categories"], 1);
+        assert_eq!(stats["history_count"], 0);
+    }
+
+    #[test]
+    fn test_backup_and_restore() {
+        let db1 = setup_test_db();
+        
+        // Add some data
+        db1.insert_archive("Manga A", "/path/a", "zip", 10, 500).unwrap();
+        db1.create_tag("", "favorite", "#ff0000").unwrap();
+        db1.create_category("Action", "#00ff00", false, "").unwrap();
+        
+        // Export backup
+        let backup = db1.export_backup().unwrap();
+        
+        // Create new database and restore
+        let db2 = setup_test_db();
+        db2.import_backup(&backup).unwrap();
+        
+        // Verify data
+        let (archives, _) = db2.list_archives(None, "title", "asc", 10, 0).unwrap();
+        assert_eq!(archives.len(), 1);
+        assert_eq!(archives[0].title, "Manga A");
+        
+        let tags = db2.list_tags().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].name, "favorite");
+        
+        let categories = db2.list_categories().unwrap();
+        assert_eq!(categories.len(), 1);
+        assert_eq!(categories[0].name, "Action");
+    }
+}
