@@ -8,10 +8,13 @@
     "build": "pnpm --filter manhuaviewer-frontend build",
     "electron": "pnpm run build && electron .",
     "build:electron": "pnpm run build && electron-builder --mac",
-    "pack": "pnpm run build && electron-builder --mac --dir"
+    "pack": "pnpm run build && electron-builder --mac --dir",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
-  "dependencies": {},
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2",
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8"
   },
