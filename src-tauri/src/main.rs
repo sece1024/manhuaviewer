@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
+#[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Mutex<db::Database>>,
     pub data_dir: std::path::PathBuf,

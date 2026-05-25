@@ -21,7 +21,7 @@ impl SearchQuery {
                 }
                 ' ' if !in_quotes => {
                     if !current_token.is_empty() {
-                        self.process_token(&current_token, &mut terms, &mut include_tags, &mut exclude_tags);
+                        Self::process_token(&current_token, &mut terms, &mut include_tags, &mut exclude_tags);
                         current_token.clear();
                     }
                 }
@@ -32,7 +32,7 @@ impl SearchQuery {
         }
 
         if !current_token.is_empty() {
-            self.process_token(&current_token, &mut terms, &mut include_tags, &mut exclude_tags);
+            Self::process_token(&current_token, &mut terms, &mut include_tags, &mut exclude_tags);
         }
 
         Self {
@@ -43,7 +43,6 @@ impl SearchQuery {
     }
 
     fn process_token(
-        &self,
         token: &str,
         terms: &mut Vec<String>,
         include_tags: &mut Vec<String>,
