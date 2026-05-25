@@ -67,9 +67,9 @@ async fn main() {
             // Start embedded web server
             tokio::spawn(async move {
                 let port: u16 = std::env::var("PORT")
-                    .unwrap_or_else(|_| "0".to_string())
+                    .unwrap_or_else(|_| "5002".to_string())
                     .parse()
-                    .unwrap_or(0);
+                    .unwrap_or(5002);
 
                 let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
                     .await
