@@ -21,31 +21,15 @@
 ### 环境要求
 
 - Node.js >= 18
-- npm
+- pnpm
 
 ### 安装与启动
 
 ```bash
-# 克隆项目
 git clone https://github.com/sece1024/manhuaviewer.git
 cd manhuaviewer
-git checkout web-rewrite-v2
-
-# 安装后端依赖
-cd backend
-npm install
-cd ..
-
-# 安装前端依赖
-cd frontend
-npm install
-cd ..
-
-# 启动后端（默认端口 5002）
-cd backend && npm start &
-
-# 启动前端（开发模式，默认端口 3000，代理到后端）
-cd frontend && npm start
+pnpm install
+pnpm start
 ```
 
 浏览器打开 http://localhost:3000 即可使用。
@@ -53,14 +37,8 @@ cd frontend && npm start
 ### 生产部署
 
 ```bash
-# 构建前端
-cd frontend
-npm run build
-cd ..
-
-# 启动后端（会自动托管前端静态文件）
-cd backend
-npm start
+pnpm run build
+cd backend && pnpm start
 ```
 
 访问 http://localhost:5002 即可。
@@ -68,17 +46,9 @@ npm start
 ### 桌面应用（Electron）
 
 ```bash
-# 安装依赖（包括 Electron）
-npm install
-
-# 开发模式运行 Electron
-npm run electron
-
-# 打包为 macOS 应用（.dmg + .zip）
-npm run build:electron
-
-# 仅打包目录（不生成安装器，用于测试）
-npm run pack
+pnpm run electron              # 开发模式运行
+pnpm run build:electron        # 打包为 macOS .dmg + .zip
+pnpm run pack                  # 仅打包目录（测试用）
 ```
 
 打包后的应用位于 `out/` 目录。
