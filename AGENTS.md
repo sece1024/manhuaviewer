@@ -4,29 +4,39 @@
 
 ```bash
 # Start both (root): frontend :3000 proxies to backend :5002
-npm run dev          # or npm start
+pnpm start
 
 # Backend
-cd backend && npm run dev     # nodemon (auto-reload)
-cd backend && npm test        # Jest — tests in backend/tests/**/*.test.js
+pnpm --filter manhuaviewer-backend start
+cd backend && pnpm run dev     # nodemon (auto-reload)
+cd backend && pnpm test        # Jest — tests in backend/tests/**/*.test.js
 
 # Frontend
-cd frontend && npm start      # CRA dev server
-cd frontend && npm test       # React Testing Library — tests in frontend/src/__tests__/
+pnpm --filter manhuaviewer-frontend start
+cd frontend && pnpm start      # CRA dev server
+cd frontend && pnpm test       # React Testing Library — tests in frontend/src/__tests__/
 
 # Production build (backend serves frontend/build/)
-npm run build
+pnpm run build
+
+# Electron (standalone macOS app)
+pnpm run electron              # dev: starts Electron with backend
+pnpm run build:electron        # packages into .dmg + .zip in out/
+pnpm run pack                  # packages directory only (no installer)
 ```
 
 ## Architecture
 
 - **Backend**: Express + better-sqlite3 (sync API — never `await` DB calls)
 - **Frontend**: React 19 + React Router v7 (CRA)
-- **Database**: SQLite at `backend/data/manhuaviewer.db` (generated, not committed)
+- **Electron**: `electron/main.js` starts Express on a free port, loads `http://localhost:{port}` in BrowserWindow
+- **Database**: SQLite at `backend/data/` (dev) or `~/Library/Application Support/MangaViewer/data/` (Electron)
 - **Two archive types**: `folder` (read directory at request time) vs compressed (page list in DB, extract on demand)
 
 ## Key Conventions
 
+- **pnpm workspace**: root `package.json` scripts use `pnpm --filter` to run backend/frontend. Do NOT use `cd backend && npm start` — it won't find dependencies.
+- **Native module builds**: `pnpm-workspace.yaml` → `allowBuilds` lists packages that need postinstall scripts (better-sqlite3, electron, sharp). If you add a new native dep, add it there.
 - All frontend API calls go through `frontend/src/utils/api.js` — never fetch directly
 - DB access is synchronous (`better-sqlite3`). Use `.prepare().get()` / `.all()` / `.run()`
 - Settings are key-value rows in `settings` table; defaults set in `backend/src/db/database.js`
@@ -43,10 +53,8 @@ npm run build
 ## Gotchas
 
 - `backend/data/` is runtime-generated (DB + thumbnails) — not committed
+- Electron data dir: set via `DATA_DIR` env var, defaults to `app.getPath('userData')/data/`
 - Auto-scan timer (`services/scanTimer.js`) restarts on settings change
 - Search uses custom DSL server-side: `keyword`, `tag:name`, `-exclusion`
 - Legacy migration logic in `database.js` handles v1→v2 schema upgrades
-
-## Further reading
-
-- `.github/copilot-instructions.md` — detailed architecture and conventions
+- `pnpm install` requires approval for native builds — if you see `ERR_PNPM_IGNORED_BUILDS`, add the package to `allowBuilds` in `pnpm-workspace.yaml`
