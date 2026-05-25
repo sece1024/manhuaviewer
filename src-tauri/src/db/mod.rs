@@ -275,9 +275,9 @@ impl Database {
     }
 
     // History operations
-    pub fn get_history(&self) -> Result<Vec<(HistoryRow, String, String)>> {
+    pub fn get_history(&self) -> Result<Vec<(HistoryRow, String, String, String)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT h.archive_id, h.page_index, h.total_pages, h.updated_at, a.title, a.path
+            "SELECT h.archive_id, h.page_index, h.total_pages, h.updated_at, a.title, a.path, a.archive_type
              FROM history h
              JOIN archives a ON a.id = h.archive_id
              ORDER BY h.updated_at DESC"
@@ -293,6 +293,7 @@ impl Database {
                 },
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
             ))
         })?.filter_map(|r| r.ok()).collect();
         

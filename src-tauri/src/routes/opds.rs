@@ -196,7 +196,7 @@ pub async fn recent(
         Ok(history) => {
             let mut entries = String::new();
             
-            for (h, title, _path) in history.iter().take(20) {
+            for (h, title, _path, _archive_type) in history.iter().take(20) {
                 entries.push_str(&format!(r#"
   <entry>
     <title>{}</title>

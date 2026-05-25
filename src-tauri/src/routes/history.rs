@@ -26,7 +26,7 @@ pub async fn get_history(
     
     match db.get_history() {
         Ok(history) => {
-            let data: Vec<serde_json::Value> = history.into_iter().map(|(h, title, path)| {
+            let data: Vec<serde_json::Value> = history.into_iter().map(|(h, title, path, archive_type)| {
                 serde_json::json!({
                     "archive_id": h.archive_id,
                     "page_index": h.page_index,
@@ -34,6 +34,7 @@ pub async fn get_history(
                     "updated_at": h.updated_at,
                     "title": title,
                     "path": path,
+                    "archive_type": archive_type,
                 })
             }).collect();
             Json(data).into_response()
