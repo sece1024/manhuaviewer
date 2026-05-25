@@ -31,7 +31,7 @@ pub async fn list_tags(
     let db = state.db.lock().await;
     
     match db.list_tags() {
-        Ok(tags) => Json(serde_json::json!({ "data": tags })).into_response(),
+        Ok(tags) => Json(tags).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }

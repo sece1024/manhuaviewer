@@ -36,7 +36,7 @@ pub async fn get_history(
                     "path": path,
                 })
             }).collect();
-            Json(serde_json::json!({ "data": data })).into_response()
+            Json(data).into_response()
         },
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }

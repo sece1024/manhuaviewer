@@ -30,7 +30,7 @@ pub async fn get_settings(
     let db = state.db.lock().await;
     
     match db.get_settings() {
-        Ok(settings) => Json(serde_json::json!({ "data": settings })).into_response(),
+        Ok(settings) => Json(settings).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -53,7 +53,7 @@ pub async fn get_config(
     let db = state.db.lock().await;
     
     match db.get_setting("root_dir") {
-        Ok(root_dir) => Json(serde_json::json!({ "data": { "root_dir": root_dir } })).into_response(),
+        Ok(root_dir) => Json(serde_json::json!({ "root_dir": root_dir })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -79,7 +79,7 @@ pub async fn get_stats(
     let db = state.db.lock().await;
     
     match db.get_stats() {
-        Ok(stats) => Json(serde_json::json!({ "data": stats })).into_response(),
+        Ok(stats) => Json(stats).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }

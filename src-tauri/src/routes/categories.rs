@@ -26,7 +26,7 @@ pub async fn list_categories(
     let db = state.db.lock().await;
     
     match db.list_categories() {
-        Ok(categories) => Json(serde_json::json!({ "data": categories })).into_response(),
+        Ok(categories) => Json(categories).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }

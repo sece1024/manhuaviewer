@@ -52,12 +52,7 @@ pub async fn list_archives(
     
     // TODO: Implement tag and category filtering
     match db.list_archives(query.search.as_deref(), sort, order, limit, offset) {
-        Ok((archives, total)) => Json(serde_json::json!({
-            "data": archives,
-            "total": total,
-            "page": page,
-            "limit": limit
-        })).into_response(),
+        Ok((archives, _total)) => Json(archives).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -345,12 +340,10 @@ pub async fn scan(
             }
             
             Json(serde_json::json!({
-                "data": {
-                    "scanned": archives.len(),
-                    "added": added,
-                    "errors": errors,
-                    "message": format!("扫描完成：{} 个档案，{} 个新增，{} 个错误", archives.len(), added, errors)
-                }
+                "scanned": archives.len(),
+                "added": added,
+                "errors": errors,
+                "message": format!("扫描完成：{} 个档案，{} 个新增，{} 个错误", archives.len(), added, errors)
             })).into_response()
         },
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
