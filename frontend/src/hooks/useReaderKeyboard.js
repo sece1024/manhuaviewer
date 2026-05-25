@@ -33,7 +33,7 @@ export default function useReaderKeyboard({
       case 'ArrowRight': goNext(); break;
       case 'ArrowUp': if (!longImage) goPrev(); break;
       case 'ArrowDown': if (!longImage) goNext(); break;
-      case ' ': e.preventDefault(); goNext(); break;
+      case ' ': if (!longImage) { e.preventDefault(); goNext(); } break;
       case 'd': case 'D': if (!e.ctrlKey) setDoublePage(v => !v); break;
       case 'Home': goPage(0); break;
       case 'End': goPage(pagesLength - 1); break;

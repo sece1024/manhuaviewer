@@ -269,7 +269,7 @@ export default function Reader() {
       pointerEvents: 'none',
     };
 
-    if (longImage) return { ...base, maxHeight: 'none', maxWidth: '100%', width: '100%' };
+    if (longImage) return { width: '100%', height: 'auto', display: 'block', userSelect: 'none', pointerEvents: 'none' };
     if (fitMode === 'height') return { ...base, maxHeight: '100%', maxWidth: '100%' };
     if (fitMode === 'width') return { ...base, maxWidth: '100%', height: 'auto' };
     return { ...base, maxHeight: 'none', maxWidth: 'none' };
@@ -372,6 +372,7 @@ export default function Reader() {
           cursor: longImage ? 'default' : (scale > 1.05 ? 'grab' : 'pointer'),
           touchAction: longImage ? 'pan-y' : 'none',
           overflow: longImage ? 'auto' : 'hidden',
+          alignItems: longImage ? 'flex-start' : 'center',
         }}
         onClick={handleClick}
         onDoubleClick={handleDblClick}
