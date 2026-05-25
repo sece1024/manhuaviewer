@@ -6,7 +6,7 @@
   "build": {
     "frontendDist": "../frontend/build",
     "devUrl": "http://localhost:3000",
-    "beforeDevCommand": "BROWSER=none pnpm --filter manhuaviewer-frontend start",
+    "beforeDevCommand": "pnpm --filter manhuaviewer-frontend start",
     "beforeBuildCommand": "pnpm --filter manhuaviewer-frontend build"
   },
   "app": {
