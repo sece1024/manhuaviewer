@@ -13,6 +13,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS - Apple Silicon (M1+)
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
           # Windows - x86_64
           - platform: windows-latest
             args: ""
@@ -31,6 +34,8 @@ jobs:
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
 
       - uses: Swatinem/rust-cache@v2
         with:
