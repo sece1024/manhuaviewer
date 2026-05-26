@@ -1,12 +1,13 @@
-# MangaViewer v2
+# MangaViewer v3
 
-一个基于 Web 的漫画阅读管理系统，支持文件夹和压缩包（ZIP/CBZ/RAR/CBR），提供浏览器内阅读体验。
+一个基于 Tauri 2.0 + React 的跨平台漫画阅读管理系统，支持文件夹和压缩包（ZIP/CBZ/RAR/CBR），提供原生桌面应用体验。
 
 ## ✨ 功能特性
 
 - 📚 **漫画库** — 封面卡片网格 / 列表视图切换，按标签、分类、名称筛选
 - 📖 **阅读器** — 单页/双页/长图模式，RTL/LTR 翻页方向，适应高度/宽度/原始大小
 - 📦 **压缩包支持** — ZIP/CBZ/RAR/CBR 直接浏览，无需解压
+- 📦 **CBZ 归档** — 将漫画文件夹打包为 CBZ 格式
 - 🏷️ **命名空间标签** — 支持 `artist:name`、`series:name` 格式
 - 📂 **分类系统** — 动态/静态分类，支持置顶
 - 🔍 **搜索过滤** — 按名称模糊搜索，标签过滤侧栏
@@ -14,7 +15,7 @@
 - 🎨 **主题系统** — 浅色/深色/护眼三套主题
 - 📱 **移动端适配** — 响应式布局，触摸手势（缩放/双击/滑动翻页）
 - ⌨️ **快捷键** — 完整的键盘操作支持
-- 🖥️ **桌面应用** — 支持打包为独立可执行的 macOS 应用
+- 🖥️ **跨平台应用** — macOS, Windows, Linux（基于 Tauri 2.0）
 
 ## 🚀 快速开始
 
@@ -22,6 +23,7 @@
 
 - Node.js >= 18
 - pnpm
+- Rust (用于 Tauri 构建)
 
 ### 安装与启动
 
@@ -29,12 +31,24 @@
 git clone https://github.com/sece1024/manhuaviewer.git
 cd manhuaviewer
 pnpm install
-pnpm start
+```
+
+#### Tauri 桌面应用（推荐）
+
+```bash
+pnpm tauri dev                 # 开发模式（热重载）
+pnpm tauri build               # 生产构建
+```
+
+#### Web 模式（Legacy Node.js 后端）
+
+```bash
+pnpm start                     # 启动前后端
 ```
 
 浏览器打开 http://localhost:3000 即可使用。
 
-### 生产部署
+### 生产部署（Web 模式）
 
 ```bash
 pnpm run build
@@ -42,16 +56,6 @@ cd backend && pnpm start
 ```
 
 访问 http://localhost:5002 即可。
-
-### 桌面应用（Electron）
-
-```bash
-pnpm run electron              # 开发模式运行
-pnpm run build:electron        # 打包为 macOS .dmg + .zip
-pnpm run pack                  # 仅打包目录（测试用）
-```
-
-打包后的应用位于 `out/` 目录。
 
 ## 📁 支持格式
 
@@ -80,7 +84,19 @@ pnpm run pack                  # 仅打包目录（测试用）
 ## 🗂️ 项目结构
 
 ```
-backend/
+src-tauri/                          # Tauri + Rust 后端
+├── Cargo.toml
+├── tauri.conf.json
+├── capabilities/default.json       # Tauri 权限配置
+└── src/
+    ├── main.rs                     # 入口（Axum 服务）
+    ├── db/                         # rusqlite 封装
+    ├── routes/                     # Axum 路由
+    ├── services/                   # 业务逻辑（CBZ 打包等）
+    ├── models/                     # 数据模型
+    └── utils/                      # 工具函数
+
+backend/                            # Legacy Node.js 后端
 ├── src/
 │   ├── index.js                    # 入口（Express 服务）
 │   ├── config/logger.js            # 日志配置
@@ -105,6 +121,7 @@ frontend/
 │   ├── index.js                    # 入口
 │   ├── index.css                   # 全局样式（三套主题/响应式）
 │   ├── components/Toast.js         # 通知组件
+│   ├── hooks/useReaderKeyboard.js  # 阅读器快捷键 hook
 │   ├── pages/
 │   │   ├── Library.js              # 漫画库（封面卡片/列表/过滤）
 │   │   ├── Reader.js               # 阅读器（RTL/适应模式/overlay）
@@ -112,9 +129,6 @@ frontend/
 │   │   └── Settings.js             # 设置页面（标签/分类管理+统计）
 │   └── utils/api.js                # API 客户端
 └── package.json
-
-electron/
-└── main.js                         # Electron 主进程
 ```
 
 ## 📡 API 文档

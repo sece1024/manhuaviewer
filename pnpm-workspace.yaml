@@ -6,6 +6,5 @@ allowBuilds:
   better-sqlite3: true
   core-js: true
   core-js-pure: true
-  electron: true
   sharp: true
   unrs-resolver: true

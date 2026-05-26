@@ -27,20 +27,15 @@ pnpm run build
 # Tauri (cross-platform app)
 pnpm tauri dev                      # dev with hot-reload
 pnpm tauri build                    # production build
-
-# Electron (legacy macOS app)
-pnpm run electron                   # dev
-pnpm run build:electron             # .dmg + .zip
 ```
 
 ## Architecture
 
 Two parallel backend implementations sharing one React frontend:
 
-- **Node.js backend** (`backend/`): Express + better-sqlite3. Sync DB API — never `await` database calls. Routes in `backend/src/routes/`, aggregated in `api.js`.
-- **Tauri/Rust backend** (`src-tauri/`): Axum + rusqlite. Mirrors the Node.js API routes for frontend compatibility. Modules: `db/`, `routes/`, `services/`, `models/`, `utils/`.
+- **Tauri/Rust backend** (`src-tauri/`): Axum + rusqlite. Primary backend for desktop app. Modules: `db/`, `routes/`, `services/`, `models/`, `utils/`.
+- **Node.js backend** (`backend/`): Express + better-sqlite3. Legacy web-based backend. Sync DB API — never `await` database calls. Routes in `backend/src/routes/`, aggregated in `api.js`.
 - **Frontend** (`frontend/`): React 19 + React Router v7 (CRA). All API calls go through `frontend/src/utils/api.js` — never use `fetch` directly.
-- **Electron** (`electron/main.js`): Starts Express on a free port, loads it in BrowserWindow.
 - **Database**: SQLite. Dev at `backend/data/`, packaged apps at `~/Library/Application Support/MangaViewer/data/`.
 - **Two archive types**: `folder` (directory scanned at request time) vs compressed (page list stored in DB, extracted on demand).
 
