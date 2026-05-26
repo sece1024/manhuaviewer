@@ -121,7 +121,8 @@ export default function Reader() {
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line
+  }, []);
 
   // 翻页
   const goPage = useCallback((newIndex) => {
