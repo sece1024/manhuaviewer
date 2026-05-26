@@ -1,43 +1,15 @@
 {
   "name": "manhuaviewer",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "MangaViewer — 漫画阅读管理系统",
-  "main": "electron/main.js",
   "scripts": {
     "start": "pnpm --filter manhuaviewer-backend start & pnpm --filter manhuaviewer-frontend start",
     "build": "pnpm --filter manhuaviewer-frontend build",
-    "electron": "pnpm run build && electron .",
-    "build:electron": "pnpm run build && electron-builder --mac",
-    "pack": "pnpm run build && electron-builder --mac --dir",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.2",
-    "electron": "^33.0.0",
-    "electron-builder": "^25.1.8"
-  },
-  "build": {
-    "appId": "com.sece1024.manhuaviewer",
-    "productName": "MangaViewer",
-    "directories": {
-      "output": "out"
-    },
-    "files": [
-      "electron/**/*",
-      "backend/src/**/*",
-      "backend/package.json",
-      "backend/node_modules/**/*",
-      "frontend/build/**/*"
-    ],
-    "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "category": "public.app-category.entertainment"
-    },
-    "npmRebuild": true
+    "@tauri-apps/cli": "^2.11.2"
   }
 }

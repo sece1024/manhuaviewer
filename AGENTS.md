@@ -19,12 +19,7 @@ cd frontend && pnpm test       # React Testing Library — tests in frontend/src
 # Production build (backend serves frontend/build/)
 pnpm run build
 
-# Electron (Legacy - standalone macOS app)
-pnpm run electron              # dev: starts Electron with backend
-pnpm run build:electron        # packages into .dmg + .zip in out/
-pnpm run pack                  # packages directory only (no installer)
-
-# Tauri (New - cross-platform app)
+# Tauri (cross-platform app)
 pnpm tauri dev                 # development mode with hot-reload
 pnpm tauri build               # production build for current platform
 pnpm tauri ios build           # iOS build (requires macOS + Xcode)
@@ -33,19 +28,17 @@ pnpm tauri android build       # Android build
 
 ## Architecture
 
-### Current (Electron - Legacy)
-- **Backend**: Express + better-sqlite3 (sync API — never `await` DB calls)
-- **Frontend**: React 19 + React Router v7 (CRA)
-- **Electron**: `electron/main.js` starts Express on a free port, loads `http://localhost:{port}` in BrowserWindow
-- **Database**: SQLite at `backend/data/` (dev) or `~/Library/Application Support/MangaViewer/data/` (Electron)
-- **Two archive types**: `folder` (read directory at request time) vs compressed (page list in DB, extract on demand)
-
-### New (Tauri 2.0 - In Progress)
+### Tauri 2.0
 - **Backend**: Rust + Axum (native performance)
-- **Frontend**: React 19 (reused from current implementation)
+- **Frontend**: React 19 + React Router v7 (CRA)
 - **Tauri**: `src-tauri/` contains Rust backend and configuration
 - **Database**: SQLite via rusqlite at `~/Library/Application Support/MangaViewer/data/`
 - **Platforms**: macOS, Windows, Linux, iOS, Android
+- **Two archive types**: `folder` (read directory at request time) vs compressed (page list in DB, extract on demand)
+
+### Legacy Node.js Backend
+- **Backend**: Express + better-sqlite3 (sync API — never `await` DB calls)
+- **Database**: SQLite at `backend/data/` (dev)
 
 ## Key Conventions
 
@@ -67,7 +60,7 @@ pnpm tauri android build       # Android build
 
 ## Adding a new API route
 
-### Tauri (New)
+### Tauri
 1. Add handler function in `src-tauri/src/routes/` appropriate file
 2. Register route in `src-tauri/src/routes/mod.rs` using `Router::new().route()`
 3. Add methods to `frontend/src/utils/api.js`
