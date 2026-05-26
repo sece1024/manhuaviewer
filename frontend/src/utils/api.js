@@ -1,6 +1,13 @@
 // 生产模式下 Tauri 前端通过资源协议加载，需要用绝对 URL 访问 Axum API
 const isTauriProd = window.__TAURI__ !== undefined && !window.location.port;
-const BASE = isTauriProd ? 'http://127.0.0.1:5002/api' : '/api';
+const API_ORIGIN = isTauriProd ? 'http://127.0.0.1:5002' : '';
+const BASE = `${API_ORIGIN}/api`;
+
+// 将后端返回的相对路径 URL 补全为可用的绝对 URL
+function fixUrl(url) {
+  if (!API_ORIGIN || !url || !url.startsWith('/')) return url;
+  return `${API_ORIGIN}${url}`;
+}
 const MAX_RETRIES = 10;
 const RETRY_DELAY = 1000; // 1 second
 
@@ -53,17 +60,24 @@ const api = {
   // Archives
   getArchives: (params = {}) => {
     const qs = new URLSearchParams(params).toString();
-    return request(`/archives${qs ? '?' + qs : ''}`);
+    return request(`/archives${qs ? '?' + qs : ''}`).then(archives =>
+      archives.map(a => ({ ...a, cover_url: a.cover_url ? fixUrl(a.cover_url) : `${BASE}/archives/${a.id}/cover` }))
+    );
   },
   getArchive: (id) => request(`/archives/${id}`),
-  getPages: (archiveId) => request(`/archives/${archiveId}/pages`),
+  getPages: (archiveId) => request(`/archives/${archiveId}/pages`).then(data => ({
+    ...data,
+    pages: data.pages.map(p => ({ ...p, url: fixUrl(p.url), thumb_url: fixUrl(p.thumb_url) })),
+  })),
   pageUrl: (archiveId, pageIndex) => `${BASE}/archives/${archiveId}/pages/${pageIndex}`,
   pageThumbUrl: (archiveId, pageIndex) => `${BASE}/archives/${archiveId}/pages/${pageIndex}/thumb`,
   coverUrl: (archiveId) => `${BASE}/archives/${archiveId}/cover`,
   deleteArchive: (id) => request(`/archives/${id}`, { method: 'DELETE' }),
 
   // History
-  getHistory: () => request('/history'),
+  getHistory: () => request('/history').then(items =>
+    items.map(h => ({ ...h, cover_url: fixUrl(h.cover_url) }))
+  ),
   saveHistory: (archive_id, page_index, total_pages) =>
     request('/history', { method: 'POST', body: JSON.stringify({ archive_id, page_index, total_pages }) }),
   deleteHistory: (archiveId) => request(`/history/${archiveId}`, { method: 'DELETE' }),
