@@ -131,10 +131,9 @@ git push origin main --tags
 
 | 平台 | Runner | 产物 |
 |------|--------|------|
-| macOS ARM64 (Apple Silicon) | `macos-latest` | `.dmg` |
-| macOS x86_64 (Intel) | `macos-latest` | `.dmg` |
-| Linux x86_64 | `ubuntu-22.04` | `.deb` + `.AppImage` |
 | Windows x86_64 | `windows-latest` | `.msi` |
+
+> macOS 和 Linux 版本目前需本地构建，暂未加入 CI。
 
 ### 发布流程
 
