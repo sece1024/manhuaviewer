@@ -9,10 +9,14 @@ use axum::{
     routing::{get, post, put, delete},
     Router,
 };
+use tower_http::cors::CorsLayer;
 use crate::AppState;
 use std::sync::Arc;
 
 pub fn create_router(state: AppState) -> Router {
+    // 生产模式下前端从 tauri://localhost 加载，需要 CORS
+    let cors = CorsLayer::permissive();
+
     let api_routes = Router::new()
         // Archives
         .route("/archives", get(archives::list_archives))
@@ -73,5 +77,6 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .nest("/api", api_routes)
         .nest("/opds", opds_routes)
+        .layer(cors)
         .with_state(Arc::new(state))
 }

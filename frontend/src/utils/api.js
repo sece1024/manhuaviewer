@@ -1,4 +1,6 @@
-const BASE = '/api';
+// 生产模式下 Tauri 前端通过资源协议加载，需要用绝对 URL 访问 Axum API
+const isTauriProd = window.__TAURI__ !== undefined && !window.location.port;
+const BASE = isTauriProd ? 'http://127.0.0.1:5002/api' : '/api';
 const MAX_RETRIES = 10;
 const RETRY_DELAY = 1000; // 1 second
 
