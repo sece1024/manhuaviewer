@@ -232,6 +232,27 @@ impl Database {
         Ok(namespaces)
     }
 
+    pub fn get_archive_tags(&self, archive_id: i64) -> Result<Vec<TagRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.id, t.namespace, t.name, t.color
+             FROM tags t
+             JOIN archive_tags at ON at.tag_id = t.id
+             WHERE at.archive_id = ?
+             ORDER BY t.namespace, t.name"
+        )?;
+        
+        let tags = stmt.query_map([archive_id], |row| {
+            Ok(TagRow {
+                id: row.get(0)?,
+                namespace: row.get(1)?,
+                name: row.get(2)?,
+                color: row.get(3)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        
+        Ok(tags)
+    }
+
     // Category operations
     pub fn list_categories(&self) -> Result<Vec<CategoryRow>> {
         let mut stmt = self.conn.prepare("SELECT id, name, color, pinned, search, created_at FROM categories ORDER BY name")?;

@@ -27,6 +27,17 @@ pub async fn get_history(
     match db.get_history() {
         Ok(history) => {
             let data: Vec<serde_json::Value> = history.into_iter().map(|(h, title, path, archive_type)| {
+                // Get tags for this archive
+                let tags = db.get_archive_tags(h.archive_id).unwrap_or_default();
+                let tags_json: Vec<serde_json::Value> = tags.iter().map(|t| {
+                    serde_json::json!({
+                        "id": t.id,
+                        "namespace": t.namespace,
+                        "name": t.name,
+                        "color": t.color,
+                    })
+                }).collect();
+                
                 serde_json::json!({
                     "archive_id": h.archive_id,
                     "page_index": h.page_index,
@@ -35,6 +46,8 @@ pub async fn get_history(
                     "title": title,
                     "path": path,
                     "archive_type": archive_type,
+                    "tags": tags_json,
+                    "cover_url": format!("/api/archives/{}/cover", h.archive_id),
                 })
             }).collect();
             Json(data).into_response()
