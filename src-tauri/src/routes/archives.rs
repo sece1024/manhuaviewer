@@ -249,6 +249,14 @@ pub async fn open_file(
         return error_response(StatusCode::NOT_FOUND, "File not found");
     }
     
+    // Check if archive already exists in database
+    if let Ok(Some(existing)) = db.get_archive_by_path(&payload.file_path) {
+        return Json(serde_json::json!({
+            "id": existing.id,
+            "message": "文件已存在于库中"
+        })).into_response();
+    }
+    
     let scanner = crate::services::scanner::Scanner::new();
     let archive_type = scanner.detect_archive_type(&payload.file_path);
     
@@ -269,17 +277,21 @@ pub async fn open_file(
         Ok(reader) => reader.list_pages().map(|p| p.len() as i64).unwrap_or(0),
         Err(_) => 0,
     };
+
+    if page_count == 0 {
+        let msg = if archive_type == "folder" {
+            "文件夹中没有找到图片文件"
+        } else {
+            "压缩包中没有图片"
+        };
+        return error_response(StatusCode::BAD_REQUEST, msg);
+    }
     
     match db.insert_archive(&title, &payload.file_path, &archive_type, page_count, file_size) {
         Ok(id) => Json(serde_json::json!({
-            "data": {
-                "id": id,
-                "title": title,
-                "path": payload.file_path,
-                "archive_type": archive_type,
-                "page_count": page_count,
-                "file_size": file_size
-            }
+            "id": id,
+            "title": title,
+            "archive_type": archive_type,
         })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }

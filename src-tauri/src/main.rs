@@ -62,6 +62,7 @@ async fn main() {
     // Start Tauri application
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .setup(move |_app| {
             // Start embedded web server

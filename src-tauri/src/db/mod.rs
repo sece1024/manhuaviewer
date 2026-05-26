@@ -116,6 +116,31 @@ impl Database {
         }
     }
 
+    pub fn get_archive_by_path(&self, path: &str) -> Result<Option<ArchiveRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, created_at, updated_at FROM archives WHERE path = ?"
+        )?;
+
+        let mut rows = stmt.query_map([path], |row| {
+            Ok(ArchiveRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                path: row.get(2)?,
+                archive_type: row.get(3)?,
+                page_count: row.get(4)?,
+                cover_image: row.get(5)?,
+                file_size: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn list_archives(&self, search: Option<&str>, sort: &str, order: &str, limit: i64, offset: i64) -> Result<(Vec<ArchiveRow>, i64)> {
         let mut where_clause = String::from("WHERE 1=1");
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -175,8 +200,19 @@ impl Database {
     }
 
     pub fn insert_archive(&self, title: &str, path: &str, archive_type: &str, page_count: i64, file_size: i64) -> Result<i64> {
+        // Check for existing archive with the same path first
+        let existing: Option<i64> = self.conn.query_row(
+            "SELECT id FROM archives WHERE path = ?",
+            [path],
+            |row| row.get(0),
+        ).ok();
+
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+
         self.conn.execute(
-            "INSERT OR IGNORE INTO archives (title, path, archive_type, page_count, file_size) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO archives (title, path, archive_type, page_count, file_size) VALUES (?, ?, ?, ?, ?)",
             (title, path, archive_type, page_count, file_size),
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -744,5 +780,18 @@ mod tests {
         let categories = db2.list_categories().unwrap();
         assert_eq!(categories.len(), 1);
         assert_eq!(categories[0].name, "Action");
+    }
+
+    #[test]
+    fn test_insert_duplicate_archive_returns_existing_id() {
+        let db = setup_test_db();
+
+        let id1 = db.insert_archive("Manga A", "/path/a", "folder", 5, 100).unwrap();
+        // Insert a different archive in between
+        let _id2 = db.insert_archive("Manga B", "/path/b", "zip", 10, 200).unwrap();
+
+        // Inserting the same path as A should return A's id, not B's
+        let id3 = db.insert_archive("Manga A", "/path/a", "folder", 5, 100).unwrap();
+        assert_eq!(id3, id1, "Duplicate insert should return the original archive id, not the last inserted id");
     }
 }

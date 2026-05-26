@@ -5,6 +5,9 @@ import { formatSize } from '../utils/format';
 import { useToast } from '../components/Toast';
 import LazyImage from '../components/LazyImage';
 
+// 检测是否在 Tauri 环境中
+const isTauri = window.__TAURI__ !== undefined;
+
 export default function Library() {
   const [archives, setArchives] = useState([]);
   const [rootDir, setRootDir] = useState('');
@@ -102,6 +105,47 @@ export default function Library() {
       toast(e.message, 'error');
     }
     setOpening(false);
+  };
+
+  const handleSelectFolder = async () => {
+    if (!isTauri) {
+      toast('文件夹选择仅在桌面应用中可用', 'warning');
+      return;
+    }
+    try {
+      const selected = await window.__TAURI__.dialog.open({
+        directory: true,
+        multiple: false,
+        title: '选择漫画文件夹',
+      });
+      if (selected) {
+        setOpenPath(selected);
+      }
+    } catch (e) {
+      toast('选择文件夹失败: ' + e.message, 'error');
+    }
+  };
+
+  const handleSelectFile = async () => {
+    if (!isTauri) {
+      toast('文件选择仅在桌面应用中可用', 'warning');
+      return;
+    }
+    try {
+      const selected = await window.__TAURI__.dialog.open({
+        multiple: false,
+        title: '选择漫画文件',
+        filters: [{
+          name: '漫画文件',
+          extensions: ['zip', 'cbz', 'rar', 'cbr', '7z']
+        }]
+      });
+      if (selected) {
+        setOpenPath(selected);
+      }
+    } catch (e) {
+      toast('选择文件失败: ' + e.message, 'error');
+    }
   };
 
   // 按命名空间分组标签
@@ -315,14 +359,35 @@ export default function Library() {
               <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>
                 输入文件或文件夹的绝对路径，支持图片文件夹和压缩包 (ZIP/CBZ/RAR/CBR/7Z)
               </p>
-              <input
-                className="modal-input"
-                placeholder="例: /Users/me/manga/comic.cbz"
-                value={openPath}
-                onChange={(e) => setOpenPath(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleOpenFile()}
-                autoFocus
-              />
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <input
+                  className="modal-input"
+                  style={{ flex: 1 }}
+                  placeholder="例: /Users/me/manga/comic.cbz"
+                  value={openPath}
+                  onChange={(e) => setOpenPath(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleOpenFile()}
+                  autoFocus
+                />
+              </div>
+              {isTauri && (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleSelectFolder}
+                    style={{ flex: 1 }}
+                  >
+                    📁 选择文件夹
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleSelectFile}
+                    style={{ flex: 1 }}
+                  >
+                    📄 选择压缩包
+                  </button>
+                </div>
+              )}
             </div>
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => setShowOpenModal(false)}>取消</button>
