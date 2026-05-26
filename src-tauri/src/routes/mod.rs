@@ -24,6 +24,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/archives/:id/pages/:page/thumb", get(archives::get_page_thumb))
         .route("/open", post(archives::open_file))
         .route("/scan", post(archives::scan))
+        .route("/archives/pack-cbz", post(archives::pack_cbz))
         
         // Tags
         .route("/tags", get(tags::list_tags))

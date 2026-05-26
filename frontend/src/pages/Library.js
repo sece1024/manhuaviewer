@@ -23,6 +23,7 @@ export default function Library() {
   const [showOpenModal, setShowOpenModal] = useState(false);
   const [openPath, setOpenPath] = useState('');
   const [opening, setOpening] = useState(false);
+  const [packingCbz, setPackingCbz] = useState(false);
   const searchDebounceRef = useRef(null);
   const sortByRef = useRef(sortBy);
   const navigate = useNavigate();
@@ -145,6 +146,33 @@ export default function Library() {
       }
     } catch (e) {
       toast('选择文件失败: ' + e.message, 'error');
+    }
+  };
+
+  // 选择文件夹并直接打包为 CBZ
+  const handleConvertFolderToCbz = async () => {
+    if (!isTauri) {
+      toast('此功能仅在桌面应用中可用', 'warning');
+      return;
+    }
+    try {
+      const selected = await window.__TAURI__.dialog.open({
+        directory: true,
+        multiple: false,
+        title: '选择要转换为 CBZ 的漫画文件夹',
+      });
+      if (!selected) return;
+
+      setPackingCbz(true);
+      try {
+        const result = await api.packCbz(selected);
+        toast(result.message || '归档成功', 'success');
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+      setPackingCbz(false);
+    } catch (e) {
+      toast('选择文件夹失败: ' + e.message, 'error');
     }
   };
 
@@ -273,6 +301,12 @@ export default function Library() {
             📂 打开文件
           </button>
 
+          {isTauri && (
+            <button className="btn btn-secondary" onClick={handleConvertFolderToCbz} disabled={packingCbz}>
+              📦 转换 CBZ
+            </button>
+          )}
+
           <button className="btn" onClick={handleScan} disabled={loading}>
             {loading ? '扫描中...' : '🔄 扫描'}
           </button>
@@ -395,6 +429,17 @@ export default function Library() {
                 {opening ? '打开中...' : '打开'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* CBZ 打包全局遮罩 */}
+      {packingCbz && (
+        <div className="modal-overlay" style={{ cursor: 'wait' }}>
+          <div style={{ textAlign: 'center', color: '#fff' }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>📦</div>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>正在打包为 CBZ...</div>
+            <div style={{ fontSize: 13, marginTop: 8, opacity: 0.7 }}>请勿关闭窗口</div>
           </div>
         </div>
       )}

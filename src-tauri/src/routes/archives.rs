@@ -33,6 +33,16 @@ pub struct ScanRequest {
     pub depth: Option<u32>,
 }
 
+#[derive(Deserialize)]
+pub struct PackCbzRequest {
+    /// 源文件夹路径
+    #[serde(alias = "folderPath")]
+    pub folder_path: String,
+    /// 可选：覆盖归档目录（不传则从 settings 读取）
+    #[serde(alias = "outputDir")]
+    pub output_dir: Option<String>,
+}
+
 // Helper function to create error response with proper status code
 fn error_response(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
@@ -357,5 +367,49 @@ pub async fn scan(
             })).into_response()
         },
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// 将文件夹打包为 CBZ 归档文件
+pub async fn pack_cbz(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<PackCbzRequest>,
+) -> Response {
+    let db = state.db.lock().await;
+
+    // 确定输出目录：优先使用请求参数，否则从设置中读取
+    let output_dir = match payload.output_dir {
+        Some(ref dir) if !dir.is_empty() => dir.clone(),
+        _ => match db.get_setting("cbz_export_dir") {
+            Ok(dir) if !dir.is_empty() => dir,
+            _ => return error_response(
+                StatusCode::BAD_REQUEST,
+                "请先在设置中配置 CBZ 归档目录",
+            ),
+        },
+    };
+
+    let folder_path = payload.folder_path.clone();
+
+    // 释放 DB 锁，避免在打包期间长时间持有
+    drop(db);
+
+    // 在独立线程中执行 CPU/IO 密集型打包任务
+    let result = tokio::task::spawn_blocking(move || {
+        crate::services::cbz::pack_folder_to_cbz(&folder_path, &output_dir)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(cbz_path)) => Json(serde_json::json!({
+            "success": true,
+            "cbz_path": cbz_path,
+            "message": format!("归档成功: {}", cbz_path),
+        })).into_response(),
+        Ok(Err(e)) => error_response(StatusCode::BAD_REQUEST, &e.to_string()),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("打包任务异常: {}", e),
+        ),
     }
 }

@@ -22,6 +22,7 @@ export default function Reader() {
   const [showJump, setShowJump] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const [packing, setPacking] = useState(false);
   const [pageDirection, setPageDirection] = useState(() => localStorage.getItem('pageDirection') || 'rtl');
   const [overlayText, setOverlayText] = useState('');
   const overlayTimer = useRef(null);
@@ -286,6 +287,22 @@ export default function Reader() {
     );
   }
 
+  // 归档当前漫画为 CBZ
+  const handlePackCbz = async () => {
+    if (!archive || archive.archive_type !== 'folder') {
+      toast('仅支持文件夹类型的漫画打包为 CBZ', 'warning');
+      return;
+    }
+    setPacking(true);
+    try {
+      const result = await api.packCbz(archive.path);
+      toast(result.message || '归档成功', 'success');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+    setPacking(false);
+  };
+
   if (loadError) {
     return (
       <div className="empty-state">
@@ -333,6 +350,11 @@ export default function Reader() {
           <button className="btn btn-secondary btn-icon" onClick={() => setPageDirection(d => d === 'rtl' ? 'ltr' : 'rtl')} title="翻页方向">
             {pageDirection === 'rtl' ? '→←' : '←→'}
           </button>
+          {archive && archive.archive_type === 'folder' && (
+            <button className="btn btn-secondary btn-icon" onClick={handlePackCbz} disabled={packing} title="归档为 CBZ">
+              {packing ? '⏳' : '📦'}
+            </button>
+          )}
         </div>
 
         {/* 移动端：折叠次要工具按钮 */}
@@ -355,6 +377,11 @@ export default function Reader() {
             <option value="width">适应宽度</option>
             <option value="original">原始大小</option>
           </select>
+          {archive && archive.archive_type === 'folder' && (
+            <button className="btn btn-secondary btn-sm" onClick={() => { handlePackCbz(); setShowMenu(false); }} disabled={packing}>
+              {packing ? '⏳ 打包中...' : '📦 归档 CBZ'}
+            </button>
+          )}
         </div>
       )}
 

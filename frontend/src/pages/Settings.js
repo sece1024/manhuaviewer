@@ -16,6 +16,9 @@ export default function Settings() {
   const [importing, setImporting] = useState(false);
   const toast = useToast();
 
+  // 检测 Tauri 环境
+  const isTauri = window.__TAURI__ !== undefined;
+
   useEffect(() => {
     api.getSettings().then(setSettings).catch(() => {});
     api.getConfig().then(c => setRootDir(c.root_dir)).catch(() => {});
@@ -40,6 +43,26 @@ export default function Settings() {
       toast('根目录已更新', 'success');
     } catch (e) {
       toast(e.message, 'error');
+    }
+  };
+
+  // 选择 CBZ 归档目录
+  const handleSelectCbzDir = async () => {
+    if (!isTauri) {
+      toast('目录选择仅在桌面应用中可用', 'warning');
+      return;
+    }
+    try {
+      const selected = await window.__TAURI__.dialog.open({
+        directory: true,
+        multiple: false,
+        title: '选择 CBZ 归档目录',
+      });
+      if (selected) {
+        await updateSetting('cbz_export_dir', selected);
+      }
+    } catch (e) {
+      toast('选择目录失败: ' + e.message, 'error');
     }
   };
 
@@ -144,6 +167,41 @@ export default function Settings() {
           </select>
         </div>
         <div className="settings-row-desc">支持文件夹和 ZIP/CBZ/RAR/CBR/7Z 压缩包</div>
+      </div>
+
+      {/* CBZ 归档设置 */}
+      <div className="settings-section">
+        <div className="settings-section-title">📦 CBZ 归档</div>
+        <div className="settings-row">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="settings-row-label">归档导出目录</div>
+            <div className="settings-row-desc">
+              将漫画文件夹打包为 CBZ 时的输出目录
+            </div>
+            {settings.cbz_export_dir && (
+              <div className="settings-row-desc" style={{ marginTop: 4, wordBreak: 'break-all' }}>
+                当前: {settings.cbz_export_dir}
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {isTauri ? (
+              <button className="btn btn-sm" onClick={handleSelectCbzDir}>浏览...</button>
+            ) : (
+              <>
+                <input
+                  value={settings.cbz_export_dir || ''}
+                  onChange={(e) => setSettings(prev => ({ ...prev, cbz_export_dir: e.target.value }))}
+                  placeholder="CBZ 导出目录路径"
+                  style={{ minWidth: 200 }}
+                />
+                <button className="btn btn-sm" onClick={() => updateSetting('cbz_export_dir', settings.cbz_export_dir || '')}>
+                  保存
+                </button>
+              </>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* 阅读器设置 */}

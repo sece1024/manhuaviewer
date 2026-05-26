@@ -95,6 +95,12 @@ const api = {
   // Backup & Restore
   exportBackup: () => `${BASE}/backup`,
   importBackup: (data) => request('/restore', { method: 'POST', body: JSON.stringify(data) }),
+
+  // CBZ 打包归档
+  packCbz: (folderPath, outputDir) => request('/archives/pack-cbz', {
+    method: 'POST',
+    body: JSON.stringify({ folderPath, outputDir }),
+  }),
 };
 
 export default api;
