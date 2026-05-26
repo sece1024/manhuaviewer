@@ -1,3 +1,4 @@
+use crate::AppState;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -6,7 +7,6 @@ use axum::{
 };
 use serde::Deserialize;
 use std::sync::Arc;
-use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct CreateCategory {
@@ -20,11 +20,9 @@ fn error_response(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
-pub async fn list_categories(
-    State(state): State<Arc<AppState>>,
-) -> Response {
+pub async fn list_categories(State(state): State<Arc<AppState>>) -> Response {
     let db = state.db.lock().await;
-    
+
     match db.list_categories() {
         Ok(categories) => Json(categories).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -39,7 +37,7 @@ pub async fn create_category(
     let color = payload.color.unwrap_or_else(|| "#4a86e8".to_string());
     let pinned = payload.pinned.unwrap_or(false);
     let search = payload.search.unwrap_or_default();
-    
+
     match db.create_category(&payload.name, &color, pinned, &search) {
         Ok(id) => Json(serde_json::json!({
             "data": {
@@ -49,7 +47,8 @@ pub async fn create_category(
                 "pinned": pinned,
                 "search": search
             }
-        })).into_response(),
+        }))
+        .into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -63,33 +62,29 @@ pub async fn update_category(
     let color = payload.color.unwrap_or_else(|| "#4a86e8".to_string());
     let pinned = payload.pinned.unwrap_or(false);
     let search = payload.search.unwrap_or_default();
-    
+
     // Delete and recreate (simple approach)
     match db.delete_category(id) {
-        Ok(_) => {
-            match db.create_category(&payload.name, &color, pinned, &search) {
-                Ok(new_id) => Json(serde_json::json!({
-                    "data": {
-                        "id": new_id,
-                        "name": payload.name,
-                        "color": color,
-                        "pinned": pinned,
-                        "search": search
-                    }
-                })).into_response(),
-                Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-            }
+        Ok(_) => match db.create_category(&payload.name, &color, pinned, &search) {
+            Ok(new_id) => Json(serde_json::json!({
+                "data": {
+                    "id": new_id,
+                    "name": payload.name,
+                    "color": color,
+                    "pinned": pinned,
+                    "search": search
+                }
+            }))
+            .into_response(),
+            Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         },
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
 
-pub async fn delete_category(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> Response {
+pub async fn delete_category(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
     let db = state.db.lock().await;
-    
+
     match db.delete_category(id) {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -103,7 +98,7 @@ pub async fn assign_category(
     let db = state.db.lock().await;
     let archive_id = payload["archive_id"].as_i64().unwrap_or(0);
     let category_id = payload["category_id"].as_i64().unwrap_or(0);
-    
+
     match db.assign_category(archive_id, category_id) {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -115,7 +110,7 @@ pub async fn remove_category(
     Path((archive_id, category_id)): Path<(i64, i64)>,
 ) -> Response {
     let db = state.db.lock().await;
-    
+
     match db.remove_category(archive_id, category_id) {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),

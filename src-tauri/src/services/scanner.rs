@@ -1,6 +1,6 @@
+use anyhow::Result;
 use std::path::Path;
 use walkdir::WalkDir;
-use anyhow::Result;
 
 pub struct Scanner;
 
@@ -9,13 +9,9 @@ impl Scanner {
         Self
     }
 
-    pub fn scan_directory(
-        &self,
-        root_path: &str,
-        depth: u32,
-    ) -> Result<Vec<String>> {
+    pub fn scan_directory(&self, root_path: &str, depth: u32) -> Result<Vec<String>> {
         let mut archives = Vec::new();
-        
+
         let walker = if depth == 0 {
             WalkDir::new(root_path).max_depth(1)
         } else {
@@ -25,7 +21,7 @@ impl Scanner {
         for entry in walker {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.is_dir() {
                 // Check if it's a folder archive (contains images)
                 if self.is_image_folder(path) {
@@ -47,7 +43,10 @@ impl Scanner {
             for entry in entries.flatten() {
                 if let Some(ext) = entry.path().extension() {
                     let ext = ext.to_string_lossy().to_lowercase();
-                    if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp") {
+                    if matches!(
+                        ext.as_str(),
+                        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
+                    ) {
                         return true;
                     }
                 }
@@ -58,11 +57,11 @@ impl Scanner {
 
     pub fn detect_archive_type(&self, path: &str) -> String {
         let path = Path::new(path);
-        
+
         if path.is_dir() {
             return "folder".to_string();
         }
-        
+
         if let Some(ext) = path.extension() {
             let ext = ext.to_string_lossy().to_lowercase();
             match ext.as_str() {

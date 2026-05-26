@@ -1,5 +1,7 @@
+#![allow(dead_code)]
+
 use anyhow::Result;
-use image::{io::Reader as ImageReader, ImageOutputFormat, DynamicImage, GenericImageView};
+use image::{io::Reader as ImageReader, GenericImageView, ImageOutputFormat};
 use std::path::Path;
 
 pub struct ThumbnailGenerator {
@@ -10,10 +12,10 @@ pub struct ThumbnailGenerator {
 
 impl ThumbnailGenerator {
     pub fn new(width: u32, quality: u8) -> Self {
-        Self { 
-            width, 
+        Self {
+            width,
             height: None,
-            quality 
+            quality,
         }
     }
 
@@ -26,20 +28,16 @@ impl ThumbnailGenerator {
         let img = ImageReader::new(std::io::Cursor::new(input))
             .with_guessed_format()?
             .decode()?;
-        
+
         let height = self.height.unwrap_or(self.width);
-        let thumbnail = img.resize(
-            self.width,
-            height,
-            image::imageops::FilterType::Lanczos3,
-        );
-        
+        let thumbnail = img.resize(self.width, height, image::imageops::FilterType::Lanczos3);
+
         let mut output = Vec::new();
         thumbnail.write_to(
             &mut std::io::Cursor::new(&mut output),
             ImageOutputFormat::Jpeg(self.quality),
         )?;
-        
+
         Ok(output)
     }
 
@@ -52,7 +50,7 @@ impl ThumbnailGenerator {
         let img = ImageReader::new(std::io::Cursor::new(input))
             .with_guessed_format()?
             .decode()?;
-        
+
         Ok((img.width(), img.height()))
     }
 
@@ -63,19 +61,19 @@ impl ThumbnailGenerator {
         cache_key: &str,
     ) -> Result<Vec<u8>> {
         let cache_path = cache_dir.join(format!("{}.jpg", cache_key));
-        
+
         // Check if cached version exists
         if cache_path.exists() {
             return Ok(std::fs::read(&cache_path)?);
         }
-        
+
         // Generate thumbnail
         let thumbnail = self.generate(input)?;
-        
+
         // Save to cache
         std::fs::create_dir_all(cache_dir)?;
         std::fs::write(&cache_path, &thumbnail)?;
-        
+
         Ok(thumbnail)
     }
 
@@ -88,29 +86,26 @@ impl ThumbnailGenerator {
         let img = ImageReader::new(std::io::Cursor::new(input))
             .with_guessed_format()?
             .decode()?;
-        
+
         // Calculate dimensions maintaining aspect ratio
         let (orig_width, orig_height) = img.dimensions();
         let ratio = f64::min(
             max_width as f64 / orig_width as f64,
             max_height as f64 / orig_height as f64,
         );
-        
+
         let new_width = (orig_width as f64 * ratio) as u32;
         let new_height = (orig_height as f64 * ratio) as u32;
-        
-        let thumbnail = img.resize_exact(
-            new_width,
-            new_height,
-            image::imageops::FilterType::Lanczos3,
-        );
-        
+
+        let thumbnail =
+            img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3);
+
         let mut output = Vec::new();
         thumbnail.write_to(
             &mut std::io::Cursor::new(&mut output),
             ImageOutputFormat::Jpeg(self.quality),
         )?;
-        
+
         Ok(output)
     }
 
@@ -118,7 +113,7 @@ impl ThumbnailGenerator {
         let img = ImageReader::new(std::io::Cursor::new(input))
             .with_guessed_format()?
             .decode()?;
-        
+
         let mut output = Vec::new();
         match format {
             ImageFormat::Jpeg => {
@@ -126,21 +121,21 @@ impl ThumbnailGenerator {
                     &mut std::io::Cursor::new(&mut output),
                     ImageOutputFormat::Jpeg(self.quality),
                 )?;
-            },
+            }
             ImageFormat::Png => {
                 img.write_to(
                     &mut std::io::Cursor::new(&mut output),
                     ImageOutputFormat::Png,
                 )?;
-            },
+            }
             ImageFormat::WebP => {
                 img.write_to(
                     &mut std::io::Cursor::new(&mut output),
                     ImageOutputFormat::WebP,
                 )?;
-            },
+            }
         }
-        
+
         Ok(output)
     }
 }
@@ -162,7 +157,7 @@ pub fn get_image_dimensions(input: &[u8]) -> Result<(u32, u32)> {
     let img = ImageReader::new(std::io::Cursor::new(input))
         .with_guessed_format()?
         .decode()?;
-    
+
     Ok((img.width(), img.height()))
 }
 
@@ -178,14 +173,14 @@ pub fn resize_image(input: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
     let img = ImageReader::new(std::io::Cursor::new(input))
         .with_guessed_format()?
         .decode()?;
-    
+
     let resized = img.resize_exact(width, height, image::imageops::FilterType::Lanczos3);
-    
+
     let mut output = Vec::new();
     resized.write_to(
         &mut std::io::Cursor::new(&mut output),
         ImageOutputFormat::Jpeg(85),
     )?;
-    
+
     Ok(output)
 }

@@ -10,7 +10,10 @@ pub trait ArchiveReader {
 fn is_image_file(name: &str) -> bool {
     if let Some(ext) = Path::new(name).extension() {
         let ext = ext.to_string_lossy().to_lowercase();
-        matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp")
+        matches!(
+            ext.as_str(),
+            "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
+        )
     } else {
         false
     }
@@ -33,17 +36,17 @@ impl ArchiveReader for ZipArchive {
     fn list_pages(&self) -> Result<Vec<String>> {
         let file = std::fs::File::open(&self.path)?;
         let mut archive = zip::ZipArchive::new(file)?;
-        
+
         let mut pages = Vec::new();
         for i in 0..archive.len() {
             let file = archive.by_index(i)?;
             let name = file.name().to_string();
-            
+
             if is_image_file(&name) {
                 pages.push(name);
             }
         }
-        
+
         pages.sort_by(|a, b| natord::compare(a, b));
         Ok(pages)
     }
@@ -51,11 +54,11 @@ impl ArchiveReader for ZipArchive {
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>> {
         let file = std::fs::File::open(&self.path)?;
         let mut archive = zip::ZipArchive::new(file)?;
-        
+
         let mut file = archive.by_name(page_name)?;
         let mut buffer = Vec::new();
         std::io::Read::read_to_end(&mut file, &mut buffer)?;
-        
+
         Ok(buffer)
     }
 
@@ -85,21 +88,24 @@ impl FolderArchive {
 impl ArchiveReader for FolderArchive {
     fn list_pages(&self) -> Result<Vec<String>> {
         let mut pages = Vec::new();
-        
+
         for entry in std::fs::read_dir(&self.path)? {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.is_file() {
                 if let Some(ext) = path.extension() {
                     let ext = ext.to_string_lossy().to_lowercase();
-                    if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp") {
+                    if matches!(
+                        ext.as_str(),
+                        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
+                    ) {
                         pages.push(path.to_string_lossy().to_string());
                     }
                 }
             }
         }
-        
+
         pages.sort_by(|a, b| natord::compare(a, b));
         Ok(pages)
     }
@@ -136,18 +142,21 @@ impl ArchiveReader for RarArchive {
         let output = std::process::Command::new("unrar")
             .args(["lb", &self.path])
             .output()?;
-        
+
         if !output.status.success() {
-            anyhow::bail!("Failed to list archive: {}", String::from_utf8_lossy(&output.stderr));
+            anyhow::bail!(
+                "Failed to list archive: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
-        
+
         let stdout = String::from_utf8(output.stdout)?;
         let mut pages: Vec<String> = stdout
             .lines()
             .filter(|line| is_image_file(line))
             .map(|s| s.to_string())
             .collect();
-        
+
         pages.sort_by(|a, b| natord::compare(a, b));
         Ok(pages)
     }
@@ -155,23 +164,32 @@ impl ArchiveReader for RarArchive {
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>> {
         let temp_dir = std::env::temp_dir().join("manhuaviewer_rar");
         std::fs::create_dir_all(&temp_dir)?;
-        
+
         let output = std::process::Command::new("unrar")
-            .args(["x", &self.path, page_name, &temp_dir.to_string_lossy(), "-o+"])
+            .args([
+                "x",
+                &self.path,
+                page_name,
+                &temp_dir.to_string_lossy(),
+                "-o+",
+            ])
             .output()?;
-        
+
         if !output.status.success() {
             std::fs::remove_dir_all(&temp_dir)?;
-            anyhow::bail!("Failed to extract: {}", String::from_utf8_lossy(&output.stderr));
+            anyhow::bail!(
+                "Failed to extract: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
-        
+
         let extracted_path = temp_dir.join(page_name);
         if extracted_path.exists() {
             let buffer = std::fs::read(&extracted_path)?;
             std::fs::remove_dir_all(&temp_dir)?;
             return Ok(buffer);
         }
-        
+
         std::fs::remove_dir_all(&temp_dir)?;
         anyhow::bail!("File not found after extraction: {}", page_name)
     }
@@ -204,14 +222,17 @@ impl ArchiveReader for SevenZArchive {
         let output = std::process::Command::new("7z")
             .args(["l", &self.path])
             .output()?;
-        
+
         if !output.status.success() {
-            anyhow::bail!("Failed to list archive: {}", String::from_utf8_lossy(&output.stderr));
+            anyhow::bail!(
+                "Failed to list archive: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
-        
+
         let stdout = String::from_utf8(output.stdout)?;
         let mut pages = Vec::new();
-        
+
         // Parse 7z output - skip header lines
         for line in stdout.lines().skip(20) {
             if line.is_empty() || line.starts_with("----") {
@@ -224,7 +245,7 @@ impl ArchiveReader for SevenZArchive {
                 }
             }
         }
-        
+
         pages.sort_by(|a, b| natord::compare(a, b));
         Ok(pages)
     }
@@ -232,23 +253,32 @@ impl ArchiveReader for SevenZArchive {
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>> {
         let temp_dir = std::env::temp_dir().join("manhuaviewer_7z");
         std::fs::create_dir_all(&temp_dir)?;
-        
+
         let output = std::process::Command::new("7z")
-            .args(["x", &self.path, &format!("-o{}", temp_dir.to_string_lossy()), page_name, "-y"])
+            .args([
+                "x",
+                &self.path,
+                &format!("-o{}", temp_dir.to_string_lossy()),
+                page_name,
+                "-y",
+            ])
             .output()?;
-        
+
         if !output.status.success() {
             std::fs::remove_dir_all(&temp_dir)?;
-            anyhow::bail!("Failed to extract: {}", String::from_utf8_lossy(&output.stderr));
+            anyhow::bail!(
+                "Failed to extract: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
-        
+
         let extracted_path = temp_dir.join(page_name);
         if extracted_path.exists() {
             let buffer = std::fs::read(&extracted_path)?;
             std::fs::remove_dir_all(&temp_dir)?;
             return Ok(buffer);
         }
-        
+
         std::fs::remove_dir_all(&temp_dir)?;
         anyhow::bail!("File not found after extraction: {}", page_name)
     }
@@ -269,20 +299,32 @@ pub fn create_archive_reader(path: &str, archive_type: &str) -> Result<Box<dyn A
         "folder" => Ok(Box::new(FolderArchive::new(path)?)),
         "rar" | "cbr" => {
             // Check if unrar is available
-            if std::process::Command::new("unrar").arg("--help").output().is_ok() {
+            if std::process::Command::new("unrar")
+                .arg("--help")
+                .output()
+                .is_ok()
+            {
                 Ok(Box::new(RarArchive::new(path)?))
             } else {
-                anyhow::bail!("RAR support requires unrar to be installed. Install with: brew install unrar")
+                anyhow::bail!(
+                    "RAR support requires unrar to be installed. Install with: brew install unrar"
+                )
             }
-        },
+        }
         "7z" => {
             // Check if 7z is available
-            if std::process::Command::new("7z").arg("--help").output().is_ok() {
+            if std::process::Command::new("7z")
+                .arg("--help")
+                .output()
+                .is_ok()
+            {
                 Ok(Box::new(SevenZArchive::new(path)?))
             } else {
-                anyhow::bail!("7Z support requires p7zip to be installed. Install with: brew install p7zip")
+                anyhow::bail!(
+                    "7Z support requires p7zip to be installed. Install with: brew install p7zip"
+                )
             }
-        },
+        }
         _ => anyhow::bail!("Unsupported archive type: {}", archive_type),
     }
 }

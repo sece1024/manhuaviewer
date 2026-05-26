@@ -1,17 +1,17 @@
 pub mod archives;
-pub mod tags;
 pub mod categories;
 pub mod history;
-pub mod settings;
 pub mod opds;
+pub mod settings;
+pub mod tags;
 
+use crate::AppState;
 use axum::{
-    routing::{get, post, put, delete},
+    routing::{delete, get, post, put},
     Router,
 };
-use tower_http::cors::CorsLayer;
-use crate::AppState;
 use std::sync::Arc;
+use tower_http::cors::CorsLayer;
 
 pub fn create_router(state: AppState) -> Router {
     // 生产模式下前端从 tauri://localhost 加载，需要 CORS
@@ -25,11 +25,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/archives/:id/cover", get(archives::get_cover))
         .route("/archives/:id/pages", get(archives::list_pages))
         .route("/archives/:id/pages/:page", get(archives::get_page))
-        .route("/archives/:id/pages/:page/thumb", get(archives::get_page_thumb))
+        .route(
+            "/archives/:id/pages/:page/thumb",
+            get(archives::get_page_thumb),
+        )
         .route("/open", post(archives::open_file))
         .route("/scan", post(archives::scan))
         .route("/archives/pack-cbz", post(archives::pack_cbz))
-        
         // Tags
         .route("/tags", get(tags::list_tags))
         .route("/tags", post(tags::create_tag))
@@ -38,28 +40,27 @@ pub fn create_router(state: AppState) -> Router {
         .route("/tags/assign", post(tags::assign_tag))
         .route("/tags/:archive_id/:tag_id", delete(tags::remove_tag))
         .route("/tags/namespaces", get(tags::list_namespaces))
-        
         // Categories
         .route("/categories", get(categories::list_categories))
         .route("/categories", post(categories::create_category))
         .route("/categories/:id", put(categories::update_category))
         .route("/categories/:id", delete(categories::delete_category))
         .route("/categories/assign", post(categories::assign_category))
-        .route("/categories/:archive_id/:category_id", delete(categories::remove_category))
-        
+        .route(
+            "/categories/:archive_id/:category_id",
+            delete(categories::remove_category),
+        )
         // History
         .route("/history", get(history::get_history))
         .route("/history", post(history::save_history))
         .route("/history/:archive_id", delete(history::delete_history))
         .route("/history", delete(history::clear_history))
-        
         // Settings
         .route("/settings", get(settings::get_settings))
         .route("/settings", put(settings::update_settings))
         .route("/config", get(settings::get_config))
         .route("/config", put(settings::update_config))
         .route("/stats", get(settings::get_stats))
-        
         // Backup
         .route("/backup", get(settings::export_backup))
         .route("/restore", post(settings::import_backup));

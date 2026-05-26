@@ -2,9 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod db;
+mod models;
 mod routes;
 mod services;
-mod models;
 mod utils;
 
 use std::sync::Arc;
@@ -24,8 +24,7 @@ async fn main() {
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
         .finish();
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("setting default subscriber failed");
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     info!("Starting MangaViewer v3.0.0");
 
@@ -44,8 +43,7 @@ async fn main() {
 
     // Initialize database
     let db_path = data_dir.join("manhuaviewer.db");
-    let database = db::Database::new(db_path.to_str().unwrap())
-        .expect("Failed to open database");
+    let database = db::Database::new(db_path.to_str().unwrap()).expect("Failed to open database");
     database.init().expect("Failed to initialize database");
 
     info!("Database initialized at {:?}", db_path);
@@ -75,10 +73,10 @@ async fn main() {
                 let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
                     .await
                     .expect("Failed to bind to port");
-                
+
                 let addr = listener.local_addr().unwrap();
                 info!("API server listening on http://{}", addr);
-                
+
                 // Store port for frontend to query
                 std::env::set_var("API_PORT", addr.port().to_string());
 

@@ -1,6 +1,6 @@
-use anyhow::{Result, bail};
-use std::path::Path;
+use anyhow::{bail, Result};
 use std::io::Write;
+use std::path::Path;
 
 /// 支持的图片扩展名
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "avif"];
@@ -22,9 +22,7 @@ fn collect_images(folder: &Path) -> Result<Vec<std::path::PathBuf>> {
         bail!("路径不是文件夹: {}", folder.display());
     }
 
-    let entries: Vec<_> = std::fs::read_dir(folder)?
-        .filter_map(|e| e.ok())
-        .collect();
+    let entries: Vec<_> = std::fs::read_dir(folder)?.filter_map(|e| e.ok()).collect();
 
     // 空文件夹检查
     if entries.is_empty() {
@@ -95,8 +93,8 @@ pub fn pack_folder_to_cbz(folder_path: &str, output_dir: &str) -> Result<String>
     // 创建 ZIP 文件（使用 Stored 方式，不压缩，保证读取性能）
     let file = std::fs::File::create(&cbz_path)?;
     let mut zip = zip::ZipWriter::new(file);
-    let options = zip::write::FileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let options =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
     for image_path in &images {
         let file_name = image_path
@@ -138,7 +136,10 @@ mod tests {
         std::fs::create_dir(dir.path().join("subdir")).unwrap();
         let result = pack_folder_to_cbz(dir.path().to_str().unwrap(), out.path().to_str().unwrap());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("未在当前目录找到有效的漫画图片"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("未在当前目录找到有效的漫画图片"));
     }
 
     #[test]
@@ -150,7 +151,8 @@ mod tests {
         std::fs::write(dir.path().join("page02.png"), b"fake-png-data").unwrap();
         std::fs::write(dir.path().join("notes.txt"), b"not an image").unwrap();
 
-        let cbz = pack_folder_to_cbz(dir.path().to_str().unwrap(), out.path().to_str().unwrap()).unwrap();
+        let cbz =
+            pack_folder_to_cbz(dir.path().to_str().unwrap(), out.path().to_str().unwrap()).unwrap();
         assert!(cbz.ends_with(".cbz"));
         assert!(Path::new(&cbz).exists());
 
@@ -166,8 +168,10 @@ mod tests {
         let out = TempDir::new().unwrap();
         std::fs::write(dir.path().join("page01.jpg"), b"data").unwrap();
 
-        let cbz1 = pack_folder_to_cbz(dir.path().to_str().unwrap(), out.path().to_str().unwrap()).unwrap();
-        let cbz2 = pack_folder_to_cbz(dir.path().to_str().unwrap(), out.path().to_str().unwrap()).unwrap();
+        let cbz1 =
+            pack_folder_to_cbz(dir.path().to_str().unwrap(), out.path().to_str().unwrap()).unwrap();
+        let cbz2 =
+            pack_folder_to_cbz(dir.path().to_str().unwrap(), out.path().to_str().unwrap()).unwrap();
         assert_ne!(cbz1, cbz2); // 第二次应生成不同文件名
         assert!(Path::new(&cbz2).exists());
     }

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub struct SearchQuery {
     pub terms: Vec<String>,
     pub include_tags: Vec<String>,
@@ -12,16 +14,20 @@ impl SearchQuery {
 
         let mut current_token = String::new();
         let mut in_quotes = false;
-        let mut chars = input.chars().peekable();
 
-        while let Some(ch) = chars.next() {
+        for ch in input.chars() {
             match ch {
                 '"' => {
                     in_quotes = !in_quotes;
                 }
                 ' ' if !in_quotes => {
                     if !current_token.is_empty() {
-                        Self::process_token(&current_token, &mut terms, &mut include_tags, &mut exclude_tags);
+                        Self::process_token(
+                            &current_token,
+                            &mut terms,
+                            &mut include_tags,
+                            &mut exclude_tags,
+                        );
                         current_token.clear();
                     }
                 }
@@ -32,7 +38,12 @@ impl SearchQuery {
         }
 
         if !current_token.is_empty() {
-            Self::process_token(&current_token, &mut terms, &mut include_tags, &mut exclude_tags);
+            Self::process_token(
+                &current_token,
+                &mut terms,
+                &mut include_tags,
+                &mut exclude_tags,
+            );
         }
 
         Self {
@@ -48,14 +59,12 @@ impl SearchQuery {
         include_tags: &mut Vec<String>,
         exclude_tags: &mut Vec<String>,
     ) {
-        if token.starts_with("tag:") {
-            let tag = token[4..].to_string();
-            include_tags.push(tag);
-        } else if token.starts_with("-tag:") {
-            let tag = token[5..].to_string();
-            exclude_tags.push(tag);
-        } else if token.starts_with('-') {
-            exclude_tags.push(token[1..].to_string());
+        if let Some(tag) = token.strip_prefix("tag:") {
+            include_tags.push(tag.to_string());
+        } else if let Some(tag) = token.strip_prefix("-tag:") {
+            exclude_tags.push(tag.to_string());
+        } else if let Some(tag) = token.strip_prefix('-') {
+            exclude_tags.push(tag.to_string());
         } else {
             terms.push(token.to_string());
         }

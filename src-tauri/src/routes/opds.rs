@@ -1,10 +1,10 @@
+use crate::AppState;
 use axum::{
     extract::{Path, Query, State},
     response::Html,
 };
 use serde::Deserialize;
 use std::sync::Arc;
-use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct OpdsQuery {
@@ -24,11 +24,10 @@ fn current_timestamp() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-pub async fn root_catalog(
-    State(_state): State<Arc<AppState>>,
-) -> Html<String> {
+pub async fn root_catalog(State(_state): State<Arc<AppState>>) -> Html<String> {
     let ts = current_timestamp();
-    let xml = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer</id>
   <title>MangaViewer OPDS</title>
@@ -59,8 +58,9 @@ pub async fn root_catalog(
     <id>manhuaviewer-categories</id>
     <updated>{ts}</updated>
   </entry>
-</feed>"#);
-    
+</feed>"#
+    );
+
     Html(xml)
 }
 
@@ -69,15 +69,15 @@ pub async fn catalog(
     Query(query): Query<OpdsQuery>,
 ) -> Html<String> {
     let db = state.db.lock().await;
-    
+
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(20);
     let offset = (page - 1) * limit;
-    
+
     match db.list_archives(None, "updated", "desc", limit, offset) {
         Ok((archives, _total)) => {
             let mut entries = String::new();
-            
+
             for archive in archives {
                 entries.push_str(&format!(r#"
   <entry>
@@ -86,17 +86,18 @@ pub async fn catalog(
     <id>manhuaviewer-archive-{}</id>
     <updated>{}</updated>
     <content type="text">{} pages - {}</content>
-  </entry>"#, 
-                    xml_escape(&archive.title), 
-                    archive.id, 
-                    archive.id, 
+  </entry>"#,
+                    xml_escape(&archive.title),
+                    archive.id,
+                    archive.id,
                     archive.updated_at,
-                    archive.page_count, 
+                    archive.page_count,
                     xml_escape(&archive.archive_type)
                 ));
             }
-            
-            Html(format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+
+            Html(format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer-catalog</id>
   <title>All Archives</title>
@@ -104,13 +105,19 @@ pub async fn catalog(
   <link rel="self" href="/opds/catalog" type="application/atom+xml"/>
   <link rel="start" href="/opds" type="application/atom+xml"/>
   {}
-</feed>"#, current_timestamp(), entries))
-        },
-        Err(_) => Html(r#"<?xml version="1.0" encoding="UTF-8"?>
+</feed>"#,
+                current_timestamp(),
+                entries
+            ))
+        }
+        Err(_) => Html(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>manhuaviewer-error</id>
   <title>Error loading catalog</title>
-</feed>"#.to_string()),
+</feed>"#
+                .to_string(),
+        ),
     }
 }
 
@@ -119,38 +126,42 @@ pub async fn archive_detail(
     Path(id): Path<i64>,
 ) -> Html<String> {
     let db = state.db.lock().await;
-    
+
     match db.get_archive(id) {
         Ok(Some(archive)) => {
-            match crate::services::archive::create_archive_reader(&archive.path, &archive.archive_type) {
-                Ok(reader) => {
-                    match reader.list_pages() {
-                        Ok(pages) => {
-                            let mut entries = String::new();
-                            
-                            for (i, page_name) in pages.iter().enumerate() {
-                                let filename = std::path::Path::new(page_name)
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy();
-                                
-                                entries.push_str(&format!(r#"
+            match crate::services::archive::create_archive_reader(
+                &archive.path,
+                &archive.archive_type,
+            ) {
+                Ok(reader) => match reader.list_pages() {
+                    Ok(pages) => {
+                        let mut entries = String::new();
+
+                        for (i, page_name) in pages.iter().enumerate() {
+                            let filename = std::path::Path::new(page_name)
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy();
+
+                            entries.push_str(&format!(
+                                r#"
   <entry>
     <title>{}</title>
     <link rel="http://opds-spec.org/image" href="/api/archives/{}/pages/{}" type="image/jpeg"/>
     <id>manhuaviewer-page-{}-{}</id>
     <updated>{}</updated>
-  </entry>"#, 
-                                    xml_escape(&filename), 
-                                    id, 
-                                    i, 
-                                    id, 
-                                    i,
-                                    current_timestamp()
-                                ));
-                            }
-                            
-                            Html(format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+  </entry>"#,
+                                xml_escape(&filename),
+                                id,
+                                i,
+                                id,
+                                i,
+                                current_timestamp()
+                            ));
+                        }
+
+                        Html(format!(
+                            r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer-archive-{}-pages</id>
   <title>{} ({} pages)</title>
@@ -158,44 +169,60 @@ pub async fn archive_detail(
   <link rel="self" href="/opds/archive/{}" type="application/atom+xml"/>
   <link rel="start" href="/opds" type="application/atom+xml"/>
   {}
-</feed>"#, id, xml_escape(&archive.title), pages.len(), current_timestamp(), id, entries))
-                        },
-                        Err(_) => Html(r#"<?xml version="1.0" encoding="UTF-8"?>
+</feed>"#,
+                            id,
+                            xml_escape(&archive.title),
+                            pages.len(),
+                            current_timestamp(),
+                            id,
+                            entries
+                        ))
+                    }
+                    Err(_) => Html(
+                        r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>manhuaviewer-error</id>
   <title>Error loading pages</title>
-</feed>"#.to_string()),
-                    }
+</feed>"#
+                            .to_string(),
+                    ),
                 },
-                Err(_) => Html(r#"<?xml version="1.0" encoding="UTF-8"?>
+                Err(_) => Html(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>manhuaviewer-error</id>
   <title>Error opening archive</title>
-</feed>"#.to_string()),
+</feed>"#
+                        .to_string(),
+                ),
             }
-        },
-        Ok(None) => Html(r#"<?xml version="1.0" encoding="UTF-8"?>
+        }
+        Ok(None) => Html(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>manhuaviewer-error</id>
   <title>Archive not found</title>
-</feed>"#.to_string()),
-        Err(_) => Html(r#"<?xml version="1.0" encoding="UTF-8"?>
+</feed>"#
+                .to_string(),
+        ),
+        Err(_) => Html(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>manhuaviewer-error</id>
   <title>Error loading archive</title>
-</feed>"#.to_string()),
+</feed>"#
+                .to_string(),
+        ),
     }
 }
 
-pub async fn recent(
-    State(state): State<Arc<AppState>>,
-) -> Html<String> {
+pub async fn recent(State(state): State<Arc<AppState>>) -> Html<String> {
     let db = state.db.lock().await;
-    
+
     match db.get_history() {
         Ok(history) => {
             let mut entries = String::new();
-            
+
             for (h, title, _path, _archive_type) in history.iter().take(20) {
                 entries.push_str(&format!(r#"
   <entry>
@@ -204,17 +231,18 @@ pub async fn recent(
     <id>manhuaviewer-archive-{}</id>
     <updated>{}</updated>
     <content type="text">Page {} of {}</content>
-  </entry>"#, 
-                    xml_escape(title), 
-                    h.archive_id, 
-                    h.archive_id, 
-                    h.updated_at, 
-                    h.page_index + 1, 
+  </entry>"#,
+                    xml_escape(title),
+                    h.archive_id,
+                    h.archive_id,
+                    h.updated_at,
+                    h.page_index + 1,
                     h.total_pages
                 ));
             }
-            
-            Html(format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+
+            Html(format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer-recent</id>
   <title>Recent Reading</title>
@@ -222,47 +250,53 @@ pub async fn recent(
   <link rel="self" href="/opds/recent" type="application/atom+xml"/>
   <link rel="start" href="/opds" type="application/atom+xml"/>
   {}
-</feed>"#, current_timestamp(), entries))
-        },
-        Err(_) => Html(r#"<?xml version="1.0" encoding="UTF-8"?>
+</feed>"#,
+                current_timestamp(),
+                entries
+            ))
+        }
+        Err(_) => Html(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>manhuaviewer-error</id>
   <title>Error loading history</title>
-</feed>"#.to_string()),
+</feed>"#
+                .to_string(),
+        ),
     }
 }
 
-pub async fn tags_list(
-    State(state): State<Arc<AppState>>,
-) -> Html<String> {
+pub async fn tags_list(State(state): State<Arc<AppState>>) -> Html<String> {
     let db = state.db.lock().await;
-    
+
     match db.list_tags() {
         Ok(tags) => {
             let mut entries = String::new();
-            
+
             for tag in tags {
                 let display_name = if tag.namespace.is_empty() {
                     tag.name.clone()
                 } else {
                     format!("{}:{}", tag.namespace, tag.name)
                 };
-                
-                entries.push_str(&format!(r#"
+
+                entries.push_str(&format!(
+                    r#"
   <entry>
     <title>{}</title>
     <link rel="subsection" href="/opds/tag/{}" type="application/atom+xml"/>
     <id>manhuaviewer-tag-{}</id>
     <updated>{}</updated>
-  </entry>"#, 
-                    xml_escape(&display_name), 
-                    tag.id, 
+  </entry>"#,
+                    xml_escape(&display_name),
+                    tag.id,
                     tag.id,
                     current_timestamp()
                 ));
             }
-            
-            Html(format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+
+            Html(format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer-tags</id>
   <title>Tags</title>
@@ -270,13 +304,19 @@ pub async fn tags_list(
   <link rel="self" href="/opds/tags" type="application/atom+xml"/>
   <link rel="start" href="/opds" type="application/atom+xml"/>
   {}
-</feed>"#, current_timestamp(), entries))
-        },
-        Err(_) => Html(r#"<?xml version="1.0" encoding="UTF-8"?>
+</feed>"#,
+                current_timestamp(),
+                entries
+            ))
+        }
+        Err(_) => Html(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>manhuaviewer-error</id>
   <title>Error loading tags</title>
-</feed>"#.to_string()),
+</feed>"#
+                .to_string(),
+        ),
     }
 }
 
@@ -285,29 +325,32 @@ pub async fn tag_archives(
     Path(tag_id): Path<i64>,
 ) -> Html<String> {
     let db = state.db.lock().await;
-    
+
     // Get all archives with this tag
     match db.list_archives(None, "updated", "desc", 100, 0) {
         Ok((archives, _)) => {
             // Filter archives that have the specified tag
             let conn = db.get_conn();
             let mut archive_ids = std::collections::HashSet::new();
-            
-            let mut stmt = conn.prepare(
-                "SELECT archive_id FROM archive_tags WHERE tag_id = ?"
-            ).unwrap();
-            
-            let ids = stmt.query_map([tag_id], |row| row.get::<_, i64>(0)).unwrap();
+
+            let mut stmt = conn
+                .prepare("SELECT archive_id FROM archive_tags WHERE tag_id = ?")
+                .unwrap();
+
+            let ids = stmt
+                .query_map([tag_id], |row| row.get::<_, i64>(0))
+                .unwrap();
             for id in ids.flatten() {
                 archive_ids.insert(id);
             }
-            
-            let filtered_archives: Vec<_> = archives.into_iter()
+
+            let filtered_archives: Vec<_> = archives
+                .into_iter()
                 .filter(|a| archive_ids.contains(&a.id))
                 .collect();
-            
+
             let mut entries = String::new();
-            
+
             for archive in filtered_archives {
                 entries.push_str(&format!(r#"
   <entry>
@@ -316,24 +359,25 @@ pub async fn tag_archives(
     <id>manhuaviewer-archive-{}</id>
     <updated>{}</updated>
     <content type="text">{} pages - {}</content>
-  </entry>"#, 
-                    xml_escape(&archive.title), 
-                    archive.id, 
-                    archive.id, 
+  </entry>"#,
+                    xml_escape(&archive.title),
+                    archive.id,
+                    archive.id,
                     archive.updated_at,
-                    archive.page_count, 
+                    archive.page_count,
                     xml_escape(&archive.archive_type)
                 ));
             }
-            
+
             // Get tag name
-            let tag_name = conn.query_row(
-                "SELECT name FROM tags WHERE id = ?",
-                [tag_id],
-                |row| row.get::<_, String>(0)
-            ).unwrap_or_else(|_| "Unknown".to_string());
-            
-            Html(format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+            let tag_name = conn
+                .query_row("SELECT name FROM tags WHERE id = ?", [tag_id], |row| {
+                    row.get::<_, String>(0)
+                })
+                .unwrap_or_else(|_| "Unknown".to_string());
+
+            Html(format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer-tag-{}-archives</id>
   <title>Archives with tag: {}</title>
@@ -341,41 +385,50 @@ pub async fn tag_archives(
   <link rel="self" href="/opds/tag/{}" type="application/atom+xml"/>
   <link rel="start" href="/opds" type="application/atom+xml"/>
   {}
-</feed>"#, tag_id, xml_escape(&tag_name), current_timestamp(), tag_id, entries))
-        },
-        Err(_) => Html(r#"<?xml version="1.0" encoding="UTF-8"?>
+</feed>"#,
+                tag_id,
+                xml_escape(&tag_name),
+                current_timestamp(),
+                tag_id,
+                entries
+            ))
+        }
+        Err(_) => Html(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>manhuaviewer-error</id>
   <title>Error loading archives</title>
-</feed>"#.to_string()),
+</feed>"#
+                .to_string(),
+        ),
     }
 }
 
-pub async fn categories_list(
-    State(state): State<Arc<AppState>>,
-) -> Html<String> {
+pub async fn categories_list(State(state): State<Arc<AppState>>) -> Html<String> {
     let db = state.db.lock().await;
-    
+
     match db.list_categories() {
         Ok(categories) => {
             let mut entries = String::new();
-            
+
             for category in categories {
-                entries.push_str(&format!(r#"
+                entries.push_str(&format!(
+                    r#"
   <entry>
     <title>{}</title>
     <link rel="subsection" href="/opds/category/{}" type="application/atom+xml"/>
     <id>manhuaviewer-category-{}</id>
     <updated>{}</updated>
-  </entry>"#, 
-                    xml_escape(&category.name), 
-                    category.id, 
+  </entry>"#,
+                    xml_escape(&category.name),
+                    category.id,
                     category.id,
                     category.created_at
                 ));
             }
-            
-            Html(format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+
+            Html(format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer-categories</id>
   <title>Categories</title>
@@ -383,12 +436,18 @@ pub async fn categories_list(
   <link rel="self" href="/opds/categories" type="application/atom+xml"/>
   <link rel="start" href="/opds" type="application/atom+xml"/>
   {}
-</feed>"#, current_timestamp(), entries))
-        },
-        Err(_) => Html(r#"<?xml version="1.0" encoding="UTF-8"?>
+</feed>"#,
+                current_timestamp(),
+                entries
+            ))
+        }
+        Err(_) => Html(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>manhuaviewer-error</id>
   <title>Error loading categories</title>
-</feed>"#.to_string()),
+</feed>"#
+                .to_string(),
+        ),
     }
 }
