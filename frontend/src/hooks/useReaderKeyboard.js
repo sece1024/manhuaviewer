@@ -24,6 +24,8 @@ export default function useReaderKeyboard({
   setFitMode,
   showOverlay,
   containerRef,
+  doublePageDisabled,
+  doublePage,
 }) {
   const handler = useCallback((e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
@@ -33,10 +35,21 @@ export default function useReaderKeyboard({
       case 'ArrowUp': if (!longImage) goPrev(); break;
       case 'ArrowDown': if (!longImage) goNext(); break;
       case ' ': if (!longImage) { e.preventDefault(); goNext(); } break;
-      case 'd': case 'D': if (!e.ctrlKey) setDoublePage(v => !v); break;
+      case 'd': case 'D':
+        if (!e.ctrlKey && !doublePageDisabled) {
+          setDoublePage(v => {
+            if (!v) setLongImage(false); // 开启双页时关闭长图
+            return !v;
+          });
+        }
+        break;
       case 'Home': goPage(0); break;
       case 'End': goPage(pagesLength - 1); break;
-      case 'l': case 'L': setLongImage(v => !v); break;
+      case 'l': case 'L':
+        if (!doublePage) {
+          setLongImage(v => !v);
+        }
+        break;
       case 'r': case 'R':
         setRotation(r => (e.shiftKey ? (r - 90 + 360) % 360 : (r + 90) % 360));
         break;
@@ -68,7 +81,7 @@ export default function useReaderKeyboard({
       default: break;
     }
   }, [
-    goPrev, goNext, goPage, pagesLength, longImage,
+    goPrev, goNext, goPage, pagesLength, longImage, doublePage, doublePageDisabled,
     showThumbnails, showJump, showMenu, showHelp,
     setDoublePage, setLongImage, setRotation, setFitMode, showOverlay, containerRef,
   ]);

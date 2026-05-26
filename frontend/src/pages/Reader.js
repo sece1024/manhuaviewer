@@ -27,6 +27,9 @@ export default function Reader() {
   const [overlayText, setOverlayText] = useState('');
   const overlayTimer = useRef(null);
   const [imageLoaded, setImageLoaded] = useState(false);
+  // 容器宽度不足时禁用双页模式
+  const [containerTooNarrow, setContainerTooNarrow] = useState(false);
+  const DOUBLE_PAGE_MIN_WIDTH = 600;
 
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
   const dragRef = useRef({ active: false, startX: 0, startY: 0, origX: 0, origY: 0 });
@@ -105,6 +108,21 @@ export default function Reader() {
     }
   }, [currentIndex, pages]);
 
+  // 监听容器宽度，宽度不足时禁用双页模式
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const narrow = entry.contentRect.width < DOUBLE_PAGE_MIN_WIDTH;
+        setContainerTooNarrow(narrow);
+        if (narrow) setDoublePage(false);
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // 翻页
   const goPage = useCallback((newIndex) => {
     if (newIndex < 0 || newIndex >= pages.length) return;
@@ -137,6 +155,8 @@ export default function Reader() {
     showMenu, setShowMenu,
     setDoublePage, setLongImage, setRotation, setFitMode,
     showOverlay, containerRef,
+    doublePageDisabled: containerTooNarrow || longImage,
+    doublePage,
   });
 
   // 触摸手势
@@ -330,11 +350,17 @@ export default function Reader() {
         <button className="btn btn-secondary btn-icon" onClick={goPrev} aria-label="上一页">‹</button>
         <button className="btn btn-secondary btn-icon" onClick={goNext} aria-label="下一页">›</button>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
-          <input type="checkbox" checked={doublePage} onChange={(e) => setDoublePage(e.target.checked)} /> 双页
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, opacity: containerTooNarrow || longImage ? 0.5 : 1 }}
+          title={containerTooNarrow ? '窗口宽度不足，无法使用双页模式' : longImage ? '请先关闭长图模式' : ''}>
+          <input type="checkbox" checked={doublePage}
+            disabled={containerTooNarrow || longImage}
+            onChange={(e) => setDoublePage(e.target.checked)} /> 双页
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
-          <input type="checkbox" checked={longImage} onChange={(e) => setLongImage(e.target.checked)} /> 长图
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, opacity: doublePage ? 0.5 : 1 }}
+          title={doublePage ? '请先关闭双页模式' : ''}>
+          <input type="checkbox" checked={longImage}
+            disabled={doublePage}
+            onChange={(e) => setLongImage(e.target.checked)} /> 长图
         </label>
 
         <div className="toolbar-group-secondary">
