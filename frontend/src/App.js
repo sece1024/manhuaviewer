@@ -53,10 +53,10 @@ function AppContent() {
 
       <main className="main-content">
         <Routes>
-          <Route path="/" element={<Library />} />
-          <Route path="/reader/:archiveId" element={<Reader />} />
-          <Route path="/history" element={<History />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/" element={<ErrorBoundary><Library /></ErrorBoundary>} />
+          <Route path="/reader/:archiveId" element={<ErrorBoundary><Reader /></ErrorBoundary>} />
+          <Route path="/history" element={<ErrorBoundary><History /></ErrorBoundary>} />
+          <Route path="/settings" element={<ErrorBoundary><Settings /></ErrorBoundary>} />
         </Routes>
       </main>
     </div>
