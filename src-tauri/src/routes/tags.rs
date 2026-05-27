@@ -74,20 +74,16 @@ pub async fn update_tag(
     let namespace = payload.namespace.unwrap_or_default();
     let color = payload.color.unwrap_or_else(|| "#4a86e8".to_string());
 
-    // Delete and recreate (simple approach)
-    match db.delete_tag(id) {
-        Ok(_) => match db.create_tag(&namespace, &payload.name, &color) {
-            Ok(new_id) => Json(serde_json::json!({
-                "data": {
-                    "id": new_id,
-                    "namespace": namespace,
-                    "name": payload.name,
-                    "color": color
-                }
-            }))
-            .into_response(),
-            Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        },
+    match db.update_tag(id, &namespace, &payload.name, &color) {
+        Ok(_) => Json(serde_json::json!({
+            "data": {
+                "id": id,
+                "namespace": namespace,
+                "name": payload.name,
+                "color": color
+            }
+        }))
+        .into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }

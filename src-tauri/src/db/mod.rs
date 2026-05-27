@@ -302,6 +302,13 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
+    pub fn update_tag(&self, id: i64, namespace: &str, name: &str, color: &str) -> Result<usize> {
+        self.conn.execute(
+            "UPDATE tags SET namespace = ?, name = ?, color = ? WHERE id = ?",
+            (namespace, name, color, id),
+        )
+    }
+
     pub fn delete_tag(&self, id: i64) -> Result<usize> {
         self.conn.execute("DELETE FROM tags WHERE id = ?", [id])
     }
@@ -430,6 +437,20 @@ impl Database {
             (name, color, pinned as i64, search),
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn update_category(
+        &self,
+        id: i64,
+        name: &str,
+        color: &str,
+        pinned: bool,
+        search: &str,
+    ) -> Result<usize> {
+        self.conn.execute(
+            "UPDATE categories SET name = ?, color = ?, pinned = ?, search = ? WHERE id = ?",
+            (name, color, pinned as i64, search, id),
+        )
     }
 
     pub fn delete_category(&self, id: i64) -> Result<usize> {

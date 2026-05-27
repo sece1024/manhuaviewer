@@ -63,21 +63,17 @@ pub async fn update_category(
     let pinned = payload.pinned.unwrap_or(false);
     let search = payload.search.unwrap_or_default();
 
-    // Delete and recreate (simple approach)
-    match db.delete_category(id) {
-        Ok(_) => match db.create_category(&payload.name, &color, pinned, &search) {
-            Ok(new_id) => Json(serde_json::json!({
-                "data": {
-                    "id": new_id,
-                    "name": payload.name,
-                    "color": color,
-                    "pinned": pinned,
-                    "search": search
-                }
-            }))
-            .into_response(),
-            Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        },
+    match db.update_category(id, &payload.name, &color, pinned, &search) {
+        Ok(_) => Json(serde_json::json!({
+            "data": {
+                "id": id,
+                "name": payload.name,
+                "color": color,
+                "pinned": pinned,
+                "search": search
+            }
+        }))
+        .into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
