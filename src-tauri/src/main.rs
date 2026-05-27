@@ -43,7 +43,8 @@ async fn main() {
 
     // Initialize database
     let db_path = data_dir.join("manhuaviewer.db");
-    let database = db::Database::new(db_path.to_str().unwrap()).expect("Failed to open database");
+    let db_path_str = db_path.to_str().expect("Database path contains invalid UTF-8");
+    let database = db::Database::new(db_path_str).expect("Failed to open database");
     database.init().expect("Failed to initialize database");
 
     info!("Database initialized at {:?}", db_path);
@@ -77,10 +78,11 @@ async fn main() {
                 let addr = listener.local_addr().unwrap();
                 info!("API server listening on http://{}", addr);
 
-                // Store port for frontend to query
-                std::env::set_var("API_PORT", addr.port().to_string());
+                info!("API server ready on port {}", addr.port());
 
-                axum::serve(listener, api_router).await.unwrap();
+                if let Err(e) = axum::serve(listener, api_router).await {
+                    tracing::error!("API server error: {}", e);
+                }
             });
 
             Ok(())
