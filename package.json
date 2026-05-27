@@ -1,6 +1,6 @@
 {
   "name": "manhuaviewer",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "MangaViewer — 漫画阅读管理系统",
   "scripts": {
     "start": "pnpm --filter manhuaviewer-backend start & pnpm --filter manhuaviewer-frontend start",
