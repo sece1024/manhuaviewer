@@ -524,6 +524,26 @@ impl Database {
         )
     }
 
+    pub fn get_history_for_archive(&self, archive_id: i64) -> Result<Option<HistoryRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT archive_id, page_index, total_pages, updated_at FROM history WHERE archive_id = ?",
+        )?;
+
+        let mut rows = stmt.query_map([archive_id], |row| {
+            Ok(HistoryRow {
+                archive_id: row.get(0)?,
+                page_index: row.get(1)?,
+                total_pages: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        })?;
+
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn delete_history(&self, archive_id: i64) -> Result<usize> {
         self.conn
             .execute("DELETE FROM history WHERE archive_id = ?", [archive_id])

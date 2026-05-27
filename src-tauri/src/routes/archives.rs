@@ -114,14 +114,22 @@ pub async fn get_cover(State(state): State<Arc<AppState>>, Path(id): Path<i64>) 
 }
 
 pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
-    let (archive_path, archive_type) = {
+    let (archive, read_page) = {
         let db = state.db.lock().await;
         match db.get_archive(id) {
-            Ok(Some(a)) => (a.path, a.archive_type),
+            Ok(Some(a)) => {
+                let read_page = db.get_history_for_archive(id)
+                    .map(|h| h.map(|h| h.page_index).unwrap_or(0))
+                    .unwrap_or(0);
+                (a, read_page)
+            }
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
             Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         }
     };
+
+    let archive_path = archive.path.clone();
+    let archive_type = archive.archive_type.clone();
 
     let result = tokio::task::spawn_blocking(move || {
         let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
@@ -149,7 +157,9 @@ pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>)
             }).collect();
 
             Json(serde_json::json!({
+                "archive": archive,
                 "pages": page_list,
+                "read_page": read_page,
             }))
             .into_response()
         }
