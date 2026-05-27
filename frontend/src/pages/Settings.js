@@ -301,7 +301,7 @@ export default function Settings() {
                 <span style={{ width: 10, height: 10, borderRadius: '50%', background: t.color, flexShrink: 0 }} />
                 <span>{t.full_name || t.name}</span>
                 <span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>({t.archive_count})</span>
-                <button onClick={() => handleDeleteTag(t.id)} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0, fontSize: 14 }}>×</button>
+                <button onClick={() => handleDeleteTag(t.id)} aria-label={`删除标签 ${t.name}`} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0, fontSize: 14 }}>×</button>
               </div>
             ))}
           </div>
@@ -325,7 +325,7 @@ export default function Settings() {
                 <span style={{ width: 10, height: 10, borderRadius: '50%', background: c.color, flexShrink: 0 }} />
                 <span>{c.name}</span>
                 <span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>({c.archive_count})</span>
-                <button onClick={() => handleDeleteCategory(c.id)} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0, fontSize: 14 }}>×</button>
+                <button onClick={() => handleDeleteCategory(c.id)} aria-label={`删除分类 ${c.name}`} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0, fontSize: 14 }}>×</button>
               </div>
             ))}
           </div>
