@@ -77,10 +77,16 @@ pub async fn get_archive(State(state): State<Arc<AppState>>, Path(id): Path<i64>
 }
 
 pub async fn delete_archive(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
+    let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
     let db = state.db.lock().await;
 
     match db.delete_archive(id) {
-        Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
+        Ok(_) => {
+            drop(db);
+            // 删除缩略图目录
+            let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
+            Json(serde_json::json!({ "success": true })).into_response()
+        }
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -236,19 +242,21 @@ pub async fn get_page_thumb(
         return error_response(StatusCode::BAD_REQUEST, "Page index must be non-negative");
     }
 
-    let (archive_path, archive_type, cache_dir) = {
+    let (archive_path, archive_type, thumb_dir) = {
         let db = state.db.lock().await;
         match db.get_archive(id) {
-            Ok(Some(a)) => (a.path, a.archive_type, state.data_dir.join("thumbnails")),
+            Ok(Some(a)) => {
+                let dir = state.data_dir.join("thumbnails").join(id.to_string());
+                (a.path, a.archive_type, dir)
+            }
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
             Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         }
     };
 
-    let cache_key = format!("{}_{}", id, page_index);
-    let cache_path = cache_dir.join(format!("{}.jpg", cache_key));
+    let cache_path = thumb_dir.join(format!("{}.jpg", page_index));
 
-    // 先检查缓存，命中则直接返回，不做任何压缩包 I/O
+    // 先检查缓存，命中则直接返回
     if cache_path.exists() {
         match std::fs::read(&cache_path) {
             Ok(data) => {
@@ -260,7 +268,8 @@ pub async fn get_page_thumb(
         }
     }
 
-    // 缓存未命中，才打开压缩包提取页面并生成缩略图
+    // 缓存未命中，打开压缩包生成缩略图
+    let thumb_dir_clone = thumb_dir.clone();
     let result = tokio::task::spawn_blocking(move || {
         let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
         let pages = reader.list_pages()?;
@@ -271,12 +280,24 @@ pub async fn get_page_thumb(
         let page_name = &pages[idx];
         let data = reader.extract_page(page_name)?;
         let thumb_gen = crate::services::thumbnail::ThumbnailGenerator::default();
-        thumb_gen.generate_with_cache(&data, &cache_dir, &cache_key)
+        // generate_with_cache 使用 thumb_dir 作为缓存目录
+        thumb_gen.generate_with_cache(&data, &thumb_dir_clone, &page_index.to_string())
     })
     .await;
 
     match result {
         Ok(Ok(thumb_data)) => {
+            // 首次生成成功，更新数据库记录并执行淘汰
+            let db = state.db.lock().await;
+            let _ = db.set_thumbnail_path(id, &thumb_dir.to_string_lossy());
+            let evicted = db.evict_old_thumbnails().unwrap_or_default();
+            drop(db);
+
+            // 删除被淘汰漫画的缩略图目录
+            for (_evicted_id, evicted_path) in evicted {
+                let _ = tokio::fs::remove_dir_all(&evicted_path).await;
+            }
+
             (StatusCode::OK, [("Content-Type", "image/jpeg")], thumb_data).into_response()
         }
         Ok(Err(e)) => {

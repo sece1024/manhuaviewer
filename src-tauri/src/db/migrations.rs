@@ -1,6 +1,20 @@
 use rusqlite::{Connection, Result};
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
+    // Add thumbnail_path column to archives if missing
+    let has_thumb_col: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('archives') WHERE name='thumbnail_path'",
+            [],
+            |row| row.get::<_, i64>(0).map(|c| c > 0),
+        )
+        .unwrap_or(false);
+
+    if !has_thumb_col {
+        tracing::info!("Adding thumbnail_path column to archives...");
+        conn.execute("ALTER TABLE archives ADD COLUMN thumbnail_path TEXT", [])?;
+    }
+
     // Check for legacy 'folders' table and migrate
     let has_folders: bool = conn
         .query_row(

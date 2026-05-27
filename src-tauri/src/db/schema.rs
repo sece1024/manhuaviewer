@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS archives (
     page_count INTEGER DEFAULT 0,
     cover_image TEXT,           -- 封面图片路径（相对于档案）
     file_size INTEGER DEFAULT 0,
+    thumbnail_path TEXT,        -- 缩略图目录路径（thumbnails/{id}/）
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );

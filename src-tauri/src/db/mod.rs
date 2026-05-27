@@ -24,6 +24,7 @@ pub struct ArchiveRow {
     pub page_count: i64,
     pub cover_image: Option<String>,
     pub file_size: i64,
+    pub thumbnail_path: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -104,7 +105,7 @@ impl Database {
     // Archive operations
     pub fn get_archive(&self, id: i64) -> Result<Option<ArchiveRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, created_at, updated_at FROM archives WHERE id = ?"
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, created_at, updated_at FROM archives WHERE id = ?"
         )?;
 
         let mut rows = stmt.query_map([id], |row| {
@@ -116,8 +117,9 @@ impl Database {
                 page_count: row.get(4)?,
                 cover_image: row.get(5)?,
                 file_size: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
+                thumbnail_path: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
             })
         })?;
 
@@ -129,7 +131,7 @@ impl Database {
 
     pub fn get_archive_by_path(&self, path: &str) -> Result<Option<ArchiveRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, created_at, updated_at FROM archives WHERE path = ?"
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, created_at, updated_at FROM archives WHERE path = ?"
         )?;
 
         let mut rows = stmt.query_map([path], |row| {
@@ -141,8 +143,9 @@ impl Database {
                 page_count: row.get(4)?,
                 cover_image: row.get(5)?,
                 file_size: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
+                thumbnail_path: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
             })
         })?;
 
@@ -189,7 +192,7 @@ impl Database {
         let direction = if order == "asc" { "ASC" } else { "DESC" };
 
         let sql = format!(
-            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, created_at, updated_at FROM archives {} ORDER BY {} {} LIMIT ? OFFSET ?",
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, created_at, updated_at FROM archives {} ORDER BY {} {} LIMIT ? OFFSET ?",
             where_clause, order_clause, direction
         );
 
@@ -209,8 +212,9 @@ impl Database {
                         page_count: row.get(4)?,
                         cover_image: row.get(5)?,
                         file_size: row.get(6)?,
-                        created_at: row.get(7)?,
-                        updated_at: row.get(8)?,
+                        thumbnail_path: row.get(7)?,
+                        created_at: row.get(8)?,
+                        updated_at: row.get(9)?,
                     })
                 },
             )?
@@ -227,7 +231,7 @@ impl Database {
         offset: i64,
     ) -> Result<Vec<ArchiveRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.created_at, a.updated_at
+            "SELECT a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.thumbnail_path, a.created_at, a.updated_at
              FROM archives a
              JOIN archive_tags at ON at.archive_id = a.id
              WHERE at.tag_id = ?
@@ -245,8 +249,9 @@ impl Database {
                     page_count: row.get(4)?,
                     cover_image: row.get(5)?,
                     file_size: row.get(6)?,
-                    created_at: row.get(7)?,
-                    updated_at: row.get(8)?,
+                    thumbnail_path: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
                 })
             })?
             .filter_map(log_and_skip)
@@ -284,6 +289,61 @@ impl Database {
 
     pub fn delete_archive(&self, id: i64) -> Result<usize> {
         self.conn.execute("DELETE FROM archives WHERE id = ?", [id])
+    }
+
+    // Thumbnail cache operations
+    const MAX_CACHED_ARCHIVES: i64 = 20;
+
+    pub fn set_thumbnail_path(&self, archive_id: i64, thumb_path: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE archives SET thumbnail_path = ? WHERE id = ?",
+            (thumb_path, archive_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn get_cached_archive_ids(&self) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.id FROM archives a
+             WHERE a.thumbnail_path IS NOT NULL
+             ORDER BY COALESCE(
+                 (SELECT h.updated_at FROM history h WHERE h.archive_id = a.id),
+                 a.updated_at
+             ) DESC",
+        )?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .filter_map(log_and_skip)
+            .collect();
+        Ok(ids)
+    }
+
+    pub fn evict_old_thumbnails(&self) -> Result<Vec<(i64, String)>> {
+        let cached_ids = self.get_cached_archive_ids()?;
+        if cached_ids.len() as i64 <= Self::MAX_CACHED_ARCHIVES {
+            return Ok(vec![]);
+        }
+
+        // 要淘汰的：超出限制的最旧条目
+        let to_evict = &cached_ids[Self::MAX_CACHED_ARCHIVES as usize..];
+        let mut evicted = Vec::new();
+
+        for &id in to_evict {
+            let thumb_path: Option<String> = self.conn.query_row(
+                "SELECT thumbnail_path FROM archives WHERE id = ?",
+                [id],
+                |row| row.get(0),
+            )?;
+            if let Some(path) = thumb_path {
+                self.conn.execute(
+                    "UPDATE archives SET thumbnail_path = NULL WHERE id = ?",
+                    [id],
+                )?;
+                evicted.push((id, path));
+            }
+        }
+
+        Ok(evicted)
     }
 
     // Tag operations
