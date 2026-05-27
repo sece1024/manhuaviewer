@@ -246,7 +246,21 @@ pub async fn get_page_thumb(
     };
 
     let cache_key = format!("{}_{}", id, page_index);
+    let cache_path = cache_dir.join(format!("{}.jpg", cache_key));
 
+    // 先检查缓存，命中则直接返回，不做任何压缩包 I/O
+    if cache_path.exists() {
+        match std::fs::read(&cache_path) {
+            Ok(data) => {
+                return (StatusCode::OK, [("Content-Type", "image/jpeg")], data).into_response();
+            }
+            Err(e) => {
+                tracing::warn!("Failed to read thumbnail cache: {}", e);
+            }
+        }
+    }
+
+    // 缓存未命中，才打开压缩包提取页面并生成缩略图
     let result = tokio::task::spawn_blocking(move || {
         let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
         let pages = reader.list_pages()?;
