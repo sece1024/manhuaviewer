@@ -12,6 +12,7 @@ export default function Reader() {
   const [archive, setArchive] = useState(null);
   const [pages, setPages] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const currentIndexRef = useRef(0);
   const [doublePage, setDoublePage] = useState(false);
   const [longImage, setLongImage] = useState(false);
   const [scale, setScale] = useState(1);
@@ -59,6 +60,7 @@ export default function Reader() {
         setArchive(data.archive);
         setPages(data.pages);
         if (data.read_page > 0 && data.read_page < data.pages.length) {
+          currentIndexRef.current = data.read_page;
           setCurrentIndex(data.read_page);
         }
       } catch (e) {
@@ -174,6 +176,7 @@ export default function Reader() {
   // 翻页
   const goPage = useCallback((newIndex) => {
     if (newIndex < 0 || newIndex >= pages.length) return;
+    currentIndexRef.current = newIndex;
     setCurrentIndex(newIndex);
     setScale(1);
     setTranslate({ x: 0, y: 0 });
@@ -184,14 +187,14 @@ export default function Reader() {
   const goPrev = useCallback(() => {
     const step = doublePage ? 2 : 1;
     const dir = pageDirection === 'rtl' ? 1 : -1;
-    goPage(currentIndex - step * dir);
-  }, [currentIndex, doublePage, pageDirection, goPage]);
+    goPage(currentIndexRef.current - step * dir);
+  }, [doublePage, pageDirection, goPage]);
 
   const goNext = useCallback(() => {
     const step = doublePage ? 2 : 1;
     const dir = pageDirection === 'rtl' ? 1 : -1;
-    goPage(currentIndex + step * dir);
-  }, [currentIndex, doublePage, pageDirection, goPage]);
+    goPage(currentIndexRef.current + step * dir);
+  }, [doublePage, pageDirection, goPage]);
 
   // 快捷键（通过自定义 hook 管理，减少组件依赖数量）
   useReaderKeyboard({
