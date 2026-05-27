@@ -53,6 +53,11 @@ export default function Reader() {
   // 加载数据
   useEffect(() => {
     let cancelled = false;
+    // 重置状态，防止 save effect 用旧数据保存到新 archiveId
+    setArchive(null);
+    setPages([]);
+    setCurrentIndex(0);
+    currentIndexRef.current = 0;
     async function load() {
       try {
         const data = await api.getPages(archiveId);
@@ -69,7 +74,7 @@ export default function Reader() {
     }
     load();
     return () => { cancelled = true; };
-  }, [archiveId, toast]);
+  }, [archiveId]);
 
   // 组件卸载时清理所有定时器
   useEffect(() => {
@@ -79,14 +84,26 @@ export default function Reader() {
     };
   }, []);
 
-  // 保存进度（防抖）
+  // 保存进度（防抖 + 卸载时立即保存）
+  const saveParamsRef = useRef({ archiveId: null, currentIndex: 0, pagesLength: 0 });
+  useEffect(() => {
+    saveParamsRef.current = { archiveId, currentIndex, pagesLength: pages.length };
+  }, [archiveId, currentIndex, pages.length]);
+
   useEffect(() => {
     if (!archive || pages.length === 0) return;
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       api.saveHistory(parseInt(archiveId), currentIndex, pages.length).catch(() => {});
     }, 1000);
-    return () => clearTimeout(saveTimerRef.current);
+    return () => {
+      clearTimeout(saveTimerRef.current);
+      // 卸载或 archiveId 变化时立即保存当前进度
+      const { archiveId: aid, currentIndex: ci, pagesLength: pl } = saveParamsRef.current;
+      if (aid && pl > 0) {
+        api.saveHistory(parseInt(aid), ci, pl).catch(() => {});
+      }
+    };
   }, [currentIndex, archive, pages.length, archiveId]);
 
   // 预加载图片（持久化引用防止 GC）
