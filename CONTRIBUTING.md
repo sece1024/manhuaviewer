@@ -26,9 +26,8 @@ pnpm tauri dev        # 启动 Tauri 开发模式（热重载）
 
 | 目录 | 说明 |
 |------|------|
-| `src-tauri/` | Tauri + Rust 后端（Axum + rusqlite）— 主要后端 |
+| `src-tauri/` | Tauri + Rust 后端（Axum + rusqlite） |
 | `frontend/` | React 19 前端（CRA） |
-| `backend/` | Legacy Node.js 后端（Express + better-sqlite3）— 仅用于 Web 模式 |
 
 ## 开发命令
 
@@ -65,7 +64,6 @@ chore: 移除 Electron 相关代码
 | Job | 内容 |
 |-----|------|
 | **frontend** | `pnpm build`（编译 + ESLint） |
-| **backend** | Jest 单元测试 |
 | **rust** | `cargo fmt --check` + `cargo clippy -D warnings` + `cargo test` |
 
 请在提交前确保本地通过这些检查。
@@ -134,7 +132,7 @@ git push origin main --tags
 
 ### 发布流程
 
-1. 推送标签后，GitHub Actions 自动在 4 个平台并行构建
+1. 推送标签后，GitHub Actions 自动在多个平台并行构建
 2. 构建完成后创建 **草稿 Release**，所有安装包作为 Release Assets 上传
 3. 前往 [GitHub Releases](https://github.com/sece1024/manhuaviewer/releases) 页面检查产物
 4. 确认无误后，点击 **Publish release** 正式发布

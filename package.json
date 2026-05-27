@@ -3,7 +3,6 @@
   "version": "3.2.1",
   "description": "MangaViewer — 漫画阅读管理系统",
   "scripts": {
-    "start": "pnpm --filter manhuaviewer-backend start & pnpm --filter manhuaviewer-frontend start",
     "build": "pnpm --filter manhuaviewer-frontend build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

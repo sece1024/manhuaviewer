@@ -31,31 +31,9 @@
 git clone https://github.com/sece1024/manhuaviewer.git
 cd manhuaviewer
 pnpm install
-```
-
-#### Tauri 桌面应用（推荐）
-
-```bash
 pnpm tauri dev                 # 开发模式（热重载）
 pnpm tauri build               # 生产构建
 ```
-
-#### Web 模式（Legacy Node.js 后端，可选）
-
-```bash
-pnpm start                     # 启动前后端
-```
-
-浏览器打开 http://localhost:3000 即可使用。
-
-### 生产部署（Web 模式，可选）
-
-```bash
-pnpm run build
-cd backend && pnpm start
-```
-
-访问 http://localhost:5002 即可。
 
 ## 📁 支持格式
 
@@ -92,28 +70,7 @@ src-tauri/                          # Tauri + Rust 后端
     ├── main.rs                     # 入口（Axum 服务）
     ├── db/                         # rusqlite 封装
     ├── routes/                     # Axum 路由
-    ├── services/                   # 业务逻辑（CBZ 打包等）
-    ├── models/                     # 数据模型
-    └── utils/                      # 工具函数
-
-backend/                            # Legacy Node.js 后端（仅 Web 模式）
-├── src/
-│   ├── index.js                    # 入口（Express 服务）
-│   ├── config/logger.js            # 日志配置
-│   ├── db/database.js              # SQLite 数据库 schema + 初始化
-│   ├── middleware/errorHandler.js   # 错误处理中间件
-│   ├── services/
-│   │   ├── archiveService.js       # 压缩包解压服务（ZIP/RAR）
-│   │   └── scanService.js          # 目录扫描服务
-│   └── routes/
-│       ├── api.js                  # 路由聚合
-│       ├── archiveRoutes.js        # 档案 CRUD + 图片服务
-│       ├── categoryRoutes.js       # 分类 CRUD
-│       ├── historyRoutes.js        # 阅读历史
-│       ├── settingsRoutes.js       # 设置 + 统计
-│       └── tagRoutes.js            # 命名空间标签 CRUD
-├── package.json
-└── data/                           # SQLite 数据库 + 缩略图缓存（运行时生成）
+    └── services/                   # 业务逻辑（解压、缩略图等）
 
 frontend/
 ├── src/

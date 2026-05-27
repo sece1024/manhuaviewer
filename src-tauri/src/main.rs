@@ -2,10 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod db;
-mod models;
 mod routes;
 mod services;
-mod utils;
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
