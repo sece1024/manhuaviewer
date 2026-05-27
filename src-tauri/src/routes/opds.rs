@@ -329,40 +329,19 @@ pub async fn tag_archives(
 ) -> Html<String> {
     let db = state.db.lock().await;
 
-    // Get all archives with this tag
-    match db.list_archives(None, "updated", "desc", 100, 0) {
-        Ok((archives, _)) => {
-            // Filter archives that have the specified tag
-            let conn = db.get_conn();
-            let mut archive_ids = std::collections::HashSet::new();
+    // Get archives with this tag using a single JOIN query
+    let tag_name = match db.get_conn().query_row("SELECT name FROM tags WHERE id = ?", [tag_id], |row| {
+        row.get::<_, String>(0)
+    }) {
+        Ok(name) => name,
+        Err(_) => "Unknown".to_string(),
+    };
 
-            let mut stmt = match conn.prepare("SELECT archive_id FROM archive_tags WHERE tag_id = ?") {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!("Failed to prepare tag archives query: {}", e);
-                    return Html(opds_error_xml("Database error"));
-                }
-            };
-
-            let ids = match stmt.query_map([tag_id], |row| row.get::<_, i64>(0)) {
-                Ok(ids) => ids,
-                Err(e) => {
-                    tracing::error!("Failed to query tag archives: {}", e);
-                    return Html(opds_error_xml("Database error"));
-                }
-            };
-            for id in ids.flatten() {
-                archive_ids.insert(id);
-            }
-
-            let filtered_archives: Vec<_> = archives
-                .into_iter()
-                .filter(|a| archive_ids.contains(&a.id))
-                .collect();
-
+    match db.list_archives_by_tag(tag_id, 100, 0) {
+        Ok(archives) => {
             let mut entries = String::new();
 
-            for archive in filtered_archives {
+            for archive in archives {
                 entries.push_str(&format!(r#"
   <entry>
     <title>{}</title>
@@ -379,13 +358,6 @@ pub async fn tag_archives(
                     xml_escape(&archive.archive_type)
                 ));
             }
-
-            // Get tag name
-            let tag_name = conn
-                .query_row("SELECT name FROM tags WHERE id = ?", [tag_id], |row| {
-                    row.get::<_, String>(0)
-                })
-                .unwrap_or_else(|_| "Unknown".to_string());
 
             Html(format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -404,14 +376,10 @@ pub async fn tag_archives(
                 entries
             ))
         }
-        Err(_) => Html(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
-  <id>manhuaviewer-error</id>
-  <title>Error loading archives</title>
-</feed>"#
-                .to_string(),
-        ),
+        Err(e) => {
+            tracing::error!("Failed to list archives for tag {}: {}", tag_id, e);
+            Html(opds_error_xml("Database error"))
+        }
     }
 }
 

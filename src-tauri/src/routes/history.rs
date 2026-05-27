@@ -24,11 +24,14 @@ pub async fn get_history(State(state): State<Arc<AppState>>) -> Response {
 
     match db.get_history() {
         Ok(history) => {
+            // Batch fetch tags for all archives in one query
+            let archive_ids: Vec<i64> = history.iter().map(|(h, _, _, _)| h.archive_id).collect();
+            let tags_map = db.get_archive_tags_batch(&archive_ids).unwrap_or_default();
+
             let data: Vec<serde_json::Value> = history
                 .into_iter()
                 .map(|(h, title, path, archive_type)| {
-                    // Get tags for this archive
-                    let tags = db.get_archive_tags(h.archive_id).unwrap_or_default();
+                    let tags = tags_map.get(&h.archive_id).map(|v| v.as_slice()).unwrap_or(&[]);
                     let tags_json: Vec<serde_json::Value> = tags
                         .iter()
                         .map(|t| {

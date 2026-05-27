@@ -209,6 +209,41 @@ impl Database {
         Ok((archives, total))
     }
 
+    pub fn list_archives_by_tag(
+        &self,
+        tag_id: i64,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ArchiveRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.created_at, a.updated_at
+             FROM archives a
+             JOIN archive_tags at ON at.archive_id = a.id
+             WHERE at.tag_id = ?
+             ORDER BY a.updated_at DESC
+             LIMIT ? OFFSET ?",
+        )?;
+
+        let archives = stmt
+            .query_map(rusqlite::params![tag_id, limit, offset], |row| {
+                Ok(ArchiveRow {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    path: row.get(2)?,
+                    archive_type: row.get(3)?,
+                    page_count: row.get(4)?,
+                    cover_image: row.get(5)?,
+                    file_size: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(archives)
+    }
+
     pub fn insert_archive(
         &self,
         title: &str,
@@ -318,6 +353,48 @@ impl Database {
             .collect();
 
         Ok(tags)
+    }
+
+    pub fn get_archive_tags_batch(&self, archive_ids: &[i64]) -> Result<std::collections::HashMap<i64, Vec<TagRow>>> {
+        if archive_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let placeholders: String = archive_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT at.archive_id, t.id, t.namespace, t.name, t.color
+             FROM tags t
+             JOIN archive_tags at ON at.tag_id = t.id
+             WHERE at.archive_id IN ({})
+             ORDER BY at.archive_id, t.namespace, t.name",
+            placeholders
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<Box<dyn rusqlite::types::ToSql>> = archive_ids
+            .iter()
+            .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+        let mut map: std::collections::HashMap<i64, Vec<TagRow>> = std::collections::HashMap::new();
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                TagRow {
+                    id: row.get(1)?,
+                    namespace: row.get(2)?,
+                    name: row.get(3)?,
+                    color: row.get(4)?,
+                },
+            ))
+        })?;
+
+        for row in rows.flatten() {
+            map.entry(row.0).or_default().push(row.1);
+        }
+
+        Ok(map)
     }
 
     // Category operations
