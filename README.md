@@ -40,7 +40,7 @@ pnpm tauri dev                 # 开发模式（热重载）
 pnpm tauri build               # 生产构建
 ```
 
-#### Web 模式（Legacy Node.js 后端）
+#### Web 模式（Legacy Node.js 后端，可选）
 
 ```bash
 pnpm start                     # 启动前后端
@@ -48,7 +48,7 @@ pnpm start                     # 启动前后端
 
 浏览器打开 http://localhost:3000 即可使用。
 
-### 生产部署（Web 模式）
+### 生产部署（Web 模式，可选）
 
 ```bash
 pnpm run build
@@ -96,7 +96,7 @@ src-tauri/                          # Tauri + Rust 后端
     ├── models/                     # 数据模型
     └── utils/                      # 工具函数
 
-backend/                            # Legacy Node.js 后端
+backend/                            # Legacy Node.js 后端（仅 Web 模式）
 ├── src/
 │   ├── index.js                    # 入口（Express 服务）
 │   ├── config/logger.js            # 日志配置
@@ -117,17 +117,25 @@ backend/                            # Legacy Node.js 后端
 
 frontend/
 ├── src/
-│   ├── App.js                      # 路由 + 主题
+│   ├── App.js                      # 路由 + 主题 + ErrorBoundary
 │   ├── index.js                    # 入口
 │   ├── index.css                   # 全局样式（三套主题/响应式）
-│   ├── components/Toast.js         # 通知组件
-│   ├── hooks/useReaderKeyboard.js  # 阅读器快捷键 hook
+│   ├── components/
+│   │   ├── ErrorBoundary.js        # 错误边界组件
+│   │   ├── LazyImage.js            # 懒加载图片组件
+│   │   └── Toast.js                # 通知组件
+│   ├── hooks/
+│   │   ├── useReaderKeyboard.js    # 阅读器快捷键 hook
+│   │   └── useSettings.js          # 全局设置 hook（Context）
 │   ├── pages/
 │   │   ├── Library.js              # 漫画库（封面卡片/列表/过滤）
 │   │   ├── Reader.js               # 阅读器（RTL/适应模式/overlay）
 │   │   ├── History.js              # 阅读历史
 │   │   └── Settings.js             # 设置页面（标签/分类管理+统计）
-│   └── utils/api.js                # API 客户端
+│   ├── utils/
+│   │   ├── api.js                  # API 客户端
+│   │   └── format.js               # 格式化工具函数
+│   └── __tests__/                  # 测试文件
 └── package.json
 ```
 

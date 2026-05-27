@@ -26,9 +26,9 @@ pnpm tauri dev        # 启动 Tauri 开发模式（热重载）
 
 | 目录 | 说明 |
 |------|------|
-| `src-tauri/` | Tauri + Rust 后端（Axum + rusqlite） |
+| `src-tauri/` | Tauri + Rust 后端（Axum + rusqlite）— 主要后端 |
 | `frontend/` | React 19 前端（CRA） |
-| `backend/` | Legacy Node.js 后端（Express + better-sqlite3） |
+| `backend/` | Legacy Node.js 后端（Express + better-sqlite3）— 仅用于 Web 模式 |
 
 ## 开发命令
 
@@ -37,11 +37,7 @@ pnpm tauri dev        # 启动 Tauri 开发模式（热重载）
 pnpm tauri dev                     # 开发模式
 pnpm tauri build                   # 本地生产构建
 
-# Web 模式（Legacy Node.js 后端）
-pnpm start                         # 同时启动前后端
-
-# 测试
-cd backend && pnpm test            # Node.js 后端测试
+# 前端测试
 cd frontend && pnpm test           # React 前端测试
 cd src-tauri && cargo test         # Rust 后端测试
 
@@ -147,7 +143,7 @@ git push origin main --tags
 
 - 发布前务必同步三处版本号（`tauri.conf.json`、`Cargo.toml`、`package.json`）
 - Release 默认为草稿状态，需要手动确认发布
-- 构建使用 [tauri-apps/tauri-action@v1](https://github.com/nicegui-org/tauri-action)，配置详见 `release.yml`
+- 构建使用 [tauri-apps/tauri-action@v0](https://github.com/nicegui-org/tauri-action)，配置详见 `release.yml`
 - macOS 构建暂不包含代码签名，用户首次打开需在"系统设置 > 隐私与安全性"中允许
 
 ## 问题反馈

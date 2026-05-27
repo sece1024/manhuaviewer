@@ -3,32 +3,21 @@
 ## Commands
 
 ```bash
-# Start both (root): frontend :3000 proxies to backend :5002
-pnpm start
+# Tauri desktop app (primary)
+pnpm tauri dev                 # development mode with hot-reload
+pnpm tauri build               # production build for current platform
 
-# Backend (Legacy Node.js)
-pnpm --filter manhuaviewer-backend start
-cd backend && pnpm run dev     # nodemon (auto-reload)
-cd backend && pnpm test        # Jest — tests in backend/tests/**/*.test.js
-
-# Frontend
+# Frontend only (CRA dev server, proxied to :5002)
 pnpm --filter manhuaviewer-frontend start
-cd frontend && pnpm start      # CRA dev server
 cd frontend && pnpm test       # React Testing Library — tests in frontend/src/__tests__/
 
 # Production build (backend serves frontend/build/)
 pnpm run build
-
-# Tauri (cross-platform app)
-pnpm tauri dev                 # development mode with hot-reload
-pnpm tauri build               # production build for current platform
-pnpm tauri ios build           # iOS build (requires macOS + Xcode)
-pnpm tauri android build       # Android build
 ```
 
 ## Architecture
 
-### Tauri 2.0
+### Tauri 2.0 (Primary)
 - **Backend**: Rust + Axum (native performance)
 - **Frontend**: React 19 + React Router v7 (CRA)
 - **Tauri**: `src-tauri/` contains Rust backend and configuration
@@ -36,18 +25,19 @@ pnpm tauri android build       # Android build
 - **Platforms**: macOS, Windows, Linux, iOS, Android
 - **Two archive types**: `folder` (read directory at request time) vs compressed (page list in DB, extract on demand)
 
-### Legacy Node.js Backend
-- **Backend**: Express + better-sqlite3 (sync API — never `await` DB calls)
-- **Database**: SQLite at `backend/data/` (dev)
+### Legacy Node.js Backend (Optional)
+- Express + better-sqlite3 (sync API — never `await` DB calls)
+- Only used for `pnpm start` web mode; not required for Tauri builds
+- Commands: `pnpm --filter manhuaviewer-backend start`, `cd backend && pnpm test`
 
 ## Key Conventions
 
 ### General
 - **pnpm workspace**: root `package.json` scripts use `pnpm --filter` to run backend/frontend. Do NOT use `cd backend && npm start` — it won't find dependencies.
 - All frontend API calls go through `frontend/src/utils/api.js` — never fetch directly
-- Settings are key-value rows in `settings` table; defaults set in database initialization
-- Theme is client-side only (`localStorage` → `data-theme` attribute on `<html>`)
-- OPDS routes mount at `/` (not `/api`) — must not conflict with static middleware
+- Settings are key-value rows in `settings` table; unified via `useSettings` hook (server is single source of truth)
+- Theme is the only client-side setting (`localStorage` → `data-theme` attribute on `<html>`)
+- OPDS routes mount at `/opds` (not `/api`) — must not conflict with static middleware
 - Frontend proxy in dev: `frontend/package.json` → `"proxy": "http://localhost:5002"`
 
 ### Tauri Specific
@@ -65,18 +55,14 @@ pnpm tauri android build       # Android build
 2. Register route in `src-tauri/src/routes/mod.rs` using `Router::new().route()`
 3. Add methods to `frontend/src/utils/api.js`
 
-### Node.js (Legacy)
-1. Create `backend/src/routes/newRoutes.js`
-2. `require` and `router.use('/', newRoutes)` in `routes/api.js`
-3. Add methods to `frontend/src/utils/api.js`
-
 ## Gotchas
 
-- `backend/data/` is runtime-generated (DB + thumbnails) — not committed
 - Tauri data dir: `~/Library/Application Support/MangaViewer/data/` on macOS
+- `backend/data/` is runtime-generated (DB + thumbnails) for legacy mode — not committed
 - Auto-scan timer restarts on settings change
 - Search uses custom DSL server-side: `keyword`, `tag:name`, `-exclusion`
-- Legacy migration logic handles v1→v2 schema upgrades; Tauri includes same logic in Rust
 - `pnpm install` requires approval for native builds — if you see `ERR_PNPM_IGNORED_BUILDS`, add the package to `allowBuilds` in `pnpm-workspace.yaml`
 - Tauri uses system WebView — test across platforms for compatibility
 - RAR support may require system `unrar` binary as fallback
+- Blocking I/O (archive extraction, thumbnail gen) must use `spawn_blocking` to avoid starving the tokio runtime
+- Temporary files for RAR/7z extraction use `tempfile::tempdir()` to prevent race conditions
