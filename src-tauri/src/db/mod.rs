@@ -373,12 +373,19 @@ impl Database {
         Ok(tags)
     }
 
-    pub fn get_archive_tags_batch(&self, archive_ids: &[i64]) -> Result<std::collections::HashMap<i64, Vec<TagRow>>> {
+    pub fn get_archive_tags_batch(
+        &self,
+        archive_ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, Vec<TagRow>>> {
         if archive_ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
 
-        let placeholders: String = archive_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let placeholders: String = archive_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "SELECT at.archive_id, t.id, t.namespace, t.name, t.color
              FROM tags t
@@ -393,7 +400,8 @@ impl Database {
             .iter()
             .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
             .collect();
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
 
         let mut map: std::collections::HashMap<i64, Vec<TagRow>> = std::collections::HashMap::new();
         let rows = stmt.query_map(param_refs.as_slice(), |row| {

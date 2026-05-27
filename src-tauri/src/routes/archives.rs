@@ -118,7 +118,8 @@ pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>)
         let db = state.db.lock().await;
         match db.get_archive(id) {
             Ok(Some(a)) => {
-                let read_page = db.get_history_for_archive(id)
+                let read_page = db
+                    .get_history_for_archive(id)
                     .map(|h| h.map(|h| h.page_index).unwrap_or(0))
                     .unwrap_or(0);
                 (a, read_page)
@@ -139,22 +140,26 @@ pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>)
 
     match result {
         Ok(Ok(pages)) => {
-            let page_list: Vec<serde_json::Value> = pages.iter().enumerate().map(|(i, p)| {
-                let filename = std::path::Path::new(p)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                serde_json::json!({
-                    "id": i,
-                    "archive_id": id,
-                    "filename": filename,
-                    "filepath": p,
-                    "sort_order": i,
-                    "url": format!("/api/archives/{}/pages/{}", id, i),
-                    "thumb_url": format!("/api/archives/{}/pages/{}/thumb", id, i),
+            let page_list: Vec<serde_json::Value> = pages
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let filename = std::path::Path::new(p)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    serde_json::json!({
+                        "id": i,
+                        "archive_id": id,
+                        "filename": filename,
+                        "filepath": p,
+                        "sort_order": i,
+                        "url": format!("/api/archives/{}/pages/{}", id, i),
+                        "thumb_url": format!("/api/archives/{}/pages/{}/thumb", id, i),
+                    })
                 })
-            }).collect();
+                .collect();
 
             Json(serde_json::json!({
                 "archive": archive,
@@ -319,11 +324,13 @@ pub async fn open_file(
             .map(|m| m.len() as i64)
             .unwrap_or(0);
 
-        let page_count =
-            match crate::services::archive::create_archive_reader(&file_path, &archive_type_clone) {
-                Ok(reader) => reader.list_pages().map(|p| p.len() as i64).unwrap_or(0),
-                Err(_) => 0,
-            };
+        let page_count = match crate::services::archive::create_archive_reader(
+            &file_path,
+            &archive_type_clone,
+        ) {
+            Ok(reader) => reader.list_pages().map(|p| p.len() as i64).unwrap_or(0),
+            Err(_) => 0,
+        };
 
         Ok((title, file_size, page_count))
     })
@@ -341,7 +348,13 @@ pub async fn open_file(
             }
 
             let db = state.db.lock().await;
-            match db.insert_archive(&title, &payload.file_path, &archive_type, page_count, file_size) {
+            match db.insert_archive(
+                &title,
+                &payload.file_path,
+                &archive_type,
+                page_count,
+                file_size,
+            ) {
                 Ok(id) => Json(serde_json::json!({
                     "id": id,
                     "title": title,
@@ -419,7 +432,13 @@ pub async fn scan(
                 Err(_) => 0,
             };
 
-            archive_infos.push((title, archive_path.clone(), archive_type, page_count, file_size));
+            archive_infos.push((
+                title,
+                archive_path.clone(),
+                archive_type,
+                page_count,
+                file_size,
+            ));
         }
 
         Ok::<_, anyhow::Error>(archive_infos)

@@ -10,8 +10,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
-    Json,
-    Router,
+    Json, Router,
 };
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;

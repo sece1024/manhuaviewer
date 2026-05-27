@@ -43,7 +43,9 @@ async fn main() {
 
     // Initialize database
     let db_path = data_dir.join("manhuaviewer.db");
-    let db_path_str = db_path.to_str().expect("Database path contains invalid UTF-8");
+    let db_path_str = db_path
+        .to_str()
+        .expect("Database path contains invalid UTF-8");
     let database = db::Database::new(db_path_str).expect("Failed to open database");
     database.init().expect("Failed to initialize database");
 

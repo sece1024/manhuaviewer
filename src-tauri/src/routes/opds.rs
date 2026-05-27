@@ -330,12 +330,15 @@ pub async fn tag_archives(
     let db = state.db.lock().await;
 
     // Get archives with this tag using a single JOIN query
-    let tag_name = match db.get_conn().query_row("SELECT name FROM tags WHERE id = ?", [tag_id], |row| {
-        row.get::<_, String>(0)
-    }) {
-        Ok(name) => name,
-        Err(_) => "Unknown".to_string(),
-    };
+    let tag_name =
+        match db
+            .get_conn()
+            .query_row("SELECT name FROM tags WHERE id = ?", [tag_id], |row| {
+                row.get::<_, String>(0)
+            }) {
+            Ok(name) => name,
+            Err(_) => "Unknown".to_string(),
+        };
 
     match db.list_archives_by_tag(tag_id, 100, 0) {
         Ok(archives) => {

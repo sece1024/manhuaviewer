@@ -29,7 +29,10 @@ pub async fn get_history(State(state): State<Arc<AppState>>) -> Response {
             let data: Vec<serde_json::Value> = history
                 .into_iter()
                 .map(|(h, title, path, archive_type)| {
-                    let tags = tags_map.get(&h.archive_id).map(|v| v.as_slice()).unwrap_or(&[]);
+                    let tags = tags_map
+                        .get(&h.archive_id)
+                        .map(|v| v.as_slice())
+                        .unwrap_or(&[]);
                     let tags_json: Vec<serde_json::Value> = tags
                         .iter()
                         .map(|t| {

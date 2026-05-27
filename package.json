@@ -7,7 +7,10 @@
     "build": "pnpm --filter manhuaviewer-frontend build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "lint": "cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings",
+    "format:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --check",
+    "format": "cargo fmt --manifest-path src-tauri/Cargo.toml"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.2"
