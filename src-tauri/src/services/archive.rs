@@ -162,35 +162,31 @@ impl ArchiveReader for RarArchive {
     }
 
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>> {
-        let temp_dir = std::env::temp_dir().join("manhuaviewer_rar");
-        std::fs::create_dir_all(&temp_dir)?;
+        let temp_dir = tempfile::tempdir()?;
 
         let output = std::process::Command::new("unrar")
             .args([
                 "x",
                 &self.path,
                 page_name,
-                &temp_dir.to_string_lossy(),
+                &temp_dir.path().to_string_lossy(),
                 "-o+",
             ])
             .output()?;
 
         if !output.status.success() {
-            std::fs::remove_dir_all(&temp_dir)?;
             anyhow::bail!(
                 "Failed to extract: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
         }
 
-        let extracted_path = temp_dir.join(page_name);
+        let extracted_path = temp_dir.path().join(page_name);
         if extracted_path.exists() {
             let buffer = std::fs::read(&extracted_path)?;
-            std::fs::remove_dir_all(&temp_dir)?;
             return Ok(buffer);
         }
 
-        std::fs::remove_dir_all(&temp_dir)?;
         anyhow::bail!("File not found after extraction: {}", page_name)
     }
 
@@ -251,35 +247,31 @@ impl ArchiveReader for SevenZArchive {
     }
 
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>> {
-        let temp_dir = std::env::temp_dir().join("manhuaviewer_7z");
-        std::fs::create_dir_all(&temp_dir)?;
+        let temp_dir = tempfile::tempdir()?;
 
         let output = std::process::Command::new("7z")
             .args([
                 "x",
                 &self.path,
-                &format!("-o{}", temp_dir.to_string_lossy()),
+                &format!("-o{}", temp_dir.path().to_string_lossy()),
                 page_name,
                 "-y",
             ])
             .output()?;
 
         if !output.status.success() {
-            std::fs::remove_dir_all(&temp_dir)?;
             anyhow::bail!(
                 "Failed to extract: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
         }
 
-        let extracted_path = temp_dir.join(page_name);
+        let extracted_path = temp_dir.path().join(page_name);
         if extracted_path.exists() {
             let buffer = std::fs::read(&extracted_path)?;
-            std::fs::remove_dir_all(&temp_dir)?;
             return Ok(buffer);
         }
 
-        std::fs::remove_dir_all(&temp_dir)?;
         anyhow::bail!("File not found after extraction: {}", page_name)
     }
 
