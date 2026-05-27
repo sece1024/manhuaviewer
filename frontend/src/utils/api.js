@@ -8,13 +8,16 @@ function fixUrl(url) {
   if (!API_ORIGIN || !url || !url.startsWith('/')) return url;
   return `${API_ORIGIN}${url}`;
 }
-const MAX_RETRIES = 10;
-const RETRY_DELAY = 1000; // 1 second
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 500; // 500ms base delay
 
 async function request(url, options = {}) {
+  const method = (options.method || 'GET').toUpperCase();
+  const isIdempotent = method === 'GET';
+  const maxAttempts = isIdempotent ? MAX_RETRIES : 1;
   let lastError;
   
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const res = await fetch(`${BASE}${url}`, {
         headers: { 'Content-Type': 'application/json' },
@@ -28,17 +31,15 @@ async function request(url, options = {}) {
     } catch (err) {
       lastError = err;
       
-      // Only retry on connection errors
-      if (err.message.includes('Failed to fetch') || 
-          err.message.includes('ECONNREFUSED') ||
-          err.message.includes('NetworkError')) {
-        if (attempt < MAX_RETRIES - 1) {
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
-          continue;
-        }
+      // Only retry on connection errors for idempotent requests
+      if (isIdempotent && attempt < maxAttempts - 1 &&
+          (err.message.includes('Failed to fetch') || 
+           err.message.includes('ECONNREFUSED') ||
+           err.message.includes('NetworkError'))) {
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (attempt + 1)));
+        continue;
       }
       
-      // Don't retry for other errors
       throw err;
     }
   }
