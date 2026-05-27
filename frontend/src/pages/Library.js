@@ -3,20 +3,22 @@ import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 import { formatSize } from '../utils/format';
 import { useToast } from '../components/Toast';
+import useSettings from '../hooks/useSettings';
 import LazyImage from '../components/LazyImage';
 
 // 检测是否在 Tauri 环境中
 const isTauri = window.__TAURI__ !== undefined;
 
 export default function Library() {
+  const { settings, updateSetting } = useSettings();
   const [archives, setArchives] = useState([]);
   const [rootDir, setRootDir] = useState('');
   const [editingRoot, setEditingRoot] = useState(false);
   const [tempRoot, setTempRoot] = useState('');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
-  const [viewMode, setViewMode] = useState(() => localStorage.getItem('viewMode') || 'grid');
-  const [sortBy, setSortBy] = useState('updated');
+  const [viewMode, setViewMode] = useState(() => settings.view_mode || 'grid');
+  const [sortBy, setSortBy] = useState(() => settings.sort_by || 'updated');
   const [tags, setTags] = useState([]);
   const [selectedTag, setSelectedTag] = useState('');
   const [showSidebar, setShowSidebar] = useState(true);
@@ -90,7 +92,7 @@ export default function Library() {
 
   const handleViewMode = (mode) => {
     setViewMode(mode);
-    localStorage.setItem('viewMode', mode);
+    updateSetting('view_mode', mode);
   };
 
   const handleTagFilter = (tagName) => {

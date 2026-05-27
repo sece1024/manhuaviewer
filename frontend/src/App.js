@@ -5,6 +5,7 @@ import Reader from './pages/Reader';
 import History from './pages/History';
 import Settings from './pages/Settings';
 import { ToastProvider } from './components/Toast';
+import { SettingsProvider } from './hooks/useSettings';
 import ErrorBoundary from './components/ErrorBoundary';
 
 function AppContent() {
@@ -67,9 +68,11 @@ function App() {
   return (
     <ErrorBoundary>
       <ToastProvider>
-        <Router>
-          <AppContent />
-        </Router>
+        <SettingsProvider>
+          <Router>
+            <AppContent />
+          </Router>
+        </SettingsProvider>
       </ToastProvider>
     </ErrorBoundary>
   );

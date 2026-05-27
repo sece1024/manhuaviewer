@@ -22,6 +22,7 @@ export default function useReaderKeyboard({
   setLongImage,
   setRotation,
   setFitMode,
+  onFitModeChange,
   showOverlay,
   containerRef,
   doublePageDisabled,
@@ -58,7 +59,7 @@ export default function useReaderKeyboard({
       case 'w': case 'W':
         setFitMode(m => {
           const next = m === 'height' ? 'width' : m === 'width' ? 'original' : 'height';
-          localStorage.setItem('readerFit', next);
+          if (onFitModeChange) onFitModeChange(next);
           showOverlay(`适应: ${next === 'height' ? '高度' : next === 'width' ? '宽度' : '原始'}`);
           return next;
         });
@@ -83,7 +84,7 @@ export default function useReaderKeyboard({
   }, [
     goPrev, goNext, goPage, pagesLength, longImage, doublePage, doublePageDisabled,
     showThumbnails, showJump, showMenu, showHelp,
-    setDoublePage, setLongImage, setRotation, setFitMode, showOverlay, containerRef,
+    setDoublePage, setLongImage, setRotation, setFitMode, onFitModeChange, showOverlay, containerRef,
   ]);
 
   useEffect(() => {

@@ -2,12 +2,14 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 import { useToast } from '../components/Toast';
+import useSettings from '../hooks/useSettings';
 import useReaderKeyboard from '../hooks/useReaderKeyboard';
 
 export default function Reader() {
   const { archiveId } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
+  const { settings, updateSetting } = useSettings();
 
   const [archive, setArchive] = useState(null);
   const [pages, setPages] = useState([]);
@@ -17,14 +19,14 @@ export default function Reader() {
   const [longImage, setLongImage] = useState(false);
   const [scale, setScale] = useState(1);
   const [rotation, setRotation] = useState(0);
-  const [fitMode, setFitMode] = useState(() => localStorage.getItem('readerFit') || 'height');
+  const [fitMode, setFitMode] = useState(() => settings.reader_fit || 'height');
   const [showThumbnails, setShowThumbnails] = useState(false);
   const [jumpPage, setJumpPage] = useState('');
   const [showJump, setShowJump] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [packing, setPacking] = useState(false);
-  const [pageDirection, setPageDirection] = useState(() => localStorage.getItem('pageDirection') || 'rtl');
+  const [pageDirection, setPageDirection] = useState(() => settings.page_direction || 'rtl');
   const [overlayText, setOverlayText] = useState('');
   const overlayTimer = useRef(null);
   const [imageLoaded, setImageLoaded] = useState(false);
@@ -222,6 +224,7 @@ export default function Reader() {
     showHelp, setShowHelp,
     showMenu, setShowMenu,
     setDoublePage, setLongImage, setRotation, setFitMode,
+    onFitModeChange: (val) => updateSetting('reader_fit', val),
     showOverlay, containerRef,
     doublePageDisabled: containerTooNarrow || longImage,
     doublePage,
@@ -432,7 +435,7 @@ export default function Reader() {
         </label>
 
         <div className="toolbar-group-secondary">
-          <select value={fitMode} onChange={(e) => { setFitMode(e.target.value); localStorage.setItem('readerFit', e.target.value); }} style={{ minWidth: 70, fontSize: 13 }}>
+          <select value={fitMode} onChange={(e) => { setFitMode(e.target.value); updateSetting('reader_fit', e.target.value); }} style={{ minWidth: 70, fontSize: 13 }}>
             <option value="height">适应高度</option>
             <option value="width">适应宽度</option>
             <option value="original">原始大小</option>
@@ -466,7 +469,7 @@ export default function Reader() {
           <button className="btn btn-secondary btn-sm" onClick={() => { setShowThumbnails(true); setShowMenu(false); }}>📋 缩略图</button>
           <button className="btn btn-secondary btn-sm" onClick={() => { setShowJump(true); setShowMenu(false); }}>🔢 跳转</button>
           <button className="btn btn-secondary btn-sm" onClick={() => { setScale(1); setTranslate({ x: 0, y: 0 }); setShowMenu(false); }}>重置缩放</button>
-          <select value={fitMode} onChange={(e) => { setFitMode(e.target.value); localStorage.setItem('readerFit', e.target.value); setShowMenu(false); }} style={{ minWidth: 80 }}>
+          <select value={fitMode} onChange={(e) => { setFitMode(e.target.value); updateSetting('reader_fit', e.target.value); setShowMenu(false); }} style={{ minWidth: 80 }}>
             <option value="height">适应高度</option>
             <option value="width">适应宽度</option>
             <option value="original">原始大小</option>
@@ -588,7 +591,7 @@ export default function Reader() {
         <button className="btn btn-secondary btn-sm" onClick={() => setRotation(r => (r + 90) % 360)}>↻</button>
         <button className="btn btn-secondary btn-sm" onClick={() => setShowThumbnails(true)}>📋</button>
         <button className="btn btn-secondary btn-sm" onClick={() => setShowJump(true)}>🔢</button>
-        <select value={fitMode} onChange={(e) => { setFitMode(e.target.value); localStorage.setItem('readerFit', e.target.value); }} style={{ minWidth: 70, height: 36 }}>
+        <select value={fitMode} onChange={(e) => { setFitMode(e.target.value); updateSetting('reader_fit', e.target.value); }} style={{ minWidth: 70, height: 36 }}>
           <option value="height">适应高度</option>
           <option value="width">适应宽度</option>
           <option value="original">原始</option>

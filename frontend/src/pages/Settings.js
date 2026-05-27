@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
 import { formatSize } from '../utils/format';
 import { useToast } from '../components/Toast';
+import useSettings from '../hooks/useSettings';
 
 export default function Settings() {
-  const [settings, setSettings] = useState({});
+  const { settings, updateSetting } = useSettings();
   const [rootDir, setRootDir] = useState('');
   const [stats, setStats] = useState(null);
   const [tags, setTags] = useState([]);
@@ -20,17 +21,15 @@ export default function Settings() {
   const isTauri = window.__TAURI__ !== undefined;
 
   useEffect(() => {
-    api.getSettings().then(setSettings).catch(() => {});
     api.getConfig().then(c => setRootDir(c.root_dir)).catch(() => {});
     api.getStats().then(setStats).catch(() => {});
     api.getTags().then(setTags).catch(() => {});
     api.getCategories().then(setCategories).catch(() => {});
   }, []);
 
-  const updateSetting = async (key, value) => {
+  const handleUpdateSetting = async (key, value) => {
     try {
-      await api.updateSettings({ [key]: value });
-      setSettings(prev => ({ ...prev, [key]: value }));
+      await updateSetting(key, value);
       toast('已保存', 'success');
     } catch (e) {
       toast(e.message, 'error');
@@ -59,7 +58,7 @@ export default function Settings() {
         title: '选择 CBZ 归档目录',
       });
       if (selected) {
-        await updateSetting('cbz_export_dir', selected);
+        await handleUpdateSetting('cbz_export_dir', selected);
       }
     } catch (e) {
       toast('选择目录失败: ' + e.message, 'error');
@@ -157,7 +156,7 @@ export default function Settings() {
             <div className="settings-row-label">扫描深度</div>
             <div className="settings-row-desc">递归扫描子目录的层数（0=仅根目录，1=默认扫描一层子目录）</div>
           </div>
-          <select value={settings.scan_depth || '1'} onChange={(e) => updateSetting('scan_depth', e.target.value)}>
+          <select value={settings.scan_depth || '1'} onChange={(e) => handleUpdateSetting('scan_depth', e.target.value)}>
             <option value="0">0 — 仅根目录</option>
             <option value="1">1 — 一层子目录</option>
             <option value="2">2 — 两层子目录</option>
@@ -195,7 +194,7 @@ export default function Settings() {
                   placeholder="CBZ 导出目录路径"
                   style={{ minWidth: 200 }}
                 />
-                <button className="btn btn-sm" onClick={() => updateSetting('cbz_export_dir', settings.cbz_export_dir || '')}>
+                <button className="btn btn-sm" onClick={() => handleUpdateSetting('cbz_export_dir', settings.cbz_export_dir || '')}>
                   保存
                 </button>
               </>
@@ -212,7 +211,7 @@ export default function Settings() {
             <div className="settings-row-label">翻页方向</div>
             <div className="settings-row-desc">日漫从右往左翻</div>
           </div>
-          <select value={settings.page_direction || 'rtl'} onChange={(e) => updateSetting('page_direction', e.target.value)}>
+          <select value={settings.page_direction || 'rtl'} onChange={(e) => handleUpdateSetting('page_direction', e.target.value)}>
             <option value="rtl">从右到左 (日漫)</option>
             <option value="ltr">从左到右</option>
           </select>
@@ -221,7 +220,7 @@ export default function Settings() {
           <div>
             <div className="settings-row-label">默认适应模式</div>
           </div>
-          <select value={settings.reader_fit || 'height'} onChange={(e) => updateSetting('reader_fit', e.target.value)}>
+          <select value={settings.reader_fit || 'height'} onChange={(e) => handleUpdateSetting('reader_fit', e.target.value)}>
             <option value="height">适应高度</option>
             <option value="width">适应宽度</option>
             <option value="original">原始大小</option>
@@ -231,14 +230,14 @@ export default function Settings() {
           <div>
             <div className="settings-row-label">阅读器背景色</div>
           </div>
-          <input type="color" value={settings.reader_bg || '#1a1a1a'} onChange={(e) => updateSetting('reader_bg', e.target.value)} style={{ width: 50, padding: 2 }} />
+          <input type="color" value={settings.reader_bg || '#1a1a1a'} onChange={(e) => handleUpdateSetting('reader_bg', e.target.value)} style={{ width: 50, padding: 2 }} />
         </div>
         <div className="settings-row">
           <div>
             <div className="settings-row-label">自动扫描间隔</div>
             <div className="settings-row-desc">定时自动扫描漫画目录（0=关闭）</div>
           </div>
-          <select value={settings.auto_scan_interval || '0'} onChange={(e) => updateSetting('auto_scan_interval', e.target.value)}>
+          <select value={settings.auto_scan_interval || '0'} onChange={(e) => handleUpdateSetting('auto_scan_interval', e.target.value)}>
             <option value="0">关闭</option>
             <option value="5">5 分钟</option>
             <option value="15">15 分钟</option>
@@ -256,7 +255,7 @@ export default function Settings() {
           <div>
             <div className="settings-row-label">默认视图</div>
           </div>
-          <select value={settings.view_mode || 'grid'} onChange={(e) => updateSetting('view_mode', e.target.value)}>
+          <select value={settings.view_mode || 'grid'} onChange={(e) => handleUpdateSetting('view_mode', e.target.value)}>
             <option value="grid">网格</option>
             <option value="list">列表</option>
           </select>
@@ -265,7 +264,7 @@ export default function Settings() {
           <div>
             <div className="settings-row-label">默认排序</div>
           </div>
-          <select value={settings.sort_by || 'updated'} onChange={(e) => updateSetting('sort_by', e.target.value)}>
+          <select value={settings.sort_by || 'updated'} onChange={(e) => handleUpdateSetting('sort_by', e.target.value)}>
             <option value="updated">最近阅读</option>
             <option value="name">名称</option>
             <option value="created">添加时间</option>
@@ -277,7 +276,7 @@ export default function Settings() {
           <div>
             <div className="settings-row-label">排序顺序</div>
           </div>
-          <select value={settings.sort_order || 'desc'} onChange={(e) => updateSetting('sort_order', e.target.value)}>
+          <select value={settings.sort_order || 'desc'} onChange={(e) => handleUpdateSetting('sort_order', e.target.value)}>
             <option value="desc">降序</option>
             <option value="asc">升序</option>
           </select>
