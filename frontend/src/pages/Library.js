@@ -323,7 +323,7 @@ export default function Library() {
         ) : viewMode === 'grid' ? (
           <div className="archive-grid">
             {archives.map(a => (
-              <div key={a.id} className="archive-card" onClick={() => navigate(`/reader/${a.id}`)}>
+              <div key={a.id} className="archive-card" onClick={() => navigate(`/reader/${a.id}`)} tabIndex={0} role="button" onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/reader/${a.id}`); } }}>
                 <div className="archive-card-cover">
                   <LazyImage src={a.cover_url} alt={a.title} />
                   <div className="archive-card-type">{a.archive_type === 'folder' ? '📁' : '📦'}</div>

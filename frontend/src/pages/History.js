@@ -74,7 +74,7 @@ export default function History() {
       ) : (
         <div className="history-list">
           {filtered.map(h => (
-            <div key={h.archive_id} className="history-item" onClick={() => navigate(`/reader/${h.archive_id}`)}>
+            <div key={h.archive_id} className="history-item" onClick={() => navigate(`/reader/${h.archive_id}`)} tabIndex={0} role="button" onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/reader/${h.archive_id}`); } }}>
               <div className="history-thumb">
                 <LazyImage src={h.cover_url} alt={h.title} style={{ width: '100%', height: '100%' }} />
               </div>
