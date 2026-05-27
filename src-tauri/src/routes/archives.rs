@@ -224,14 +224,16 @@ pub async fn get_page_thumb(
         return error_response(StatusCode::BAD_REQUEST, "Page index must be non-negative");
     }
 
-    let (archive_path, archive_type) = {
+    let (archive_path, archive_type, cache_dir) = {
         let db = state.db.lock().await;
         match db.get_archive(id) {
-            Ok(Some(a)) => (a.path, a.archive_type),
+            Ok(Some(a)) => (a.path, a.archive_type, state.data_dir.join("thumbnails")),
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
             Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         }
     };
+
+    let cache_key = format!("{}_{}", id, page_index);
 
     let result = tokio::task::spawn_blocking(move || {
         let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
@@ -243,7 +245,7 @@ pub async fn get_page_thumb(
         let page_name = &pages[idx];
         let data = reader.extract_page(page_name)?;
         let thumb_gen = crate::services::thumbnail::ThumbnailGenerator::default();
-        thumb_gen.generate(&data)
+        thumb_gen.generate_with_cache(&data, &cache_dir, &cache_key)
     })
     .await;
 
