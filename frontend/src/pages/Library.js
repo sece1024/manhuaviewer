@@ -26,11 +26,14 @@ export default function Library() {
   const [packingCbz, setPackingCbz] = useState(false);
   const searchDebounceRef = useRef(null);
   const sortByRef = useRef(sortBy);
+  const selectedTagRef = useRef(selectedTag);
+  const requestIdRef = useRef(0);
   const navigate = useNavigate();
   const toast = useToast();
 
-  // 保持 sortByRef 同步
+  // 保持 refs 同步
   useEffect(() => { sortByRef.current = sortBy; }, [sortBy]);
+  useEffect(() => { selectedTagRef.current = selectedTag; }, [selectedTag]);
 
   useEffect(() => {
     api.getConfig().then(c => setRootDir(c.root_dir));
@@ -40,17 +43,19 @@ export default function Library() {
   }, []);
 
   const loadArchives = async (params = {}) => {
+    const id = ++requestIdRef.current;
     try {
       const data = await api.getArchives({ sort_by: sortByRef.current, ...params });
+      if (id !== requestIdRef.current) return;
       setArchives(data);
     } catch (e) {
-      toast(e.message, 'error');
+      if (id === requestIdRef.current) toast(e.message, 'error');
     }
   };
 
   useEffect(() => {
     loadArchives({ search, tag: selectedTag });
-  }, [sortBy, selectedTag]);
+  }, [sortBy, selectedTag, search]);
 
   const handleSaveRoot = async () => {
     try {
@@ -79,9 +84,9 @@ export default function Library() {
     setSearch(val);
     clearTimeout(searchDebounceRef.current);
     searchDebounceRef.current = setTimeout(() => {
-      loadArchives({ search: val, tag: selectedTag });
+      loadArchives({ search: val, tag: selectedTagRef.current });
     }, 300);
-  }, [selectedTag]);
+  }, []);
 
   const handleViewMode = (mode) => {
     setViewMode(mode);
@@ -89,6 +94,7 @@ export default function Library() {
   };
 
   const handleTagFilter = (tagName) => {
+    clearTimeout(searchDebounceRef.current);
     const next = selectedTag === tagName ? '' : tagName;
     setSelectedTag(next);
   };
