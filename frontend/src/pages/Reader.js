@@ -38,6 +38,9 @@ export default function Reader() {
   const saveTimerRef = useRef(null);
   // 预加载缓存：持有 Image 对象引用防止被 GC
   const preloadCacheRef = useRef({});
+  // 长图模式虚拟滚动：追踪可见范围
+  const [visibleRange, setVisibleRange] = useState({ start: 0, end: 20 });
+  const sentinelRefs = useRef({});
 
   // 显示 overlay 信息
   const showOverlay = useCallback((text) => {
@@ -123,6 +126,50 @@ export default function Reader() {
     return () => observer.disconnect();
   // eslint-disable-next-line
   }, []);
+
+  // 长图模式虚拟滚动：用 IntersectionObserver 追踪可见图片
+  useEffect(() => {
+    if (!longImage || pages.length === 0) return;
+    const BUFFER = 5;
+    const observers = [];
+    const visible = new Set();
+
+    const updateRange = () => {
+      if (visible.size === 0) return;
+      const indices = [...visible].sort((a, b) => a - b);
+      const start = Math.max(0, indices[0] - BUFFER);
+      const end = Math.min(pages.length, indices[indices.length - 1] + BUFFER + 1);
+      setVisibleRange(prev => (prev.start === start && prev.end === end) ? prev : { start, end });
+    };
+
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const idx = Number(entry.target.dataset.idx);
+        if (entry.isIntersecting) visible.add(idx);
+        else visible.delete(idx);
+      }
+      updateRange();
+    }, { root: containerRef.current, rootMargin: '200px 0px' });
+
+    // Observe sentinel elements
+    const step = Math.max(1, Math.floor(pages.length / 100));
+    for (let i = 0; i < pages.length; i += step) {
+      const el = sentinelRefs.current[i];
+      if (el) {
+        observer.observe(el);
+        observers.push(el);
+      }
+    }
+    // Always observe last page
+    const lastEl = sentinelRefs.current[pages.length - 1];
+    if (lastEl && !observers.includes(lastEl)) {
+      observer.observe(lastEl);
+    }
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [longImage, pages]);
 
   // 翻页
   const goPage = useCallback((newIndex) => {
@@ -442,14 +489,22 @@ export default function Reader() {
         {longImage ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', touchAction: 'pan-y', width: '100%' }}>
             {pages.map((p, i) => (
-              <img
+              <div
                 key={p.id}
-                src={p.url}
-                alt={p.filename}
-                loading="lazy"
-                style={imgStyle}
-                onError={(e) => { e.target.style.display = 'none'; }}
-              />
+                ref={el => { sentinelRefs.current[i] = el; }}
+                data-idx={i}
+                style={{ width: '100%', minHeight: i >= visibleRange.start && i < visibleRange.end ? undefined : 800 }}
+              >
+                {i >= visibleRange.start && i < visibleRange.end ? (
+                  <img
+                    src={p.url}
+                    alt={p.filename}
+                    loading="lazy"
+                    style={imgStyle}
+                    onError={(e) => { e.target.style.display = 'none'; }}
+                  />
+                ) : null}
+              </div>
             ))}
           </div>
         ) : doublePage && currentIndex + 1 < pages.length ? (
