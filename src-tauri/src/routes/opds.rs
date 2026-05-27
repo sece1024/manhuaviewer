@@ -143,43 +143,55 @@ pub async fn archive_detail(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Html<String> {
-    let db = state.db.lock().await;
+    let (archive_path, archive_type, archive_title) = {
+        let db = state.db.lock().await;
+        match db.get_archive(id) {
+            Ok(Some(a)) => (a.path, a.archive_type, a.title),
+            Ok(None) => {
+                return Html(opds_error_xml("Archive not found"));
+            }
+            Err(e) => {
+                tracing::error!("Failed to get archive {}: {}", id, e);
+                return Html(opds_error_xml("Database error"));
+            }
+        }
+    };
 
-    match db.get_archive(id) {
-        Ok(Some(archive)) => {
-            match crate::services::archive::create_archive_reader(
-                &archive.path,
-                &archive.archive_type,
-            ) {
-                Ok(reader) => match reader.list_pages() {
-                    Ok(pages) => {
-                        let mut entries = String::new();
+    let result = tokio::task::spawn_blocking(move || {
+        let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
+        reader.list_pages()
+    })
+    .await;
 
-                        for (i, page_name) in pages.iter().enumerate() {
-                            let filename = std::path::Path::new(page_name)
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy();
+    match result {
+        Ok(Ok(pages)) => {
+            let mut entries = String::new();
 
-                            entries.push_str(&format!(
-                                r#"
+            for (i, page_name) in pages.iter().enumerate() {
+                let filename = std::path::Path::new(page_name)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+
+                entries.push_str(&format!(
+                    r#"
   <entry>
     <title>{}</title>
     <link rel="http://opds-spec.org/image" href="/api/archives/{}/pages/{}" type="image/jpeg"/>
     <id>manhuaviewer-page-{}-{}</id>
     <updated>{}</updated>
   </entry>"#,
-                                xml_escape(&filename),
-                                id,
-                                i,
-                                id,
-                                i,
-                                current_timestamp()
-                            ));
-                        }
+                    xml_escape(&filename),
+                    id,
+                    i,
+                    id,
+                    i,
+                    current_timestamp()
+                ));
+            }
 
-                        Html(format!(
-                            r#"<?xml version="1.0" encoding="UTF-8"?>
+            Html(format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer-archive-{}-pages</id>
   <title>{} ({} pages)</title>
@@ -188,49 +200,22 @@ pub async fn archive_detail(
   <link rel="start" href="/opds" type="application/atom+xml"/>
   {}
 </feed>"#,
-                            id,
-                            xml_escape(&archive.title),
-                            pages.len(),
-                            current_timestamp(),
-                            id,
-                            entries
-                        ))
-                    }
-                    Err(_) => Html(
-                        r#"<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
-  <id>manhuaviewer-error</id>
-  <title>Error loading pages</title>
-</feed>"#
-                            .to_string(),
-                    ),
-                },
-                Err(_) => Html(
-                    r#"<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
-  <id>manhuaviewer-error</id>
-  <title>Error opening archive</title>
-</feed>"#
-                        .to_string(),
-                ),
-            }
+                id,
+                xml_escape(&archive_title),
+                pages.len(),
+                current_timestamp(),
+                id,
+                entries
+            ))
         }
-        Ok(None) => Html(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
-  <id>manhuaviewer-error</id>
-  <title>Archive not found</title>
-</feed>"#
-                .to_string(),
-        ),
-        Err(_) => Html(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
-  <id>manhuaviewer-error</id>
-  <title>Error loading archive</title>
-</feed>"#
-                .to_string(),
-        ),
+        Ok(Err(e)) => {
+            tracing::error!("Failed to list pages for archive {}: {}", id, e);
+            Html(opds_error_xml("Error loading pages"))
+        }
+        Err(e) => {
+            tracing::error!("Task error for archive {}: {}", id, e);
+            Html(opds_error_xml("Internal error"))
+        }
     }
 }
 
