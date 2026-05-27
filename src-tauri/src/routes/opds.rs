@@ -24,6 +24,24 @@ fn current_timestamp() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+fn opds_error_xml(message: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Error</title>
+  <id>manhuaviewer-error</id>
+  <updated>{}</updated>
+  <entry>
+    <title>{}</title>
+    <content type="text">{}</content>
+  </entry>
+</feed>"#,
+        current_timestamp(),
+        xml_escape(message),
+        xml_escape(message)
+    )
+}
+
 pub async fn root_catalog(State(_state): State<Arc<AppState>>) -> Html<String> {
     let ts = current_timestamp();
     let xml = format!(
@@ -333,13 +351,21 @@ pub async fn tag_archives(
             let conn = db.get_conn();
             let mut archive_ids = std::collections::HashSet::new();
 
-            let mut stmt = conn
-                .prepare("SELECT archive_id FROM archive_tags WHERE tag_id = ?")
-                .unwrap();
+            let mut stmt = match conn.prepare("SELECT archive_id FROM archive_tags WHERE tag_id = ?") {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!("Failed to prepare tag archives query: {}", e);
+                    return Html(opds_error_xml("Database error"));
+                }
+            };
 
-            let ids = stmt
-                .query_map([tag_id], |row| row.get::<_, i64>(0))
-                .unwrap();
+            let ids = match stmt.query_map([tag_id], |row| row.get::<_, i64>(0)) {
+                Ok(ids) => ids,
+                Err(e) => {
+                    tracing::error!("Failed to query tag archives: {}", e);
+                    return Html(opds_error_xml("Database error"));
+                }
+            };
             for id in ids.flatten() {
                 archive_ids.insert(id);
             }
