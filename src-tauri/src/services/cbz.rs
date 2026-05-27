@@ -27,7 +27,7 @@ fn collect_images(folder: &Path) -> Result<Vec<std::path::PathBuf>> {
             p.is_file()
                 && p.file_name()
                     .and_then(|n| n.to_str())
-                    .map(|n| is_image_file(n))
+                    .map(is_image_file)
                     .unwrap_or(false)
         })
         .collect();
