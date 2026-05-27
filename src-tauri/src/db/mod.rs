@@ -4,6 +4,17 @@ pub mod schema;
 use rusqlite::{Connection, Result};
 use serde::{Deserialize, Serialize};
 
+/// Helper: log and skip row-level errors instead of silently swallowing them
+fn log_and_skip<T>(row_result: std::result::Result<T, rusqlite::Error>) -> Option<T> {
+    match row_result {
+        Ok(v) => Some(v),
+        Err(e) => {
+            tracing::warn!("Skipping row due to error: {}", e);
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveRow {
     pub id: i64,
@@ -203,7 +214,7 @@ impl Database {
                     })
                 },
             )?
-            .filter_map(|r| r.ok())
+            .filter_map(log_and_skip)
             .collect();
 
         Ok((archives, total))
@@ -238,7 +249,7 @@ impl Database {
                     updated_at: row.get(8)?,
                 })
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(log_and_skip)
             .collect();
 
         Ok(archives)
@@ -289,7 +300,7 @@ impl Database {
                     color: row.get(3)?,
                 })
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(log_and_skip)
             .collect();
         Ok(tags)
     }
@@ -333,7 +344,7 @@ impl Database {
         )?;
         let namespaces = stmt
             .query_map([], |row| row.get(0))?
-            .filter_map(|r| r.ok())
+            .filter_map(log_and_skip)
             .collect();
         Ok(namespaces)
     }
@@ -356,7 +367,7 @@ impl Database {
                     color: row.get(3)?,
                 })
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(log_and_skip)
             .collect();
 
         Ok(tags)
@@ -420,7 +431,7 @@ impl Database {
                     created_at: row.get(5)?,
                 })
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(log_and_skip)
             .collect();
         Ok(categories)
     }
@@ -495,7 +506,7 @@ impl Database {
                     row.get::<_, String>(6)?,
                 ))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(log_and_skip)
             .collect();
 
         Ok(history)
@@ -529,7 +540,7 @@ impl Database {
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(log_and_skip)
             .collect();
         Ok(settings)
     }
@@ -597,7 +608,7 @@ impl Database {
                     "page_count": row.get::<_, i64>(3)?,
                 }))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(log_and_skip)
             .collect();
 
         let mut stmt = self
@@ -611,7 +622,7 @@ impl Database {
                     "color": row.get::<_, String>(2)?,
                 }))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(log_and_skip)
             .collect();
 
         let mut stmt = self
@@ -625,7 +636,7 @@ impl Database {
                     "search": row.get::<_, String>(2)?,
                 }))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(log_and_skip)
             .collect();
 
         let settings = self.get_settings()?;
@@ -733,7 +744,7 @@ mod tests {
             .unwrap()
             .query_map([], |row| row.get(0))
             .unwrap()
-            .filter_map(|r| r.ok())
+            .filter_map(log_and_skip)
             .collect();
 
         assert!(tables.contains(&"archives".to_string()));
