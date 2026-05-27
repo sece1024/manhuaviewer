@@ -8,6 +8,8 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
+use super::error_response;
+
 #[derive(Deserialize)]
 pub struct ArchiveQuery {
     #[serde(alias = "sort_by")]
@@ -43,11 +45,6 @@ pub struct PackCbzRequest {
     /// 可选：覆盖归档目录（不传则从 settings 读取）
     #[serde(alias = "outputDir")]
     pub output_dir: Option<String>,
-}
-
-// Helper function to create error response with proper status code
-fn error_response(status: StatusCode, message: &str) -> Response {
-    (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
 pub async fn list_archives(

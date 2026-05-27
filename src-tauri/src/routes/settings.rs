@@ -8,6 +8,8 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
+use super::error_response;
+
 #[derive(Deserialize)]
 pub struct UpdateSettings {
     // Accept flat key-value pairs directly
@@ -18,10 +20,6 @@ pub struct UpdateSettings {
 #[derive(Deserialize)]
 pub struct UpdateConfig {
     pub root_dir: String,
-}
-
-fn error_response(status: StatusCode, message: &str) -> Response {
-    (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
 pub async fn get_settings(State(state): State<Arc<AppState>>) -> Response {

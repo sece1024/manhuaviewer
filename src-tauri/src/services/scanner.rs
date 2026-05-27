@@ -2,6 +2,8 @@ use anyhow::Result;
 use std::path::Path;
 use walkdir::WalkDir;
 
+use super::is_image_file;
+
 pub struct Scanner;
 
 impl Scanner {
@@ -41,12 +43,8 @@ impl Scanner {
     fn is_image_folder(&self, path: &Path) -> bool {
         if let Ok(entries) = std::fs::read_dir(path) {
             for entry in entries.flatten() {
-                if let Some(ext) = entry.path().extension() {
-                    let ext = ext.to_string_lossy().to_lowercase();
-                    if matches!(
-                        ext.as_str(),
-                        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
-                    ) {
+                if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
+                    if is_image_file(name) {
                         return true;
                     }
                 }

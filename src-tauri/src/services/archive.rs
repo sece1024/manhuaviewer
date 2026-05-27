@@ -1,22 +1,11 @@
 use anyhow::Result;
-use std::path::Path;
+
+use super::is_image_file;
 
 pub trait ArchiveReader {
     fn list_pages(&self) -> Result<Vec<String>>;
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>>;
     fn get_cover(&self) -> Result<Vec<u8>>;
-}
-
-fn is_image_file(name: &str) -> bool {
-    if let Some(ext) = Path::new(name).extension() {
-        let ext = ext.to_string_lossy().to_lowercase();
-        matches!(
-            ext.as_str(),
-            "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
-        )
-    } else {
-        false
-    }
 }
 
 // ZIP/CBZ Archive
@@ -94,12 +83,8 @@ impl ArchiveReader for FolderArchive {
             let path = entry.path();
 
             if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    let ext = ext.to_string_lossy().to_lowercase();
-                    if matches!(
-                        ext.as_str(),
-                        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
-                    ) {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if is_image_file(name) {
                         pages.push(path.to_string_lossy().to_string());
                     }
                 }

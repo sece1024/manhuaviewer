@@ -8,15 +8,13 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
+use super::error_response;
+
 #[derive(Deserialize)]
 pub struct SaveHistory {
     pub archive_id: i64,
     pub page_index: i64,
     pub total_pages: i64,
-}
-
-fn error_response(status: StatusCode, message: &str) -> Response {
-    (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
 pub async fn get_history(State(state): State<Arc<AppState>>) -> Response {

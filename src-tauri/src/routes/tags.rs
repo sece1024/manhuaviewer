@@ -8,6 +8,8 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
+use super::error_response;
+
 #[derive(Deserialize)]
 pub struct TagQuery {
     pub namespace: Option<String>,
@@ -19,10 +21,6 @@ pub struct TagQuery {
 pub struct AssignTagRequest {
     pub archive_id: i64,
     pub tag_id: i64,
-}
-
-fn error_response(status: StatusCode, message: &str) -> Response {
-    (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
 pub async fn list_tags(State(state): State<Arc<AppState>>) -> Response {

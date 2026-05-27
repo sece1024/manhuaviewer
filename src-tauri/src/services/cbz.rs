@@ -2,16 +2,7 @@ use anyhow::{bail, Result};
 use std::io::Write;
 use std::path::Path;
 
-/// 支持的图片扩展名
-const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "avif"];
-
-/// 检查文件是否为图片
-fn is_image_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| IMAGE_EXTENSIONS.contains(&e.to_lowercase().as_str()))
-        .unwrap_or(false)
-}
+use super::is_image_file;
 
 /// 收集文件夹中的图片文件（仅当前目录，不递归）
 fn collect_images(folder: &Path) -> Result<Vec<std::path::PathBuf>> {
@@ -32,7 +23,13 @@ fn collect_images(folder: &Path) -> Result<Vec<std::path::PathBuf>> {
     let mut images: Vec<std::path::PathBuf> = entries
         .into_iter()
         .map(|e| e.path())
-        .filter(|p| p.is_file() && is_image_file(p))
+        .filter(|p| {
+            p.is_file()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| is_image_file(n))
+                    .unwrap_or(false)
+        })
         .collect();
 
     // 无有效图片检查

@@ -7,11 +7,18 @@ pub mod tags;
 
 use crate::AppState;
 use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
+    Json,
     Router,
 };
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
+
+pub fn error_response(status: StatusCode, message: &str) -> Response {
+    (status, Json(serde_json::json!({ "error": message }))).into_response()
+}
 
 pub fn create_router(state: AppState) -> Router {
     // 生产模式下前端从 tauri://localhost 加载，需要 CORS
