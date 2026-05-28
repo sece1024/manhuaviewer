@@ -16,9 +16,11 @@ jobs:
           # macOS - Apple Silicon (M1+)
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
+            target: aarch64-apple-darwin
           # Windows - x86_64
           - platform: windows-latest
             args: ""
+            target: ""
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -47,6 +49,9 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS ad-hoc 签名（免费，无需 Apple Developer 账号）
+          # 用户首次打开需右键>打开 或 系统设置>隐私与安全性中允许
+          APPLE_SIGNING_IDENTITY: "-"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "MangaViewer __VERSION__"
