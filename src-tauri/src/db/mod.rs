@@ -158,6 +158,7 @@ impl Database {
     pub fn list_archives(
         &self,
         search: Option<&str>,
+        tag: Option<&str>,
         sort: &str,
         order: &str,
         limit: i64,
@@ -168,13 +169,34 @@ impl Database {
 
         if let Some(s) = search {
             if !s.is_empty() {
-                where_clause.push_str(" AND title LIKE ?");
+                where_clause.push_str(" AND a.title LIKE ?");
                 params.push(Box::new(format!("%{}%", s)));
             }
         }
 
+        // 按标签过滤：支持 "namespace:name" 或 "name" 格式
+        let mut join_clause = String::new();
+        if let Some(t) = tag {
+            if !t.is_empty() {
+                join_clause.push_str(
+                    " JOIN archive_tags at_f ON at_f.archive_id = a.id JOIN tags t_f ON t_f.id = at_f.tag_id",
+                );
+                if let Some((ns, name)) = t.split_once(':') {
+                    where_clause.push_str(" AND t_f.namespace = ? AND t_f.name = ?");
+                    params.push(Box::new(ns.to_string()));
+                    params.push(Box::new(name.to_string()));
+                } else {
+                    where_clause.push_str(" AND t_f.name = ? AND t_f.namespace = ''");
+                    params.push(Box::new(t.to_string()));
+                }
+            }
+        }
+
         // Get total count
-        let count_sql = format!("SELECT COUNT(*) FROM archives {}", where_clause);
+        let count_sql = format!(
+            "SELECT COUNT(*) FROM archives a{} {}",
+            join_clause, where_clause
+        );
         let total: i64 = self.conn.query_row(
             &count_sql,
             rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
@@ -183,17 +205,17 @@ impl Database {
 
         // Build main query
         let order_clause = match sort {
-            "name" => "title",
-            "created" => "created_at",
-            "pages" => "page_count",
-            "size" => "file_size",
-            _ => "updated_at",
+            "name" => "a.title",
+            "created" => "a.created_at",
+            "pages" => "a.page_count",
+            "size" => "a.file_size",
+            _ => "a.updated_at",
         };
         let direction = if order == "asc" { "ASC" } else { "DESC" };
 
         let sql = format!(
-            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, created_at, updated_at FROM archives {} ORDER BY {} {} LIMIT ? OFFSET ?",
-            where_clause, order_clause, direction
+            "SELECT a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.thumbnail_path, a.created_at, a.updated_at FROM archives a{} {} ORDER BY {} {} LIMIT ? OFFSET ?",
+            join_clause, where_clause, order_clause, direction
         );
 
         params.push(Box::new(limit));
@@ -885,7 +907,7 @@ mod tests {
         db.insert_archive("Manga C", "/path/c", "rar", 15, 1500)
             .unwrap();
 
-        let (archives, total) = db.list_archives(None, "title", "asc", 10, 0).unwrap();
+        let (archives, total) = db.list_archives(None, None, "title", "asc", 10, 0).unwrap();
         assert_eq!(total, 3);
         assert_eq!(archives.len(), 3);
         assert_eq!(archives[0].title, "Manga A");
@@ -905,7 +927,7 @@ mod tests {
             .unwrap();
 
         let (archives, total) = db
-            .list_archives(Some("Naruto"), "title", "asc", 10, 0)
+            .list_archives(Some("Naruto"), None, "title", "asc", 10, 0)
             .unwrap();
         assert_eq!(total, 1);
         assert_eq!(archives.len(), 1);
@@ -1055,7 +1077,7 @@ mod tests {
         db2.import_backup(&backup).unwrap();
 
         // Verify data
-        let (archives, _) = db2.list_archives(None, "title", "asc", 10, 0).unwrap();
+        let (archives, _) = db2.list_archives(None, None, "title", "asc", 10, 0).unwrap();
         assert_eq!(archives.len(), 1);
         assert_eq!(archives[0].title, "Manga A");
 

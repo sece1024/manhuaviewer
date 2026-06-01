@@ -92,7 +92,7 @@ pub async fn catalog(
     let limit = query.limit.unwrap_or(20);
     let offset = (page - 1) * limit;
 
-    match db.list_archives(None, "updated", "desc", limit, offset) {
+    match db.list_archives(None, None, "updated", "desc", limit, offset) {
         Ok((archives, _total)) => {
             let mut entries = String::new();
 

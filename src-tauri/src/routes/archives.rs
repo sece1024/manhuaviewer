@@ -19,7 +19,6 @@ pub struct ArchiveQuery {
     pub page: Option<i64>,
     pub limit: Option<i64>,
     pub search: Option<String>,
-    #[allow(dead_code)]
     pub tag: Option<String>,
     #[allow(dead_code)]
     pub category: Option<String>,
@@ -59,8 +58,8 @@ pub async fn list_archives(
     let sort = query.sort.as_deref().unwrap_or("updated");
     let order = query.order.as_deref().unwrap_or("desc");
 
-    // TODO: Implement tag and category filtering
-    match db.list_archives(query.search.as_deref(), sort, order, limit, offset) {
+    // TODO: Implement category filtering
+    match db.list_archives(query.search.as_deref(), query.tag.as_deref(), sort, order, limit, offset) {
         Ok((archives, _total)) => Json(archives).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
