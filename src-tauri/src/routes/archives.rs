@@ -1,14 +1,71 @@
 use crate::AppState;
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use super::error_response;
+
+const CACHE_CONTROL: &str = "private, max-age=86400";
+
+fn archive_mtime(path: &str) -> Option<SystemTime> {
+    std::fs::metadata(path).ok()?.modified().ok()
+}
+
+fn etag_for_page(id: i64, page_index: i64, mtime: Option<SystemTime>) -> String {
+    let secs = mtime
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("\"p-{}-{}-{}\"", id, page_index, secs)
+}
+
+fn etag_for_cover(id: i64, mtime: Option<SystemTime>) -> String {
+    let secs = mtime
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("\"c-{}-{}\"", id, secs)
+}
+
+fn http_date(t: SystemTime) -> Option<String> {
+    let dt: DateTime<Utc> = t.into();
+    Some(dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string())
+}
+
+fn parse_http_date(s: &str) -> Option<SystemTime> {
+    DateTime::parse_from_rfc2822(s)
+        .ok()
+        .map(|d| d.with_timezone(&Utc).into())
+}
+
+fn build_response<B>(status: StatusCode, pairs: Vec<(&'static str, String)>, body: B) -> Response
+where
+    B: IntoResponse,
+{
+    let mut hm = HeaderMap::new();
+    for (k, v) in pairs {
+        if let (Ok(name), Ok(val)) = (k.parse::<HeaderName>(), v.parse::<HeaderValue>()) {
+            hm.insert(name, val);
+        }
+    }
+    (status, hm, body).into_response()
+}
+
+fn not_modified(etag: String, last_modified: Option<String>) -> Response {
+    let mut pairs: Vec<(&'static str, String)> =
+        vec![("ETag", etag), ("Cache-Control", CACHE_CONTROL.to_string())];
+    if let Some(lm) = last_modified {
+        pairs.push(("Last-Modified", lm));
+    }
+    build_response(StatusCode::NOT_MODIFIED, pairs, "")
+}
 
 #[derive(Deserialize)]
 pub struct ArchiveQuery {
@@ -59,7 +116,14 @@ pub async fn list_archives(
     let order = query.order.as_deref().unwrap_or("desc");
 
     // TODO: Implement category filtering
-    match db.list_archives(query.search.as_deref(), query.tag.as_deref(), sort, order, limit, offset) {
+    match db.list_archives(
+        query.search.as_deref(),
+        query.tag.as_deref(),
+        sort,
+        order,
+        limit,
+        offset,
+    ) {
         Ok((archives, _total)) => Json(archives).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -90,7 +154,11 @@ pub async fn delete_archive(State(state): State<Arc<AppState>>, Path(id): Path<i
     }
 }
 
-pub async fn get_cover(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
+pub async fn get_cover(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    headers: HeaderMap,
+) -> Response {
     let (archive_path, archive_type) = {
         let db = state.db.lock().await;
         match db.get_archive(id) {
@@ -100,6 +168,28 @@ pub async fn get_cover(State(state): State<Arc<AppState>>, Path(id): Path<i64>) 
         }
     };
 
+    let mtime = archive_mtime(&archive_path);
+    let etag = etag_for_cover(id, mtime);
+    let last_modified = mtime.and_then(http_date);
+
+    if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
+        if inm == etag {
+            return not_modified(etag, last_modified);
+        }
+    }
+    if let (Some(ims), Some(mt)) = (
+        headers
+            .get("if-modified-since")
+            .and_then(|v| v.to_str().ok()),
+        mtime,
+    ) {
+        if let Some(parsed) = parse_http_date(ims) {
+            if mt <= parsed {
+                return not_modified(etag, last_modified);
+            }
+        }
+    }
+
     let result = tokio::task::spawn_blocking(move || {
         let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
         reader.get_cover()
@@ -108,7 +198,15 @@ pub async fn get_cover(State(state): State<Arc<AppState>>, Path(id): Path<i64>) 
 
     match result {
         Ok(Ok(cover_data)) => {
-            (StatusCode::OK, [("Content-Type", "image/jpeg")], cover_data).into_response()
+            let mut pairs: Vec<(&'static str, String)> = vec![
+                ("Content-Type", "image/jpeg".to_string()),
+                ("ETag", etag),
+                ("Cache-Control", CACHE_CONTROL.to_string()),
+            ];
+            if let Some(lm) = last_modified {
+                pairs.push(("Last-Modified", lm));
+            }
+            build_response(StatusCode::OK, pairs, cover_data)
         }
         Ok(Err(e)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         Err(e) => error_response(
@@ -184,6 +282,7 @@ pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>)
 pub async fn get_page(
     State(state): State<Arc<AppState>>,
     Path((id, page_index)): Path<(i64, i64)>,
+    headers: HeaderMap,
 ) -> Response {
     if page_index < 0 {
         return error_response(StatusCode::BAD_REQUEST, "Page index must be non-negative");
@@ -197,6 +296,28 @@ pub async fn get_page(
             Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         }
     };
+
+    let mtime = archive_mtime(&archive_path);
+    let etag = etag_for_page(id, page_index, mtime);
+    let last_modified = mtime.and_then(http_date);
+
+    if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
+        if inm == etag {
+            return not_modified(etag, last_modified);
+        }
+    }
+    if let (Some(ims), Some(mt)) = (
+        headers
+            .get("if-modified-since")
+            .and_then(|v| v.to_str().ok()),
+        mtime,
+    ) {
+        if let Some(parsed) = parse_http_date(ims) {
+            if mt <= parsed {
+                return not_modified(etag, last_modified);
+            }
+        }
+    }
 
     let result = tokio::task::spawn_blocking(move || {
         let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
@@ -216,7 +337,15 @@ pub async fn get_page(
 
     match result {
         Ok(Ok((data, mime))) => {
-            (StatusCode::OK, [("Content-Type", mime.as_str())], data).into_response()
+            let mut pairs: Vec<(&'static str, String)> = vec![
+                ("Content-Type", mime),
+                ("ETag", etag),
+                ("Cache-Control", CACHE_CONTROL.to_string()),
+            ];
+            if let Some(lm) = last_modified {
+                pairs.push(("Last-Modified", lm));
+            }
+            build_response(StatusCode::OK, pairs, data)
         }
         Ok(Err(e)) => {
             let msg = e.to_string();
@@ -236,6 +365,7 @@ pub async fn get_page(
 pub async fn get_page_thumb(
     State(state): State<Arc<AppState>>,
     Path((id, page_index)): Path<(i64, i64)>,
+    headers: HeaderMap,
 ) -> Response {
     if page_index < 0 {
         return error_response(StatusCode::BAD_REQUEST, "Page index must be non-negative");
@@ -257,9 +387,36 @@ pub async fn get_page_thumb(
 
     // 先检查缓存，命中则直接返回
     if cache_path.exists() {
+        let file_mtime = std::fs::metadata(&cache_path)
+            .and_then(|m| m.modified())
+            .ok();
+        if let (Some(ims), Some(fmt)) = (
+            headers
+                .get("if-modified-since")
+                .and_then(|v| v.to_str().ok()),
+            file_mtime,
+        ) {
+            if let Some(parsed) = parse_http_date(ims) {
+                if fmt <= parsed {
+                    let mut pairs: Vec<(&'static str, String)> =
+                        vec![("Cache-Control", CACHE_CONTROL.to_string())];
+                    if let Some(lm) = http_date(fmt) {
+                        pairs.push(("Last-Modified", lm));
+                    }
+                    return build_response(StatusCode::NOT_MODIFIED, pairs, "");
+                }
+            }
+        }
         match std::fs::read(&cache_path) {
             Ok(data) => {
-                return (StatusCode::OK, [("Content-Type", "image/jpeg")], data).into_response();
+                let mut pairs: Vec<(&'static str, String)> = vec![
+                    ("Content-Type", "image/jpeg".to_string()),
+                    ("Cache-Control", CACHE_CONTROL.to_string()),
+                ];
+                if let Some(lm) = file_mtime.and_then(http_date) {
+                    pairs.push(("Last-Modified", lm));
+                }
+                return build_response(StatusCode::OK, pairs, data);
             }
             Err(e) => {
                 tracing::warn!("Failed to read thumbnail cache: {}", e);
@@ -297,7 +454,14 @@ pub async fn get_page_thumb(
                 let _ = tokio::fs::remove_dir_all(&evicted_path).await;
             }
 
-            (StatusCode::OK, [("Content-Type", "image/jpeg")], thumb_data).into_response()
+            build_response(
+                StatusCode::OK,
+                vec![
+                    ("Content-Type", "image/jpeg".to_string()),
+                    ("Cache-Control", CACHE_CONTROL.to_string()),
+                ],
+                thumb_data,
+            )
         }
         Ok(Err(e)) => {
             let msg = e.to_string();
