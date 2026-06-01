@@ -3,12 +3,13 @@ import api from '../utils/api';
 import { formatSize } from '../utils/format';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
+import useTags from '../hooks/useTags';
 
 export default function Settings() {
   const { settings, updateSetting } = useSettings();
+  const { tags, reload: reloadTags } = useTags();
   const [rootDir, setRootDir] = useState('');
   const [stats, setStats] = useState(null);
-  const [tags, setTags] = useState([]);
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#6366f1');
   const [categories, setCategories] = useState([]);
@@ -23,9 +24,9 @@ export default function Settings() {
   useEffect(() => {
     api.getConfig().then(c => setRootDir(c.root_dir)).catch(() => {});
     api.getStats().then(setStats).catch(() => {});
-    api.getTags().then(setTags).catch(() => {});
+    reloadTags();
     api.getCategories().then(setCategories).catch(() => {});
-  }, []);
+  }, [reloadTags]);
 
   const handleUpdateSetting = async (key, value) => {
     try {
@@ -68,8 +69,8 @@ export default function Settings() {
   const handleCreateTag = async () => {
     if (!newTagName.trim()) return;
     try {
-      const tag = await api.createTag({ name: newTagName.trim(), color: newTagColor });
-      setTags(prev => [...prev, { ...tag, archive_count: 0 }]);
+      await api.createTag({ name: newTagName.trim(), color: newTagColor });
+      reloadTags();
       setNewTagName('');
       toast('标签已创建', 'success');
     } catch (e) {
@@ -81,7 +82,7 @@ export default function Settings() {
     if (!window.confirm('确定删除此标签？')) return;
     try {
       await api.deleteTag(id);
-      setTags(prev => prev.filter(t => t.id !== id));
+      reloadTags();
       toast('标签已删除', 'success');
     } catch (e) {
       toast(e.message, 'error');
@@ -149,7 +150,7 @@ export default function Settings() {
       toast(`恢复成功: ${result.restored.archives} 漫画, ${result.restored.tags} 标签`, 'success');
       // 重新加载数据
       api.getStats().then(setStats).catch(() => {});
-      api.getTags().then(setTags).catch(() => {});
+      reloadTags();
       api.getCategories().then(setCategories).catch(() => {});
     } catch (err) {
       toast(`导入失败: ${err.message}`, 'error');

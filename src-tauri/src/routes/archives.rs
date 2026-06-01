@@ -265,7 +265,12 @@ pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>)
                 .collect();
 
             Json(serde_json::json!({
-                "archive": archive,
+                "archive": {
+                    "id": archive.id,
+                    "title": archive.title,
+                    "archive_type": archive.archive_type,
+                    "path": archive.path,
+                },
                 "pages": page_list,
                 "read_page": read_page,
             }))

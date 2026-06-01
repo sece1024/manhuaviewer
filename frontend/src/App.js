@@ -6,6 +6,7 @@ import History from './pages/History';
 import Settings from './pages/Settings';
 import { ToastProvider } from './components/Toast';
 import { SettingsProvider } from './hooks/useSettings';
+import { TagsProvider } from './hooks/useTags';
 import ErrorBoundary from './components/ErrorBoundary';
 
 function AppContent() {
@@ -74,9 +75,11 @@ function App() {
     <ErrorBoundary>
       <ToastProvider>
         <SettingsProvider>
-          <Router>
-            <AppContent />
-          </Router>
+          <TagsProvider>
+            <Router>
+              <AppContent />
+            </Router>
+          </TagsProvider>
         </SettingsProvider>
       </ToastProvider>
     </ErrorBoundary>

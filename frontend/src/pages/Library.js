@@ -4,6 +4,7 @@ import api from '../utils/api';
 import { formatSize } from '../utils/format';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
+import useTags from '../hooks/useTags';
 import LazyImage from '../components/LazyImage';
 import TagPicker from '../components/TagPicker';
 
@@ -12,6 +13,7 @@ const isTauri = window.__TAURI__ !== undefined;
 
 export default function Library({ mode = 'library' }) {
   const { settings, updateSetting } = useSettings();
+  const { tags, reload: reloadTags } = useTags();
   const [archives, setArchives] = useState([]);
   const [rootDir, setRootDir] = useState('');
   const [editingRoot, setEditingRoot] = useState(false);
@@ -20,7 +22,6 @@ export default function Library({ mode = 'library' }) {
   const [loading, setLoading] = useState(false);
   const [viewMode, setViewMode] = useState(() => settings.view_mode || 'grid');
   const [sortBy, setSortBy] = useState(() => settings.sort_by || 'updated');
-  const [tags, setTags] = useState([]);
   const [selectedTag, setSelectedTag] = useState('');
   const [showSidebar, setShowSidebar] = useState(true);
   const [showOpenModal, setShowOpenModal] = useState(false);
@@ -49,7 +50,6 @@ export default function Library({ mode = 'library' }) {
   useEffect(() => {
     api.getConfig().then(c => setRootDir(c.root_dir));
     loadArchives();
-    api.getTags().then(setTags).catch(() => {});
     return () => clearTimeout(searchDebounceRef.current);
   }, []);
 
@@ -242,7 +242,7 @@ export default function Library({ mode = 'library' }) {
     setTagPickerArchiveId(null);
     if (changed) {
       loadArchives({ search, tag: selectedTag });
-      api.getTags().then(setTags).catch(() => {});
+      reloadTags();
     }
   };
 

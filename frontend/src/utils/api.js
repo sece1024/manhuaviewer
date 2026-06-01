@@ -3,6 +3,10 @@ const isTauriProd = window.__TAURI__ !== undefined && !window.location.port;
 const API_ORIGIN = isTauriProd ? 'http://127.0.0.1:5002' : '';
 const BASE = `${API_ORIGIN}/api`;
 
+// 导出 helpers 供外部使用
+export const apiOrigin = () => API_ORIGIN;
+export const apiBase = () => BASE;
+
 // 将后端返回的相对路径 URL 补全为可用的绝对 URL
 function fixUrl(url) {
   if (!API_ORIGIN || !url || !url.startsWith('/')) return url;
