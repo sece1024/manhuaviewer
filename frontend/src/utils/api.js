@@ -20,7 +20,7 @@ async function request(url, options = {}) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const res = await fetch(`${BASE}${url}`, {
-        headers: { 'Content-Type': 'application/json' },
+        ...(options.body && { headers: { 'Content-Type': 'application/json' } }),
         ...options,
       });
       if (!res.ok) {

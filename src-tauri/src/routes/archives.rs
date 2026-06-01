@@ -211,7 +211,7 @@ pub async fn get_cover(
         Ok(Err(e)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Task error: {}", e),
+            &format!("Internal error: {}", e),
         ),
     }
 }
@@ -274,7 +274,7 @@ pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>)
         Ok(Err(e)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Task error: {}", e),
+            &format!("Internal error: {}", e),
         ),
     }
 }
@@ -357,7 +357,7 @@ pub async fn get_page(
         }
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Task error: {}", e),
+            &format!("Internal error: {}", e),
         ),
     }
 }
@@ -473,7 +473,7 @@ pub async fn get_page_thumb(
         }
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Task error: {}", e),
+            &format!("Internal error: {}", e),
         ),
     }
 }
@@ -572,7 +572,7 @@ pub async fn open_file(
         }
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Task error: {}", e),
+            &format!("Internal error: {}", e),
         ),
     }
 }

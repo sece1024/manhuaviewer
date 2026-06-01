@@ -27,6 +27,11 @@ export default function Library({ mode = 'library' }) {
   const [openPath, setOpenPath] = useState('');
   const [opening, setOpening] = useState(false);
   const [packingCbz, setPackingCbz] = useState(false);
+  // 分页状态
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const searchDebounceRef = useRef(null);
   const sortByRef = useRef(sortBy);
   const selectedTagRef = useRef(selectedTag);
@@ -45,14 +50,32 @@ export default function Library({ mode = 'library' }) {
     return () => clearTimeout(searchDebounceRef.current);
   }, []);
 
-  const loadArchives = async (params = {}) => {
+  const loadArchives = async (params = {}, append = false) => {
     const id = ++requestIdRef.current;
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
     try {
-      const data = await api.getArchives({ sort_by: sortByRef.current, ...params });
+      const nextPage = append ? page + 1 : 1;
+      const data = await api.getArchives({
+        sort_by: sortByRef.current,
+        limit: PAGE_SIZE,
+        page: nextPage,
+        ...params,
+      });
       if (id !== requestIdRef.current) return;
-      setArchives(data);
+      setArchives(prev => append ? [...prev, ...data] : data);
+      setPage(nextPage);
+      setHasMore(data.length >= PAGE_SIZE);
     } catch (e) {
       if (id === requestIdRef.current) toast(e.message, 'error');
+    } finally {
+      if (id === requestIdRef.current) {
+        if (append) setLoadingMore(false);
+        else setLoading(false);
+      }
     }
   };
 
@@ -90,6 +113,10 @@ export default function Library({ mode = 'library' }) {
       loadArchives({ search: val, tag: selectedTagRef.current });
     }, 150);
   }, []);
+
+  const handleLoadMore = useCallback(() => {
+    loadArchives({ search, tag: selectedTag }, true);
+  }, [search, selectedTag]);
 
   const handleViewMode = (mode) => {
     setViewMode(mode);
@@ -507,6 +534,19 @@ export default function Library({ mode = 'library' }) {
                 <button className="archive-remove-btn-list" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* 加载更多按钮 */}
+        {hasMore && displayArchives.length > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '24px 0' }}>
+            <button
+              className="btn btn-secondary"
+              onClick={handleLoadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore ? '加载中...' : `加载更多 (已显示 ${displayArchives.length})`}
+            </button>
           </div>
         )}
       </div>
