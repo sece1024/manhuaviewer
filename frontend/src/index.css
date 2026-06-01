@@ -313,8 +313,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 /* 网格视图 */
 .archive-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, 160px);
   gap: 16px;
+  justify-content: start;
 }
 
 .archive-card {
@@ -334,7 +335,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 
 .archive-card-cover {
   width: 100%;
-  aspect-ratio: 3 / 4.2;
+  aspect-ratio: 2 / 3;
   background: var(--bg-tertiary);
   overflow: hidden;
   position: relative;
@@ -1004,7 +1005,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   .library-sidebar { width: 100%; display: flex; gap: 8px; overflow-x: auto; padding: 0 0 12px; }
   .filter-section { margin-bottom: 0; min-width: max-content; }
 
-  .archive-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+  .archive-grid { grid-template-columns: repeat(auto-fill, 130px); gap: 10px; }
 
   .mobile-bottom-bar {
     display: flex;
@@ -1033,7 +1034,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 
 @media (max-width: 480px) {
   .main-content { padding: 12px 8px; padding-bottom: 80px; }
-  .archive-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+  .archive-grid { grid-template-columns: repeat(auto-fill, 110px); gap: 8px; }
 }
 
 /* ── 减少动画模式 ── */
