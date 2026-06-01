@@ -4,6 +4,7 @@ import api from '../utils/api';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useReaderKeyboard from '../hooks/useReaderKeyboard';
+import TagPicker from '../components/TagPicker';
 
 export default function Reader() {
   const { archiveId } = useParams();
@@ -25,6 +26,7 @@ export default function Reader() {
   const [showJump, setShowJump] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const [showTagPicker, setShowTagPicker] = useState(false);
   const [packing, setPacking] = useState(false);
   const [pageDirection, setPageDirection] = useState(() => settings.page_direction || 'rtl');
   const [overlayText, setOverlayText] = useState('');
@@ -474,6 +476,7 @@ export default function Reader() {
             <option value="width">适应宽度</option>
             <option value="original">原始大小</option>
           </select>
+          <button className="btn btn-secondary btn-sm" onClick={() => { setShowTagPicker(true); setShowMenu(false); }}>🏷️ 标签</button>
           {archive && archive.archive_type === 'folder' && (
             <button className="btn btn-secondary btn-sm" onClick={() => { handlePackCbz(); setShowMenu(false); }} disabled={packing}>
               {packing ? '⏳ 打包中...' : '📦 归档 CBZ'}
@@ -682,6 +685,11 @@ export default function Reader() {
             </table>
           </div>
         </div>
+      )}
+
+      {/* 标签选择弹窗 */}
+      {showTagPicker && (
+        <TagPicker archiveId={parseInt(archiveId)} onClose={() => setShowTagPicker(false)} />
       )}
     </div>
   );

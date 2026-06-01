@@ -5,6 +5,7 @@ import { formatSize } from '../utils/format';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import LazyImage from '../components/LazyImage';
+import TagPicker from '../components/TagPicker';
 
 // 检测是否在 Tauri 环境中
 const isTauri = window.__TAURI__ !== undefined;
@@ -192,6 +193,20 @@ export default function Library() {
       loadArchives({ search, tag: selectedTag });
     } catch (err) {
       toast(err.message, 'error');
+    }
+  };
+
+  // TagPicker 状态
+  const [tagPickerArchiveId, setTagPickerArchiveId] = useState(null);
+  const handleOpenTagPicker = (e, id) => {
+    e.stopPropagation();
+    setTagPickerArchiveId(id);
+  };
+  const handleCloseTagPicker = (changed) => {
+    setTagPickerArchiveId(null);
+    if (changed) {
+      loadArchives({ search, tag: selectedTag });
+      api.getTags().then(setTags).catch(() => {});
     }
   };
 
@@ -432,7 +447,8 @@ export default function Library() {
                       <div key={a.id} className="archive-card" onClick={() => navigate(`/reader/${a.id}`)} tabIndex={0} role="button" onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/reader/${a.id}`); } }}>
                         <div className="archive-card-cover">
                           <LazyImage src={a.cover_url} alt={a.title} />
-                          <button className="archive-remove-btn" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
+                         <button className="archive-tag-btn" onClick={(e) => handleOpenTagPicker(e, a.id)} title="标签">🏷️</button>
+                         <button className="archive-remove-btn" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
                           {a.read_page > 0 && (
                             <div className="archive-card-progress">
                               <div className="archive-card-progress-bar" style={{ width: `${(a.read_page / (a.page_count || 1)) * 100}%` }} />
@@ -485,6 +501,7 @@ export default function Library() {
                             </div>
                           )}
                         </div>
+                        <button className="archive-tag-btn-list" onClick={(e) => handleOpenTagPicker(e, a.id)} title="标签">🏷️</button>
                         <button className="archive-remove-btn-list" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
                       </div>
                     ))}
@@ -503,6 +520,7 @@ export default function Library() {
                       <div key={a.id} className="archive-card" onClick={() => navigate(`/reader/${a.id}`)} tabIndex={0} role="button" onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/reader/${a.id}`); } }}>
                         <div className="archive-card-cover">
                           <LazyImage src={a.cover_url} alt={a.title} />
+                          <button className="archive-tag-btn" onClick={(e) => handleOpenTagPicker(e, a.id)} title="标签">🏷️</button>
                           <button className="archive-remove-btn" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
                           {a.read_page > 0 && (
                             <div className="archive-card-progress">
@@ -556,6 +574,7 @@ export default function Library() {
                             </div>
                           )}
                         </div>
+                        <button className="archive-tag-btn-list" onClick={(e) => handleOpenTagPicker(e, a.id)} title="标签">🏷️</button>
                         <button className="archive-remove-btn-list" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
                       </div>
                     ))}
@@ -624,6 +643,11 @@ export default function Library() {
             <div style={{ fontSize: 13, marginTop: 8, opacity: 0.7 }}>请勿关闭窗口</div>
           </div>
         </div>
+      )}
+
+      {/* 标签选择弹窗 */}
+      {tagPickerArchiveId && (
+        <TagPicker archiveId={tagPickerArchiveId} onClose={handleCloseTagPicker} />
       )}
     </div>
   );
