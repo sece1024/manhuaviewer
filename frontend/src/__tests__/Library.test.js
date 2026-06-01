@@ -3,6 +3,8 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Library from '../pages/Library';
 import { ToastProvider } from '../components/Toast';
+import { SettingsProvider } from '../hooks/useSettings';
+import { TagsProvider } from '../hooks/useTags';
 
 jest.mock('../utils/api');
 const api = require('../utils/api').default;
@@ -10,9 +12,13 @@ const api = require('../utils/api').default;
 function renderLibrary() {
   return render(
     <MemoryRouter>
-      <ToastProvider>
-        <Library />
-      </ToastProvider>
+      <SettingsProvider>
+        <TagsProvider>
+          <ToastProvider>
+            <Library />
+          </ToastProvider>
+        </TagsProvider>
+      </SettingsProvider>
     </MemoryRouter>
   );
 }
@@ -21,6 +27,7 @@ describe('Library 页面', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     api.getConfig.mockResolvedValue({ root_dir: '/test/manga' });
+    api.getSettings.mockResolvedValue({});
     api.getArchives.mockResolvedValue([
       { id: 1, title: '测试漫画', archive_type: 'folder', page_count: 10, cover_url: '/api/archives/1/cover', tags: [] },
     ]);
@@ -31,7 +38,7 @@ describe('Library 页面', () => {
     api.getConfig.mockResolvedValue({ root_dir: '' });
     renderLibrary();
     await waitFor(() => {
-      expect(screen.getByText(/请先配置漫画存放的根目录/)).toBeInTheDocument();
+      expect(screen.getByText(/欢迎使用 MangaViewer/)).toBeInTheDocument();
     });
   });
 

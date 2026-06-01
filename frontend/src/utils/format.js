@@ -24,3 +24,11 @@ export function formatRelativeTime(dateStr) {
   if (diffDay < 7) return `${diffDay} 天前`;
   return date.toLocaleDateString();
 }
+
+export function formatDate(dateStr) {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return dateStr;
+  const pad = n => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}

@@ -3,6 +3,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Settings from '../pages/Settings';
 import { ToastProvider } from '../components/Toast';
+import { SettingsProvider } from '../hooks/useSettings';
+import { TagsProvider } from '../hooks/useTags';
 
 jest.mock('../utils/api');
 const api = require('../utils/api').default;
@@ -10,9 +12,13 @@ const api = require('../utils/api').default;
 function renderSettings() {
   return render(
     <MemoryRouter>
-      <ToastProvider>
-        <Settings />
-      </ToastProvider>
+      <SettingsProvider>
+        <TagsProvider>
+          <ToastProvider>
+            <Settings />
+          </ToastProvider>
+        </TagsProvider>
+      </SettingsProvider>
     </MemoryRouter>
   );
 }
