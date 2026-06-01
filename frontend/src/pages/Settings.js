@@ -139,8 +139,21 @@ export default function Settings() {
     <div className="settings-page">
       <h2 style={{ fontWeight: 700, marginBottom: 20 }}>设置</h2>
 
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="设置分类">
+          <a href="#settings-section-dir">目录</a>
+          <a href="#settings-section-cbz">CBZ 归档</a>
+          <a href="#settings-section-reader">阅读器</a>
+          <a href="#settings-section-appearance">外观</a>
+          <a href="#settings-section-tags">标签管理</a>
+          <a href="#settings-section-categories">分类管理</a>
+          <a href="#settings-section-stats">统计</a>
+          <a href="#settings-section-backup">备份与恢复</a>
+        </nav>
+
+        <div className="settings-content">
       {/* 目录设置 */}
-      <div className="settings-section">
+      <div id="settings-section-dir" className="settings-section">
         <div className="settings-section-title">📂 目录</div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
           <input
@@ -169,7 +182,7 @@ export default function Settings() {
       </div>
 
       {/* CBZ 归档设置 */}
-      <div className="settings-section">
+      <div id="settings-section-cbz" className="settings-section">
         <div className="settings-section-title">📦 CBZ 归档</div>
         <div className="settings-row">
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -204,7 +217,7 @@ export default function Settings() {
       </div>
 
       {/* 阅读器设置 */}
-      <div className="settings-section">
+      <div id="settings-section-reader" className="settings-section">
         <div className="settings-section-title">📖 阅读器</div>
         <div className="settings-row">
           <div>
@@ -249,7 +262,7 @@ export default function Settings() {
       </div>
 
       {/* 外观设置 */}
-      <div className="settings-section">
+      <div id="settings-section-appearance" className="settings-section">
         <div className="settings-section-title">🎨 外观</div>
         <div className="settings-row">
           <div>
@@ -284,7 +297,7 @@ export default function Settings() {
       </div>
 
       {/* 标签管理 */}
-      <div className="settings-section">
+      <div id="settings-section-tags" className="settings-section">
         <div className="settings-section-title">🏷️ 标签管理</div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
           <input value={newTagName} onChange={(e) => setNewTagName(e.target.value)} placeholder="新标签名称（支持 namespace:name）" style={{ flex: 1 }} onKeyDown={(e) => e.key === 'Enter' && handleCreateTag()} />
@@ -308,7 +321,7 @@ export default function Settings() {
       </div>
 
       {/* 分类管理 */}
-      <div className="settings-section">
+      <div id="settings-section-categories" className="settings-section">
         <div className="settings-section-title">📂 分类管理</div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
           <input value={newCatName} onChange={(e) => setNewCatName(e.target.value)} placeholder="新分类名称" style={{ flex: 1 }} onKeyDown={(e) => e.key === 'Enter' && handleCreateCategory()} />
@@ -333,7 +346,7 @@ export default function Settings() {
 
       {/* 统计信息 */}
       {stats && (
-        <div className="settings-section">
+        <div id="settings-section-stats" className="settings-section">
           <div className="settings-section-title">📊 统计</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12 }}>
             <StatCard label="漫画总数" value={stats.archives} icon="📚" />
@@ -347,7 +360,7 @@ export default function Settings() {
       )}
 
       {/* 备份与恢复 */}
-      <div className="settings-section">
+      <div id="settings-section-backup" className="settings-section">
         <div className="settings-section-title">💾 备份与恢复</div>
         <div className="settings-row-desc" style={{ marginBottom: 12 }}>
           导出所有漫画元数据、标签、分类和阅读历史（不含图片文件）
@@ -359,6 +372,8 @@ export default function Settings() {
             <input type="file" accept=".json" onChange={handleImportBackup} style={{ display: 'none' }} disabled={importing} />
           </label>
           {importing && <span style={{ fontSize: 13, color: 'var(--text-secondary)', alignSelf: 'center' }}>导入中...</span>}
+        </div>
+      </div>
         </div>
       </div>
     </div>

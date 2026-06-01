@@ -776,7 +776,50 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
    Settings Page
    ═══════════════════════════════════════════════════════ */
 
-.settings-page { max-width: 640px; }
+.settings-page { max-width: 900px; }
+
+/* 设置页：左侧锚点导航 + 右侧内容 */
+.settings-layout {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+.settings-nav {
+  position: sticky;
+  top: 16px;
+  flex: 0 0 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  font-size: 13px;
+}
+.settings-nav a {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.settings-nav a:hover {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+.settings-content { flex: 1; min-width: 0; }
+
+@media (max-width: 720px) {
+  .settings-layout { flex-direction: column; }
+  .settings-nav {
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+    width: 100%;
+  }
+  .settings-nav a { white-space: nowrap; }
+}
 
 .settings-section {
   background: var(--bg-secondary);

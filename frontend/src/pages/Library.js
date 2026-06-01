@@ -27,6 +27,9 @@ export default function Library({ mode = 'library' }) {
   const [openPath, setOpenPath] = useState('');
   const [opening, setOpening] = useState(false);
   const [packingCbz, setPackingCbz] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  // 窄屏：把次要操作收进 ⋯ 菜单
+  const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
   // 分页状态
   const PAGE_SIZE = 50;
   const [page, setPage] = useState(1);
@@ -48,6 +51,12 @@ export default function Library({ mode = 'library' }) {
     loadArchives();
     api.getTags().then(setTags).catch(() => {});
     return () => clearTimeout(searchDebounceRef.current);
+  }, []);
+
+  useEffect(() => {
+    const check = () => setIsNarrow(window.innerWidth < 768);
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
   }, []);
 
   const loadArchives = async (params = {}, append = false) => {
@@ -256,6 +265,24 @@ export default function Library({ mode = 'library' }) {
     return map;
   }, [tags]);
 
+  // 标签侧栏过滤
+  const [tagSearch, setTagSearch] = useState('');
+  const filteredTagsByNamespace = useMemo(() => {
+    if (!tagSearch.trim()) return tagsByNamespace;
+    const q = tagSearch.toLowerCase();
+    const out = {};
+    for (const [ns, nsTags] of Object.entries(tagsByNamespace)) {
+      const filtered = nsTags.filter(t => {
+        const fullName = t.namespace ? `${t.namespace}:${t.name}` : t.name;
+        return fullName.toLowerCase().includes(q);
+      });
+      if (filtered.length > 0) out[ns] = filtered;
+    }
+    return out;
+  }, [tagsByNamespace, tagSearch]);
+  // 标签多时才显示搜索框（>10 才有意义）
+  const showTagSearch = tags.length > 10;
+
   // 欢迎屏幕上直接选择文件夹打开
   const handleWelcomeSelectFolder = async () => {
     if (!isTauri) {
@@ -390,27 +417,44 @@ export default function Library({ mode = 'library' }) {
           )}
 
           {/* 标签过滤 */}
-          {Object.entries(tagsByNamespace).map(([ns, nsTags]) => (
-            <div className="filter-section" key={ns}>
-              <div className="filter-section-title">
-                {ns === NS_OTHER ? '标签' : ns}
-              </div>
-              {nsTags.map(t => {
-                const fullName = t.namespace ? `${t.namespace}:${t.name}` : t.name;
-                return (
-                  <div
-                    key={t.id}
-                    className={`filter-tag ${selectedTag === fullName ? 'active' : ''}`}
-                    onClick={() => handleTagFilter(fullName)}
-                  >
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: t.color, flexShrink: 0 }} />
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</span>
-                    <span className="count">{t.archive_count}</span>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+          <div className="filter-section">
+            <div className="filter-section-title">标签</div>
+            {showTagSearch && (
+              <input
+                type="text"
+                value={tagSearch}
+                onChange={(e) => setTagSearch(e.target.value)}
+                placeholder="过滤标签..."
+                style={{ width: '100%', marginBottom: 8, fontSize: 12 }}
+                aria-label="按名称过滤标签"
+              />
+            )}
+            {Object.keys(filteredTagsByNamespace).length === 0 ? (
+              <div style={{ color: 'var(--text-tertiary)', fontSize: 12, padding: 4 }}>无匹配标签</div>
+            ) : (
+              Object.entries(filteredTagsByNamespace).map(([ns, nsTags]) => (
+                <div key={ns} style={{ marginBottom: 8 }}>
+                  {ns !== NS_OTHER && (
+                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', padding: '2px 0' }}>{ns}</div>
+                  )}
+                  {nsTags.map(t => {
+                    const fullName = t.namespace ? `${t.namespace}:${t.name}` : t.name;
+                    return (
+                      <div
+                        key={t.id}
+                        className={`filter-tag ${selectedTag === fullName ? 'active' : ''}`}
+                        onClick={() => handleTagFilter(fullName)}
+                      >
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: t.color, flexShrink: 0 }} />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</span>
+                        <span className="count">{t.archive_count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))
+            )}
+          </div>
         </div>
       )}
 
@@ -428,7 +472,7 @@ export default function Library({ mode = 'library' }) {
 
           <div className="spacer" />
 
-          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{ minWidth: 100 }}>
+          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{ minWidth: 100 }} aria-label="排序方式">
             <option value="updated">最近阅读</option>
             <option value="name">名称</option>
             <option value="created">添加时间</option>
@@ -436,31 +480,62 @@ export default function Library({ mode = 'library' }) {
             <option value="size">大小</option>
           </select>
 
-          <div className="toggle-group">
-            <button className={viewMode === 'grid' ? 'active' : ''} onClick={() => handleViewMode('grid')} title="网格">▦</button>
-            <button className={viewMode === 'list' ? 'active' : ''} onClick={() => handleViewMode('list')} title="列表">☰</button>
+          <div className="toggle-group" role="group" aria-label="视图模式">
+            <button className={viewMode === 'grid' ? 'active' : ''} onClick={() => handleViewMode('grid')} title="网格" aria-label="网格视图">▦</button>
+            <button className={viewMode === 'list' ? 'active' : ''} onClick={() => handleViewMode('list')} title="列表" aria-label="列表视图">☰</button>
           </div>
 
-          <button className="btn btn-secondary" onClick={() => setShowSidebar(v => !v)} title="过滤器">
+          <button className="btn btn-secondary" onClick={() => setShowSidebar(v => !v)} title="过滤器" aria-label={showSidebar ? '隐藏过滤器' : '显示过滤器'}>
             {showSidebar ? '◁' : '▷'}
           </button>
 
-          <button className="btn btn-secondary" onClick={() => setShowOpenModal(true)}>
-            📂 打开文件
-          </button>
+          {!isNarrow && (
+            <>
+              <button className="btn btn-secondary" onClick={() => setShowOpenModal(true)}>
+                📂 打开文件
+              </button>
 
-          {!isCollection && isTauri && (
-            <button className="btn btn-secondary" onClick={handleConvertFolderToCbz} disabled={packingCbz}>
-              📦 转换 CBZ
-            </button>
+              {!isCollection && isTauri && (
+                <button className="btn btn-secondary" onClick={handleConvertFolderToCbz} disabled={packingCbz}>
+                  📦 转换 CBZ
+                </button>
+              )}
+
+              {!isCollection && (
+                <button className="btn" onClick={handleScan} disabled={loading}>
+                  {loading ? '扫描中...' : '🔄 扫描'}
+                </button>
+              )}
+            </>
           )}
 
-          {!isCollection && (
-            <button className="btn" onClick={handleScan} disabled={loading}>
-              {loading ? '扫描中...' : '🔄 扫描'}
-            </button>
+          {isNarrow && (
+            <button
+              className="btn btn-secondary btn-icon"
+              onClick={() => setShowMobileMenu(v => !v)}
+              title="更多操作"
+              aria-label="打开更多操作菜单"
+              aria-expanded={showMobileMenu}
+            >⋯</button>
           )}
         </div>
+
+        {/* 窄屏：折叠次要操作 */}
+        {isNarrow && showMobileMenu && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: 8 }}>
+            <button className="btn btn-secondary btn-sm" onClick={() => { setShowOpenModal(true); setShowMobileMenu(false); }}>📂 打开文件</button>
+            {!isCollection && isTauri && (
+              <button className="btn btn-secondary btn-sm" onClick={() => { handleConvertFolderToCbz(); setShowMobileMenu(false); }} disabled={packingCbz}>
+                {packingCbz ? '⏳ 打包中...' : '📦 转换 CBZ'}
+              </button>
+            )}
+            {!isCollection && (
+              <button className="btn btn-sm" onClick={() => { handleScan(); setShowMobileMenu(false); }} disabled={loading}>
+                {loading ? '⏳ 扫描中...' : '🔄 扫描'}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* 档案列表 */}
         {displayArchives.length === 0 ? (
