@@ -633,6 +633,24 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   transition: none;
 }
 
+/* 阅读器翻页区域提示：悬停时半透明显示边缘箭头 */
+.reader-edge-hint {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 56px;
+  line-height: 1;
+  color: var(--text-secondary);
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 0.25s ease;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+.reader-edge-hint.left { left: 12px; }
+.reader-edge-hint.right { right: 12px; }
+.reader-container:hover .reader-edge-hint { opacity: 0.35; }
+
 /* 阅读器 overlay 信息 */
 .reader-overlay {
   position: fixed;

@@ -94,21 +94,25 @@ export default function Reader() {
     saveParamsRef.current = { archiveId, currentIndex, pagesLength: pages.length };
   }, [archiveId, currentIndex, pages.length]);
 
+  // 进度保存：仅在状态变化时调度防抖保存；卸载时单独 flush
   useEffect(() => {
     if (!archive || pages.length === 0) return;
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       api.saveHistory(parseInt(archiveId), currentIndex, pages.length).catch(() => {});
     }, 1000);
+  }, [currentIndex, archive, pages.length, archiveId]);
+
+  // 仅在组件卸载时立即保存一次，避免与防抖保存并发
+  useEffect(() => {
     return () => {
       clearTimeout(saveTimerRef.current);
-      // 卸载或 archiveId 变化时立即保存当前进度
       const { archiveId: aid, currentIndex: ci, pagesLength: pl } = saveParamsRef.current;
       if (aid && pl > 0) {
         api.saveHistory(parseInt(aid), ci, pl).catch(() => {});
       }
     };
-  }, [currentIndex, archive, pages.length, archiveId]);
+  }, []);
 
   // 预加载图片（持久化引用防止 GC）
   useEffect(() => {
@@ -427,37 +431,39 @@ export default function Reader() {
           title={containerTooNarrow ? '窗口宽度不足，无法使用双页模式' : longImage ? '请先关闭长图模式' : ''}>
           <input type="checkbox" checked={doublePage}
             disabled={containerTooNarrow || longImage}
-            onChange={(e) => setDoublePage(e.target.checked)} /> 双页
+            onChange={(e) => setDoublePage(e.target.checked)}
+            aria-label="启用双页模式" /> 双页
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, opacity: doublePage ? 0.5 : 1 }}
           title={doublePage ? '请先关闭双页模式' : ''}>
           <input type="checkbox" checked={longImage}
             disabled={doublePage}
-            onChange={(e) => setLongImage(e.target.checked)} /> 长图
+            onChange={(e) => setLongImage(e.target.checked)}
+            aria-label="启用长图模式" /> 长图
         </label>
 
         <div className="toolbar-group-secondary">
-          <select value={fitMode} onChange={(e) => { setFitMode(e.target.value); updateSetting('reader_fit', e.target.value); }} style={{ minWidth: 70, fontSize: 13 }}>
+          <select value={fitMode} onChange={(e) => { setFitMode(e.target.value); updateSetting('reader_fit', e.target.value); }} style={{ minWidth: 70, fontSize: 13 }} aria-label="适应模式">
             <option value="height">适应高度</option>
             <option value="width">适应宽度</option>
             <option value="original">原始大小</option>
           </select>
-          <button className="btn btn-secondary btn-icon" onClick={() => setRotation(r => (r + 90) % 360)} title="旋转">↻</button>
-          <button className="btn btn-secondary btn-icon" onClick={() => setShowThumbnails(true)} title="缩略图">📋</button>
-          <button className="btn btn-secondary btn-icon" onClick={() => setShowJump(true)} title="跳转">🔢</button>
-          <button className="btn btn-secondary btn-icon" onClick={() => { setScale(1); setTranslate({ x: 0, y: 0 }); }} title="重置缩放">1:1</button>
-          <button className="btn btn-secondary btn-icon" onClick={() => setPageDirection(d => d === 'rtl' ? 'ltr' : 'rtl')} title="翻页方向">
+          <button className="btn btn-secondary btn-icon" onClick={() => setRotation(r => (r + 90) % 360)} title="旋转" aria-label="旋转 90 度">↻</button>
+          <button className="btn btn-secondary btn-icon" onClick={() => setShowThumbnails(true)} title="缩略图" aria-label="打开缩略图总览">📋</button>
+          <button className="btn btn-secondary btn-icon" onClick={() => setShowJump(true)} title="跳转" aria-label="跳转到指定页">🔢</button>
+          <button className="btn btn-secondary btn-icon" onClick={() => { setScale(1); setTranslate({ x: 0, y: 0 }); }} title="重置缩放" aria-label="重置缩放至 1:1">1:1</button>
+          <button className="btn btn-secondary btn-icon" onClick={() => setPageDirection(d => d === 'rtl' ? 'ltr' : 'rtl')} title="翻页方向" aria-label={`翻页方向：${pageDirection === 'rtl' ? '从右到左' : '从左到右'}`}>
             {pageDirection === 'rtl' ? '→←' : '←→'}
           </button>
           {archive && archive.archive_type === 'folder' && (
-            <button className="btn btn-secondary btn-icon" onClick={handlePackCbz} disabled={packing} title="归档为 CBZ">
+            <button className="btn btn-secondary btn-icon" onClick={handlePackCbz} disabled={packing} title="归档为 CBZ" aria-label="将当前文件夹归档为 CBZ">
               {packing ? '⏳' : '📦'}
             </button>
           )}
         </div>
 
         {/* 移动端：折叠次要工具按钮 */}
-        <button className="btn btn-secondary btn-icon toolbar-menu-btn" onClick={() => setShowMenu(v => !v)} title="更多">⋯</button>
+        <button className="btn btn-secondary btn-icon toolbar-menu-btn" onClick={() => setShowMenu(v => !v)} title="更多" aria-label="打开更多菜单">⋯</button>
 
         <span className="status-text">
           {currentIndex + 1}/{pages.length} · {Math.round(scale * 100)}% · {fitMode === 'height' ? '适应高' : fitMode === 'width' ? '适应宽' : '原始'}
@@ -501,6 +507,8 @@ export default function Reader() {
           overflow: longImage ? 'auto' : 'hidden',
           alignItems: longImage ? 'flex-start' : 'center',
         }}
+        role="region"
+        aria-label={`页面阅读区，${pageDirection === 'rtl' ? '点右侧翻到上一页、左侧翻到下一页' : '点左侧翻到上一页、右侧翻到下一页'}`}
         onClick={handleClick}
         onDoubleClick={handleDblClick}
         onWheel={handleWheel}
@@ -582,6 +590,18 @@ export default function Reader() {
             onLoad={() => setImageLoaded(true)}
           />
         )}
+
+        {/* 翻页区域提示箭头：悬停时半透明显示 */}
+        {!longImage && (
+          <>
+            <div className="reader-edge-hint left" aria-hidden="true">
+              {pageDirection === 'rtl' ? '›' : '‹'}
+            </div>
+            <div className="reader-edge-hint right" aria-hidden="true">
+              {pageDirection === 'rtl' ? '‹' : '›'}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Overlay */}
@@ -591,10 +611,10 @@ export default function Reader() {
 
       {/* 移动端底部操作栏 */}
       <div className="mobile-bottom-bar">
-        <button className="btn btn-secondary btn-sm" onClick={() => setRotation(r => (r + 90) % 360)}>↻</button>
-        <button className="btn btn-secondary btn-sm" onClick={() => setShowThumbnails(true)}>📋</button>
-        <button className="btn btn-secondary btn-sm" onClick={() => setShowJump(true)}>🔢</button>
-        <select value={fitMode} onChange={(e) => { setFitMode(e.target.value); updateSetting('reader_fit', e.target.value); }} style={{ minWidth: 70, height: 36 }}>
+        <button className="btn btn-secondary btn-sm" onClick={() => setRotation(r => (r + 90) % 360)} aria-label="旋转 90 度">↻</button>
+        <button className="btn btn-secondary btn-sm" onClick={() => setShowThumbnails(true)} aria-label="打开缩略图总览">📋</button>
+        <button className="btn btn-secondary btn-sm" onClick={() => setShowJump(true)} aria-label="跳转到指定页">🔢</button>
+        <select value={fitMode} onChange={(e) => { setFitMode(e.target.value); updateSetting('reader_fit', e.target.value); }} style={{ minWidth: 70, height: 36 }} aria-label="适应模式">
           <option value="height">适应高度</option>
           <option value="width">适应宽度</option>
           <option value="original">原始</option>
