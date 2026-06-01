@@ -414,6 +414,70 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   backdrop-filter: blur(4px);
 }
 
+/* 分区标题 */
+.archive-section { margin-bottom: 28px; }
+.archive-section-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.archive-section-title .count {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+
+/* 移除按钮 — 网格卡片 */
+.archive-remove-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+  z-index: 2;
+}
+.archive-card:hover .archive-remove-btn { opacity: 1; }
+.archive-remove-btn:hover { background: var(--danger, #e74c3c); }
+
+/* 移除按钮 — 列表项 */
+.archive-remove-btn-list {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.archive-list-item:hover .archive-remove-btn-list { opacity: 1; }
+.archive-remove-btn-list:hover {
+  color: var(--danger, #e74c3c);
+  border-color: var(--danger, #e74c3c);
+}
+
 /* 列表视图 */
 .archive-list {
   display: flex;

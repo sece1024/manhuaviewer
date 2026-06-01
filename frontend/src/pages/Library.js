@@ -184,6 +184,21 @@ export default function Library() {
     }
   };
 
+  const handleRemoveArchive = async (e, id) => {
+    e.stopPropagation();
+    try {
+      await api.deleteArchive(id);
+      toast('已移除', 'success');
+      loadArchives({ search, tag: selectedTag });
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+
+  // 将档案按类型分成收藏（压缩包）和文件夹两组
+  const compressedArchives = useMemo(() => archives.filter(a => a.archive_type !== 'folder'), [archives]);
+  const folderArchives = useMemo(() => archives.filter(a => a.archive_type === 'folder'), [archives]);
+
   // 按命名空间分组标签
   const tagsByNamespace = useMemo(() => {
     const map = {};
@@ -405,68 +420,150 @@ export default function Library() {
               {search || selectedTag ? '没有匹配的漫画' : rootDir ? '暂无漫画，点击「扫描」按钮' : '点击「打开文件」添加漫画'}
             </div>
           </div>
-        ) : viewMode === 'grid' ? (
-          <div className="archive-grid">
-            {archives.map(a => (
-              <div key={a.id} className="archive-card" onClick={() => navigate(`/reader/${a.id}`)} tabIndex={0} role="button" onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/reader/${a.id}`); } }}>
-                <div className="archive-card-cover">
-                  <LazyImage src={a.cover_url} alt={a.title} />
-                  <div className="archive-card-type">{a.archive_type === 'folder' ? '📁' : '📦'}</div>
-                  {a.read_page > 0 && (
-                    <div className="archive-card-progress">
-                      <div className="archive-card-progress-bar" style={{ width: `${(a.read_page / (a.page_count || 1)) * 100}%` }} />
-                    </div>
-                  )}
-                </div>
-                <div className="archive-card-info">
-                  <div className="archive-card-title" title={a.title}>{a.title}</div>
-                  <div className="archive-card-meta">
-                    <span>{a.page_count} 页</span>
-                    {a.file_size > 0 && <span>· {formatSize(a.file_size)}</span>}
-                  </div>
-                  {a.tags && a.tags.length > 0 && (
-                    <div className="archive-card-tags">
-                      {a.tags.slice(0, 3).map(t => (
-                        <span key={t.name} className="tag" style={{ background: t.color }}>
-                          {t.namespace && <span className="tag-namespace">{t.namespace}:</span>}
-                          {t.name}
-                        </span>
-                      ))}
-                      {a.tags.length > 3 && <span className="tag" style={{ background: 'var(--text-tertiary)' }}>+{a.tags.length - 3}</span>}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
         ) : (
-          <div className="archive-list">
-            {archives.map(a => (
-              <div key={a.id} className="archive-list-item" onClick={() => navigate(`/reader/${a.id}`)}>
-                <div className="archive-list-thumb">
-                  <LazyImage src={a.cover_url} alt={a.title} />
-                </div>
-                <div className="archive-list-info">
-                  <div className="archive-list-title">{a.title}</div>
-                  <div className="archive-list-meta">
-                    {a.page_count} 页 · {a.archive_type === 'folder' ? '文件夹' : '压缩包'}
-                    {a.file_size > 0 && ` · ${formatSize(a.file_size)}`}
-                    {a.read_page > 0 && ` · 已读 ${a.read_page}/${a.page_count || '?'}`}
+          <>
+            {/* 收藏（压缩包） */}
+            {compressedArchives.length > 0 && (
+              <div className="archive-section">
+                <div className="archive-section-title">📦 收藏 <span className="count">{compressedArchives.length}</span></div>
+                {viewMode === 'grid' ? (
+                  <div className="archive-grid">
+                    {compressedArchives.map(a => (
+                      <div key={a.id} className="archive-card" onClick={() => navigate(`/reader/${a.id}`)} tabIndex={0} role="button" onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/reader/${a.id}`); } }}>
+                        <div className="archive-card-cover">
+                          <LazyImage src={a.cover_url} alt={a.title} />
+                          <button className="archive-remove-btn" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
+                          {a.read_page > 0 && (
+                            <div className="archive-card-progress">
+                              <div className="archive-card-progress-bar" style={{ width: `${(a.read_page / (a.page_count || 1)) * 100}%` }} />
+                            </div>
+                          )}
+                        </div>
+                        <div className="archive-card-info">
+                          <div className="archive-card-title" title={a.title}>{a.title}</div>
+                          <div className="archive-card-meta">
+                            <span>{a.page_count} 页</span>
+                            {a.file_size > 0 && <span>· {formatSize(a.file_size)}</span>}
+                          </div>
+                          {a.tags && a.tags.length > 0 && (
+                            <div className="archive-card-tags">
+                              {a.tags.slice(0, 3).map(t => (
+                                <span key={t.name} className="tag" style={{ background: t.color }}>
+                                  {t.namespace && <span className="tag-namespace">{t.namespace}:</span>}
+                                  {t.name}
+                                </span>
+                              ))}
+                              {a.tags.length > 3 && <span className="tag" style={{ background: 'var(--text-tertiary)' }}>+{a.tags.length - 3}</span>}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  {a.tags && a.tags.length > 0 && (
-                    <div className="archive-list-tags">
-                      {a.tags.map(t => (
-                        <span key={t.name} className="tag" style={{ background: t.color }}>
-                          {t.namespace && <span className="tag-namespace">{t.namespace}:</span>}
-                          {t.name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                ) : (
+                  <div className="archive-list">
+                    {compressedArchives.map(a => (
+                      <div key={a.id} className="archive-list-item" onClick={() => navigate(`/reader/${a.id}`)}>
+                        <div className="archive-list-thumb">
+                          <LazyImage src={a.cover_url} alt={a.title} />
+                        </div>
+                        <div className="archive-list-info">
+                          <div className="archive-list-title">{a.title}</div>
+                          <div className="archive-list-meta">
+                            {a.page_count} 页 · 压缩包
+                            {a.file_size > 0 && ` · ${formatSize(a.file_size)}`}
+                            {a.read_page > 0 && ` · 已读 ${a.read_page}/${a.page_count || '?'}`}
+                          </div>
+                          {a.tags && a.tags.length > 0 && (
+                            <div className="archive-list-tags">
+                              {a.tags.map(t => (
+                                <span key={t.name} className="tag" style={{ background: t.color }}>
+                                  {t.namespace && <span className="tag-namespace">{t.namespace}:</span>}
+                                  {t.name}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <button className="archive-remove-btn-list" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            ))}
-          </div>
+            )}
+
+            {/* 文件夹 */}
+            {folderArchives.length > 0 && (
+              <div className="archive-section">
+                <div className="archive-section-title">📁 文件夹 <span className="count">{folderArchives.length}</span></div>
+                {viewMode === 'grid' ? (
+                  <div className="archive-grid">
+                    {folderArchives.map(a => (
+                      <div key={a.id} className="archive-card" onClick={() => navigate(`/reader/${a.id}`)} tabIndex={0} role="button" onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/reader/${a.id}`); } }}>
+                        <div className="archive-card-cover">
+                          <LazyImage src={a.cover_url} alt={a.title} />
+                          <button className="archive-remove-btn" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
+                          {a.read_page > 0 && (
+                            <div className="archive-card-progress">
+                              <div className="archive-card-progress-bar" style={{ width: `${(a.read_page / (a.page_count || 1)) * 100}%` }} />
+                            </div>
+                          )}
+                        </div>
+                        <div className="archive-card-info">
+                          <div className="archive-card-title" title={a.title}>{a.title}</div>
+                          <div className="archive-card-meta">
+                            <span>{a.page_count} 页</span>
+                            {a.file_size > 0 && <span>· {formatSize(a.file_size)}</span>}
+                          </div>
+                          {a.tags && a.tags.length > 0 && (
+                            <div className="archive-card-tags">
+                              {a.tags.slice(0, 3).map(t => (
+                                <span key={t.name} className="tag" style={{ background: t.color }}>
+                                  {t.namespace && <span className="tag-namespace">{t.namespace}:</span>}
+                                  {t.name}
+                                </span>
+                              ))}
+                              {a.tags.length > 3 && <span className="tag" style={{ background: 'var(--text-tertiary)' }}>+{a.tags.length - 3}</span>}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="archive-list">
+                    {folderArchives.map(a => (
+                      <div key={a.id} className="archive-list-item" onClick={() => navigate(`/reader/${a.id}`)}>
+                        <div className="archive-list-thumb">
+                          <LazyImage src={a.cover_url} alt={a.title} />
+                        </div>
+                        <div className="archive-list-info">
+                          <div className="archive-list-title">{a.title}</div>
+                          <div className="archive-list-meta">
+                            {a.page_count} 页 · 文件夹
+                            {a.file_size > 0 && ` · ${formatSize(a.file_size)}`}
+                            {a.read_page > 0 && ` · 已读 ${a.read_page}/${a.page_count || '?'}`}
+                          </div>
+                          {a.tags && a.tags.length > 0 && (
+                            <div className="archive-list-tags">
+                              {a.tags.map(t => (
+                                <span key={t.name} className="tag" style={{ background: t.color }}>
+                                  {t.namespace && <span className="tag-namespace">{t.namespace}:</span>}
+                                  {t.name}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <button className="archive-remove-btn-list" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
       {/* 打开文件弹窗 */}
