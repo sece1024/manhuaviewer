@@ -195,28 +195,105 @@ export default function Library() {
     return map;
   }, [tags]);
 
-  // Welcome screen
-  if (!rootDir && !editingRoot) {
+  // 欢迎屏幕上直接选择文件夹打开
+  const handleWelcomeSelectFolder = async () => {
+    if (!isTauri) {
+      toast('文件夹选择仅在桌面应用中可用', 'warning');
+      return;
+    }
+    try {
+      const selected = await window.__TAURI__.dialog.open({
+        directory: true,
+        multiple: false,
+        title: '选择漫画文件夹',
+      });
+      if (selected) {
+        setOpening(true);
+        try {
+          const result = await api.openFile(selected);
+          toast(result.message || '已打开', 'success');
+          navigate(`/reader/${result.id}`);
+        } catch (e) {
+          toast(e.message, 'error');
+        }
+        setOpening(false);
+      }
+    } catch (e) {
+      toast('选择文件夹失败: ' + e.message, 'error');
+    }
+  };
+
+  // 欢迎屏幕上直接选择压缩包打开
+  const handleWelcomeSelectFile = async () => {
+    if (!isTauri) {
+      toast('文件选择仅在桌面应用中可用', 'warning');
+      return;
+    }
+    try {
+      const selected = await window.__TAURI__.dialog.open({
+        multiple: false,
+        title: '选择漫画文件',
+        filters: [{
+          name: '漫画文件',
+          extensions: ['zip', 'cbz', 'rar', 'cbr', '7z']
+        }]
+      });
+      if (selected) {
+        setOpening(true);
+        try {
+          const result = await api.openFile(selected);
+          toast(result.message || '已打开', 'success');
+          navigate(`/reader/${result.id}`);
+        } catch (e) {
+          toast(e.message, 'error');
+        }
+        setOpening(false);
+      }
+    } catch (e) {
+      toast('选择文件失败: ' + e.message, 'error');
+    }
+  };
+
+  // Welcome screen — 无漫画且未配置根目录时显示
+  if (!rootDir && !editingRoot && archives.length === 0) {
     return (
       <div style={{ maxWidth: 500, margin: '80px auto', textAlign: 'center', padding: '0 16px' }}>
         <div style={{ fontSize: 64, marginBottom: 16 }}>📚</div>
         <h2 style={{ marginBottom: 12, fontWeight: 700 }}>欢迎使用 MangaViewer</h2>
         <p style={{ color: 'var(--text-secondary)', marginBottom: 24, fontSize: 14 }}>
-          请先配置漫画存放的根目录<br />
+          打开漫画文件夹或压缩包即可开始阅读<br />
           <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
             支持文件夹、ZIP/CBZ、RAR/CBR、7Z 压缩包
           </span>
         </p>
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
-          <input
-            placeholder="例: /home/user/manga"
-            value={tempRoot}
-            onChange={(e) => setTempRoot(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSaveRoot()}
-            style={{ flex: 1, minWidth: 0, maxWidth: 360 }}
-            autoFocus
-          />
-          <button className="btn" onClick={handleSaveRoot}>确认</button>
+
+        {/* 直接打开文件 */}
+        {isTauri && (
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginBottom: 24 }}>
+            <button className="btn" onClick={handleWelcomeSelectFolder} disabled={opening}>
+              📁 打开文件夹
+            </button>
+            <button className="btn" onClick={handleWelcomeSelectFile} disabled={opening}>
+              📄 打开压缩包
+            </button>
+          </div>
+        )}
+
+        {/* 配置根目录（折叠） */}
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 8 }}>
+          <p style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 8 }}>
+            也可以配置漫画根目录，批量扫描导入
+          </p>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+            <input
+              placeholder="例: /home/user/manga"
+              value={tempRoot}
+              onChange={(e) => setTempRoot(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSaveRoot()}
+              style={{ flex: 1, minWidth: 0, maxWidth: 360 }}
+            />
+            <button className="btn btn-secondary" onClick={handleSaveRoot}>确认</button>
+          </div>
         </div>
       </div>
     );
@@ -325,7 +402,7 @@ export default function Library() {
           <div className="empty-state">
             <div className="empty-state-icon">📚</div>
             <div className="empty-state-text">
-              {search || selectedTag ? '没有匹配的漫画' : '暂无漫画，点击「扫描」按钮'}
+              {search || selectedTag ? '没有匹配的漫画' : rootDir ? '暂无漫画，点击「扫描」按钮' : '点击「打开文件」添加漫画'}
             </div>
           </div>
         ) : viewMode === 'grid' ? (
