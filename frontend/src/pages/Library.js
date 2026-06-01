@@ -88,7 +88,7 @@ export default function Library({ mode = 'library' }) {
     clearTimeout(searchDebounceRef.current);
     searchDebounceRef.current = setTimeout(() => {
       loadArchives({ search: val, tag: selectedTagRef.current });
-    }, 300);
+    }, 150);
   }, []);
 
   const handleViewMode = (mode) => {

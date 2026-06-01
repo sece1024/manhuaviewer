@@ -36,7 +36,7 @@ function AppContent() {
           </NavLink>
           <NavLink to="/collection">
             <span className="nav-icon">📦</span>
-            <span>收藏</span>
+            <span>文件夹</span>
           </NavLink>
           <NavLink to="/history">
             <span className="nav-icon">📖</span>

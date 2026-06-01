@@ -172,7 +172,7 @@ export default function Reader() {
         else visible.delete(idx);
       }
       updateRange();
-    }, { root: containerRef.current, rootMargin: '200px 0px' });
+    }, { root: containerRef.current, rootMargin: '1500px 0px' });
 
     // Observe sentinel elements
     const step = Math.max(1, Math.floor(pages.length / 100));
@@ -519,7 +519,7 @@ export default function Reader() {
                 key={p.id}
                 ref={el => { sentinelRefs.current[i] = el; }}
                 data-idx={i}
-                style={{ width: '100%', minHeight: i >= visibleRange.start && i < visibleRange.end ? undefined : 800 }}
+                style={{ width: '100%', minHeight: i >= visibleRange.start && i < visibleRange.end ? undefined : 250 }}
               >
                 {i >= visibleRange.start && i < visibleRange.end ? (
                   <img
