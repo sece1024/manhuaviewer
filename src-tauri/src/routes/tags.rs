@@ -118,3 +118,15 @@ pub async fn remove_tag(
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
+
+pub async fn get_archive_tags(
+    State(state): State<Arc<AppState>>,
+    Path(archive_id): Path<i64>,
+) -> Response {
+    let db = state.db.lock().await;
+
+    match db.get_archive_tags(archive_id) {
+        Ok(tags) => Json(tags).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}

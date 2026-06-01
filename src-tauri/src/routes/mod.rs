@@ -46,6 +46,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/tags/assign", post(tags::assign_tag))
         .route("/tags/:archive_id/:tag_id", delete(tags::remove_tag))
         .route("/tags/namespaces", get(tags::list_namespaces))
+        .route("/archives/:id/tags", get(tags::get_archive_tags))
         // Categories
         .route("/categories", get(categories::list_categories))
         .route("/categories", post(categories::create_category))

@@ -90,6 +90,7 @@ const api = {
     return request(`/tags${qs ? '?' + qs : ''}`);
   },
   getNamespaces: () => request('/tags/namespaces'),
+  getArchiveTags: (archiveId) => request(`/archives/${archiveId}/tags`),
   createTag: (data) => request('/tags', { method: 'POST', body: JSON.stringify(data) }),
   updateTag: (id, data) => request(`/tags/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteTag: (id) => request(`/tags/${id}`, { method: 'DELETE' }),
