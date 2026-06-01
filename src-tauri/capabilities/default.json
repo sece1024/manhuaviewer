@@ -18,6 +18,9 @@
     "dialog:default",
     "dialog:allow-confirm",
     "dialog:allow-ask",
-    "dialog:allow-message"
+    "dialog:allow-message",
+    "dialog:allow-save",
+    "fs:default",
+    "fs:allow-write-text-file"
   ]
 }

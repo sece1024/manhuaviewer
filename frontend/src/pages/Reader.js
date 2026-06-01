@@ -609,18 +609,6 @@ export default function Reader() {
         {overlayText}
       </div>
 
-      {/* 移动端底部操作栏 */}
-      <div className="mobile-bottom-bar">
-        <button className="btn btn-secondary btn-sm" onClick={() => setRotation(r => (r + 90) % 360)} aria-label="旋转 90 度">↻</button>
-        <button className="btn btn-secondary btn-sm" onClick={() => setShowThumbnails(true)} aria-label="打开缩略图总览">📋</button>
-        <button className="btn btn-secondary btn-sm" onClick={() => setShowJump(true)} aria-label="跳转到指定页">🔢</button>
-        <select value={fitMode} onChange={(e) => { setFitMode(e.target.value); updateSetting('reader_fit', e.target.value); }} style={{ minWidth: 70, height: 36 }} aria-label="适应模式">
-          <option value="height">适应高度</option>
-          <option value="width">适应宽度</option>
-          <option value="original">原始</option>
-        </select>
-      </div>
-
       {/* 缩略图面板 */}
       {showThumbnails && (
         <div className="thumbnail-panel" onClick={() => setShowThumbnails(false)} role="dialog" aria-modal="true" aria-label="缩略图总览">

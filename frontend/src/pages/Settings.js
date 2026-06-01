@@ -111,8 +111,31 @@ export default function Settings() {
     }
   };
 
-  const handleExportBackup = () => {
-    window.open(api.exportBackup());
+  const handleExportBackup = async () => {
+    if (!isTauri) {
+      // 浏览器模式：直接打开下载链接
+      window.open(api.exportBackup());
+      return;
+    }
+    // Tauri 模式：用 dialog.save 选择路径，再 fetch + fs.writeTextFile 写入
+    try {
+      const savePath = await window.__TAURI__.dialog.save({
+        title: '导出备份',
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+        defaultPath: `manhuaviewer-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      });
+      if (!savePath) return;
+      const res = await fetch(api.exportBackup());
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      await window.__TAURI__.fs.writeTextFile(savePath, JSON.stringify(data, null, 2));
+      toast(`备份已导出: ${savePath}`, 'success');
+    } catch (e) {
+      toast(`导出失败: ${e.message}`, 'error');
+    }
   };
 
   const handleImportBackup = async (e) => {
