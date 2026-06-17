@@ -203,7 +203,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   gap: 8px;
 }
 .toast {
-  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
   border-radius: var(--radius-sm);
   color: #fff;
   font-size: 14px;
@@ -212,8 +215,22 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   animation: toast-in 0.3s ease;
   max-width: 400px;
 }
+.toast-message { flex: 1; }
+.toast-dismiss {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+  padding: 0 2px;
+  margin: -4px -4px -4px 0;
+}
+.toast-dismiss:hover { opacity: 1; }
 .toast-success { background: #22c55e; }
 .toast-error { background: #ef4444; }
+.toast-warning { background: #f59e0b; }
 .toast-info { background: var(--accent); }
 @keyframes toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
 
