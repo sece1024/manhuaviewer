@@ -159,6 +159,33 @@ export default function Library({ mode = 'library' }) {
     setOpening(false);
   };
 
+  const handleQuickOpen = async () => {
+    if (!isTauri) {
+      setShowOpenModal(true);
+      return;
+    }
+    try {
+      const selected = await window.__TAURI__.dialog.open({
+        multiple: false,
+        title: '选择漫画文件或文件夹',
+        filters: [{ name: '漫画文件', extensions: ['zip', 'cbz', 'rar', 'cbr', '7z'] }],
+      });
+      if (selected) {
+        setOpening(true);
+        try {
+          const result = await api.openFile(selected);
+          toast(result.message || '已打开', 'success');
+          navigate(`/reader/${result.id}`);
+        } catch (e) {
+          toast(e.message, 'error');
+        }
+        setOpening(false);
+      }
+    } catch (e) {
+      toast('选择文件失败: ' + e.message, 'error');
+    }
+  };
+
   const handleSelectFolder = async () => {
     if (!isTauri) {
       toast('文件夹选择仅在桌面应用中可用', 'warning');
@@ -497,7 +524,7 @@ export default function Library({ mode = 'library' }) {
 
           {!isNarrow && (
             <>
-              <button className="btn btn-secondary" onClick={() => setShowOpenModal(true)}>
+              <button className="btn btn-secondary" onClick={handleQuickOpen}>
                 📂 打开文件
               </button>
 
@@ -529,7 +556,7 @@ export default function Library({ mode = 'library' }) {
         {/* 窄屏：折叠次要操作 */}
         {isNarrow && showMobileMenu && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: 8 }}>
-            <button className="btn btn-secondary btn-sm" onClick={() => { setShowOpenModal(true); setShowMobileMenu(false); }}>📂 打开文件</button>
+            <button className="btn btn-secondary btn-sm" onClick={() => { handleQuickOpen(); setShowMobileMenu(false); }}>📂 打开文件</button>
             {!isCollection && isTauri && (
               <button className="btn btn-secondary btn-sm" onClick={() => { handleConvertFolderToCbz(); setShowMobileMenu(false); }} disabled={packingCbz}>
                 {packingCbz ? '⏳ 打包中...' : '📦 转换 CBZ'}
@@ -650,37 +677,17 @@ export default function Library({ mode = 'library' }) {
             <div className="modal-title">打开漫画文件</div>
             <div className="modal-body">
               <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>
-                输入文件或文件夹的绝对路径，支持图片文件夹和压缩包 (ZIP/CBZ/RAR/CBR/7Z)
+                输入文件或文件夹路径，支持图片文件夹和压缩包 (ZIP/CBZ/RAR/CBR/7Z)
               </p>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                <input
-                  className="modal-input"
-                  style={{ flex: 1 }}
-                  placeholder="例: /Users/me/manga/comic.cbz"
-                  value={openPath}
-                  onChange={(e) => setOpenPath(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleOpenFile()}
-                  autoFocus
-                />
-              </div>
-              {isTauri && (
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={handleSelectFolder}
-                    style={{ flex: 1 }}
-                  >
-                    📁 选择文件夹
-                  </button>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={handleSelectFile}
-                    style={{ flex: 1 }}
-                  >
-                    📄 选择压缩包
-                  </button>
-                </div>
-              )}
+              <input
+                className="modal-input"
+                placeholder="例: /Users/me/manga 或 /Users/me/manga/comic.cbz"
+                value={openPath}
+                onChange={(e) => setOpenPath(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleOpenFile()}
+                autoFocus
+                style={{ width: '100%', boxSizing: 'border-box' }}
+              />
             </div>
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => setShowOpenModal(false)}>取消</button>
