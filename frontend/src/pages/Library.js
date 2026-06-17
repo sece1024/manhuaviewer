@@ -22,6 +22,7 @@ export default function Library({ mode = 'library' }) {
   const [loading, setLoading] = useState(false);
   const [viewMode, setViewMode] = useState(() => settings.view_mode || 'grid');
   const [sortBy, setSortBy] = useState(() => settings.sort_by || 'updated');
+  const [sortOrder, setSortOrder] = useState(() => settings.sort_order || 'desc');
   const [selectedTag, setSelectedTag] = useState('');
   const [showSidebar, setShowSidebar] = useState(true);
   const [showOpenModal, setShowOpenModal] = useState(false);
@@ -38,6 +39,7 @@ export default function Library({ mode = 'library' }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const searchDebounceRef = useRef(null);
   const sortByRef = useRef(sortBy);
+  const sortOrderRef = useRef(sortOrder);
   const selectedTagRef = useRef(selectedTag);
   const searchRef = useRef(search);
   const requestIdRef = useRef(0);
@@ -46,6 +48,7 @@ export default function Library({ mode = 'library' }) {
 
   // 保持 refs 同步
   useEffect(() => { sortByRef.current = sortBy; }, [sortBy]);
+  useEffect(() => { sortOrderRef.current = sortOrder; }, [sortOrder]);
   useEffect(() => { selectedTagRef.current = selectedTag; }, [selectedTag]);
   useEffect(() => { searchRef.current = search; }, [search]);
 
@@ -72,6 +75,7 @@ export default function Library({ mode = 'library' }) {
       const nextPage = append ? page + 1 : 1;
       const data = await api.getArchives({
         sort_by: sortByRef.current,
+        sort_order: sortOrderRef.current,
         limit: PAGE_SIZE,
         page: nextPage,
         ...params,
@@ -92,7 +96,7 @@ export default function Library({ mode = 'library' }) {
 
   useEffect(() => {
     loadArchives({ search: searchRef.current, tag: selectedTag });
-  }, [sortBy, selectedTag]);
+  }, [sortBy, sortOrder, selectedTag]);
 
   const handleSaveRoot = async () => {
     try {

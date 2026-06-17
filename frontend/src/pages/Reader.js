@@ -500,7 +500,7 @@ export default function Reader() {
       <div
         className={`reader-container ${dragRef.current.active ? 'dragging' : ''}`}
         style={{
-          background: 'var(--bg-tertiary)',
+          background: settings.reader_bg || 'var(--bg-tertiary)',
           border: '1px solid var(--border)',
           cursor: longImage ? 'default' : (scale > 1.05 ? 'grab' : 'pointer'),
           touchAction: longImage ? 'pan-y' : 'none',
