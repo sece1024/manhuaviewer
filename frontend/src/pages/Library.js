@@ -39,6 +39,7 @@ export default function Library({ mode = 'library' }) {
   const searchDebounceRef = useRef(null);
   const sortByRef = useRef(sortBy);
   const selectedTagRef = useRef(selectedTag);
+  const searchRef = useRef(search);
   const requestIdRef = useRef(0);
   const navigate = useNavigate();
   const toast = useToast();
@@ -46,6 +47,7 @@ export default function Library({ mode = 'library' }) {
   // 保持 refs 同步
   useEffect(() => { sortByRef.current = sortBy; }, [sortBy]);
   useEffect(() => { selectedTagRef.current = selectedTag; }, [selectedTag]);
+  useEffect(() => { searchRef.current = search; }, [search]);
 
   useEffect(() => {
     api.getConfig().then(c => setRootDir(c.root_dir));
@@ -89,8 +91,8 @@ export default function Library({ mode = 'library' }) {
   };
 
   useEffect(() => {
-    loadArchives({ search, tag: selectedTag });
-  }, [sortBy, selectedTag, search]);
+    loadArchives({ search: searchRef.current, tag: selectedTag });
+  }, [sortBy, selectedTag]);
 
   const handleSaveRoot = async () => {
     try {
@@ -124,8 +126,8 @@ export default function Library({ mode = 'library' }) {
   }, []);
 
   const handleLoadMore = useCallback(() => {
-    loadArchives({ search, tag: selectedTag }, true);
-  }, [search, selectedTag]);
+    loadArchives({ search: searchRef.current, tag: selectedTagRef.current }, true);
+  }, []);
 
   const handleViewMode = (mode) => {
     setViewMode(mode);
