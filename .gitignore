@@ -5,6 +5,7 @@ node_modules/
 frontend/build/
 dist/
 out/
+target/
 
 # IDE
 .vscode/
@@ -24,3 +25,8 @@ Thumbs.db
 .env.*.local
 
 # Runtime data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+thumbnails/
