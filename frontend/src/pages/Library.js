@@ -544,7 +544,19 @@ export default function Library({ mode = 'library' }) {
         )}
 
         {/* 档案列表 */}
-        {displayArchives.length === 0 ? (
+        {loading && displayArchives.length === 0 ? (
+          <div className="archive-grid">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={`skeleton-${i}`} className="archive-card skeleton-card">
+                <div className="archive-card-cover skeleton-pulse" style={{ background: 'var(--border)' }} />
+                <div className="archive-card-info">
+                  <div className="skeleton-pulse" style={{ height: 16, width: '70%', background: 'var(--border)', borderRadius: 4 }} />
+                  <div className="skeleton-pulse" style={{ height: 12, width: '40%', background: 'var(--border)', borderRadius: 4, marginTop: 6 }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : displayArchives.length === 0 ? (
           <div className="empty-state">
             <div className="empty-state-icon">{isCollection ? '📦' : '📚'}</div>
             <div className="empty-state-text">
