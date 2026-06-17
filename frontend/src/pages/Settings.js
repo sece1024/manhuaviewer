@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import api from '../utils/api';
 import { formatSize } from '../utils/format';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 export default function Settings() {
   const { settings, updateSetting } = useSettings();
@@ -17,6 +18,8 @@ export default function Settings() {
   const [newCatName, setNewCatName] = useState('');
   const [newCatColor, setNewCatColor] = useState('#6366f1');
   const [importing, setImporting] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState(null);
   const toast = useToast();
 
   // 检测 Tauri 环境
@@ -83,8 +86,7 @@ export default function Settings() {
     }
   };
 
-  const handleDeleteTag = async (id) => {
-    if (!window.confirm('确定删除此标签？')) return;
+  const handleDeleteTag = useCallback(async (id) => {
     try {
       await api.deleteTag(id);
       reloadTags();
@@ -92,7 +94,7 @@ export default function Settings() {
     } catch (e) {
       toast(e.message, 'error');
     }
-  };
+  }, [reloadTags, toast]);
 
   const handleCreateCategory = async () => {
     if (!newCatName.trim()) return;
@@ -106,14 +108,22 @@ export default function Settings() {
     }
   };
 
-  const handleDeleteCategory = async (id) => {
-    if (!window.confirm('确定删除此分类？')) return;
+  const handleDeleteCategory = useCallback(async (id) => {
     try {
       await api.deleteCategory(id);
       setCategories(prev => prev.filter(c => c.id !== id));
       toast('分类已删除', 'success');
     } catch (e) {
       toast(e.message, 'error');
+    }
+  }, [toast]);
+
+  const handleConfirm = async () => {
+    setConfirmOpen(false);
+    if (confirmTarget?.type === 'tag') {
+      await handleDeleteTag(confirmTarget.id);
+    } else if (confirmTarget?.type === 'category') {
+      await handleDeleteCategory(confirmTarget.id);
     }
   };
 
@@ -166,6 +176,16 @@ export default function Settings() {
 
   return (
     <div className="settings-page">
+      <ConfirmDialog
+        open={confirmOpen}
+        title={confirmTarget?.type === 'tag' ? '删除标签' : '删除分类'}
+        message={`确定删除${confirmTarget?.type === 'tag' ? '标签' : '分类'}"${confirmTarget?.name || ''}"？`}
+        danger
+        confirmText="删除"
+        onConfirm={handleConfirm}
+        onCancel={() => setConfirmOpen(false)}
+      />
+
       <h2 style={{ fontWeight: 700, marginBottom: 20 }}>设置</h2>
 
       <div className="settings-layout">
@@ -342,7 +362,7 @@ export default function Settings() {
                 <span style={{ width: 10, height: 10, borderRadius: '50%', background: t.color, flexShrink: 0 }} />
                 <span>{t.full_name || t.name}</span>
                 <span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>({t.archive_count})</span>
-                <button onClick={() => handleDeleteTag(t.id)} aria-label={`删除标签 ${t.name}`} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0, fontSize: 14 }}>×</button>
+                <button onClick={() => { setConfirmTarget({ type: 'tag', id: t.id, name: t.name }); setConfirmOpen(true); }} aria-label={`删除标签 ${t.name}`} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0, fontSize: 14 }}>×</button>
               </div>
             ))}
           </div>
@@ -366,7 +386,7 @@ export default function Settings() {
                 <span style={{ width: 10, height: 10, borderRadius: '50%', background: c.color, flexShrink: 0 }} />
                 <span>{c.name}</span>
                 <span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>({c.archive_count})</span>
-                <button onClick={() => handleDeleteCategory(c.id)} aria-label={`删除分类 ${c.name}`} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0, fontSize: 14 }}>×</button>
+                <button onClick={() => { setConfirmTarget({ type: 'category', id: c.id, name: c.name }); setConfirmOpen(true); }} aria-label={`删除分类 ${c.name}`} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0, fontSize: 14 }}>×</button>
               </div>
             ))}
           </div>
