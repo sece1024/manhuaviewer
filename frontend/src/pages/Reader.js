@@ -229,6 +229,7 @@ export default function Reader() {
     showJump, setShowJump,
     showHelp, setShowHelp,
     showMenu, setShowMenu,
+    showTagPicker, setShowTagPicker,
     setDoublePage, setLongImage, setRotation, setFitMode,
     onFitModeChange: (val) => updateSetting('reader_fit', val),
     showOverlay, containerRef,

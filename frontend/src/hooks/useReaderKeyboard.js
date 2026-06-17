@@ -18,6 +18,8 @@ export default function useReaderKeyboard({
   setShowHelp,
   showMenu,
   setShowMenu,
+  showTagPicker,
+  setShowTagPicker,
   setDoublePage,
   setLongImage,
   setRotation,
@@ -75,6 +77,7 @@ export default function useReaderKeyboard({
         break;
       case 'Escape':
         if (showHelp) setShowHelp(false);
+        else if (showTagPicker) setShowTagPicker(false);
         else if (showThumbnails) setShowThumbnails(false);
         else if (showJump) setShowJump(false);
         else if (showMenu) setShowMenu(false);
@@ -83,7 +86,7 @@ export default function useReaderKeyboard({
     }
   }, [
     goPrev, goNext, goPage, pagesLength, longImage, doublePage, doublePageDisabled,
-    showThumbnails, showJump, showMenu, showHelp,
+    showThumbnails, showJump, showMenu, showHelp, showTagPicker,
     setDoublePage, setLongImage, setRotation, setFitMode, onFitModeChange, showOverlay, containerRef,
   ]);
 
