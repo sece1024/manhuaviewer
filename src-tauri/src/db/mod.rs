@@ -1077,7 +1077,9 @@ mod tests {
         db2.import_backup(&backup).unwrap();
 
         // Verify data
-        let (archives, _) = db2.list_archives(None, None, "title", "asc", 10, 0).unwrap();
+        let (archives, _) = db2
+            .list_archives(None, None, "title", "asc", 10, 0)
+            .unwrap();
         assert_eq!(archives.len(), 1);
         assert_eq!(archives[0].title, "Manga A");
 
