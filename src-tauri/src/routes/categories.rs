@@ -89,10 +89,16 @@ pub async fn assign_category(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<serde_json::Value>,
 ) -> Response {
-    let db = state.db.lock().await;
-    let archive_id = payload["archive_id"].as_i64().unwrap_or(0);
-    let category_id = payload["category_id"].as_i64().unwrap_or(0);
+    let archive_id = match payload["archive_id"].as_i64() {
+        Some(id) if id > 0 => id,
+        _ => return error_response(StatusCode::BAD_REQUEST, "Invalid archive_id"),
+    };
+    let category_id = match payload["category_id"].as_i64() {
+        Some(id) if id > 0 => id,
+        _ => return error_response(StatusCode::BAD_REQUEST, "Invalid category_id"),
+    };
 
+    let db = state.db.lock().await;
     match db.assign_category(archive_id, category_id) {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
