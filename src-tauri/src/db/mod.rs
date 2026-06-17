@@ -752,7 +752,7 @@ impl Database {
         let settings = self.get_settings()?;
 
         Ok(serde_json::json!({
-            "version": "3.0.0",
+            "version": env!("CARGO_PKG_VERSION"),
             "timestamp": chrono::Utc::now().to_rfc3339(),
             "archives": archives,
             "tags": tags,

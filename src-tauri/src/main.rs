@@ -24,7 +24,7 @@ async fn main() {
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    info!("Starting MangaViewer v3.0.0");
+    info!("Starting MangaViewer v{}", env!("CARGO_PKG_VERSION"));
 
     // Determine data directory
     let data_dir = if let Ok(dir) = std::env::var("DATA_DIR") {
