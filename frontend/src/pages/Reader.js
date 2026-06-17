@@ -582,14 +582,21 @@ export default function Reader() {
             )}
           </div>
         ) : (
-          <img
-            src={pages[currentIndex]?.url}
-            alt={pages[currentIndex]?.filename}
-            className="reader-image"
-            style={imgStyle}
-            draggable={false}
-            onLoad={() => setImageLoaded(true)}
-          />
+          <div className="reader-page-wrapper">
+            {!imageLoaded && (
+              <div className="reader-page-loading">
+                <div className="reader-page-spinner" />
+              </div>
+            )}
+            <img
+              src={pages[currentIndex]?.url}
+              alt={pages[currentIndex]?.filename}
+              className="reader-image"
+              style={{ ...imgStyle, opacity: imageLoaded ? 1 : 0, transition: 'opacity 0.2s ease' }}
+              draggable={false}
+              onLoad={() => setImageLoaded(true)}
+            />
+          </div>
         )}
 
         {/* 翻页区域提示箭头：悬停时半透明显示 */}
