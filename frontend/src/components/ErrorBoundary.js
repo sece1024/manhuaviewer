@@ -26,12 +26,23 @@ export default class ErrorBoundary extends React.Component {
           <p style={{ color: 'var(--text-secondary)', margin: '0 0 16px', textAlign: 'center' }}>
             {this.state.error?.message || '未知错误'}
           </p>
-          <button
-            className="btn btn-primary"
-            onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}
-          >
-            刷新页面
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                this.setState({ hasError: false, error: null });
+                window.location.href = '/';
+              }}
+            >
+              返回书库
+            </button>
+            <button
+              className="btn"
+              onClick={() => window.location.reload()}
+            >
+              刷新页面
+            </button>
+          </div>
         </div>
       );
     }
