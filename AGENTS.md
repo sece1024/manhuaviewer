@@ -22,7 +22,7 @@ pnpm format:check              # cargo fmt --manifest-path src-tauri/Cargo.toml 
 pnpm format                    # cargo fmt (auto-fix)
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every push/PR to `main`: `pnpm --filter manhuaviewer-frontend build` + `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`. Run these locally before pushing.
+CI (`.github/workflows/ci.yml`) runs on every push/PR to `main`. **CI does NOT run frontend tests** — only `pnpm --filter manhuaviewer-frontend build` (compile + ESLint). Frontend tests must be verified locally. Rust CI runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`. Run these locally before pushing.
 
 ## Architecture
 
@@ -42,6 +42,10 @@ CI (`.github/workflows/ci.yml`) runs on every push/PR to `main`: `pnpm --filter 
 - Blocking I/O (archive extraction, thumbnail generation) **must** use `tokio::task::spawn_blocking` to avoid starving the tokio runtime.
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `ci:`, `chore:`).
 
+## Testing
+
+Frontend tests live in `frontend/src/__tests__/` and use React Testing Library + CRA's Jest. Every page test must wrap the component in the same providers used by `App.js`: `SettingsProvider`, `TagsProvider`, `ToastProvider`, and `MemoryRouter`. API calls are mocked via `frontend/src/__mocks__/api.js` — Jest auto-resolves `jest.mock('../utils/api')` to this mock. Frontend `package.json` also has a `moduleNameMapper` for `react-router-dom` to work around CRA's bundling.
+
 ## Adding a new API route
 
 1. Add the handler in the appropriate `src-tauri/src/routes/<file>.rs` (use `error_response` for failures).
@@ -54,12 +58,13 @@ Versions live in three places and must be kept in sync: `package.json`, `src-tau
 
 ## Gotchas
 
-- `pnpm install` may fail with `ERR_PNPM_IGNORED_BUILDS` for native packages (e.g. `better-sqlite3`, `sharp`, `core-js`, `unrs-resolver`) — add the offender to `allowBuilds` in `pnpm-workspace.yaml`. `.npmrc` uses `node-linker=hoisted` (CRA requirement).
+- `pnpm install` may fail with `ERR_PNPM_IGNORED_BUILDS` for native packages (e.g. `better-sqlite3`, `sharp`, `core-js`, `unrs-resolver`) — add the offender to `allowBuilds` in `pnpm-workspace.yaml`. Note: the current values are placeholder text (`"set this to true or false"`), not actual booleans. `.npmrc` uses `node-linker=hoisted` (CRA requirement).
 - RAR support may require a system `unrar` binary as a fallback.
 - Tauri uses the system WebView — CSS/JS quirks vary across platforms; test on each target.
 - The CSP in `src-tauri/tauri.conf.json` whitelists `unsafe-inline`/`unsafe-eval` because CRA's inline runtime needs them; don't tighten without testing the dev build.
 - `pnpm tauri dev` already runs `beforeDevCommand` (`pnpm --filter manhuaviewer-frontend start`) — do not start the CRA dev server manually alongside it.
 - `data_dir` and the DB file are created on first run; deleting `manhuaviewer.db` resets state but loses settings/history.
+- `scripts/bump-version.sh` uses `sed -i ''` (macOS syntax). On Linux it needs `sed -i` without the empty-string argument.
 
 ## Reference
 
