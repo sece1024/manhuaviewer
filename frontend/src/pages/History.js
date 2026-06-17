@@ -7,6 +7,7 @@ import { formatRelativeTime } from '../utils/format';
 
 export default function History() {
   const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const navigate = useNavigate();
   const toast = useToast();
@@ -19,6 +20,8 @@ export default function History() {
       setHistory(data);
     } catch (e) {
       toast(e.message, 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -46,7 +49,7 @@ export default function History() {
   const filtered = history.filter(h => {
     if (!search) return true;
     const s = search.toLowerCase();
-    return h.title.toLowerCase().includes(s) || h.tags.some(t => t.name.toLowerCase().includes(s));
+    return h.title.toLowerCase().includes(s) || (h.tags || []).some(t => t.name.toLowerCase().includes(s));
   });
 
   return (
@@ -66,7 +69,12 @@ export default function History() {
         )}
       </div>
 
-      {filtered.length === 0 ? (
+      {loading ? (
+        <div className="empty-state">
+          <div className="empty-state-icon">⏳</div>
+          <div className="empty-state-text">加载中...</div>
+        </div>
+      ) : filtered.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state-icon">📖</div>
           <div className="empty-state-text">{search ? '没有匹配的记录' : '暂无阅读记录'}</div>
@@ -84,7 +92,7 @@ export default function History() {
                   第 {h.page_index + 1}/{h.total_pages || h.page_count} 页 · {h.page_count} 张图片
                   {h.archive_type !== 'folder' && ` · ${h.archive_type.toUpperCase()}`}
                 </div>
-                {h.tags.length > 0 && (
+                {(h.tags || []).length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
                     {h.tags.map(t => (
                       <span key={t.name} className="tag" style={{ background: t.color }}>
