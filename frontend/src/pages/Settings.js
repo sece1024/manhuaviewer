@@ -13,6 +13,7 @@ export default function Settings() {
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#6366f1');
   const [categories, setCategories] = useState([]);
+  const [cbzDirInput, setCbzDirInput] = useState(settings.cbz_export_dir || '');
   const [newCatName, setNewCatName] = useState('');
   const [newCatColor, setNewCatColor] = useState('#6366f1');
   const [importing, setImporting] = useState(false);
@@ -27,6 +28,10 @@ export default function Settings() {
     reloadTags();
     api.getCategories().then(setCategories).catch(() => {});
   }, [reloadTags]);
+
+  useEffect(() => {
+    setCbzDirInput(settings.cbz_export_dir || '');
+  }, [settings.cbz_export_dir]);
 
   const handleUpdateSetting = async (key, value) => {
     try {
@@ -226,12 +231,12 @@ export default function Settings() {
             ) : (
               <>
                 <input
-                  value={settings.cbz_export_dir || ''}
-                  onChange={(e) => setSettings(prev => ({ ...prev, cbz_export_dir: e.target.value }))}
+                  value={cbzDirInput}
+                  onChange={(e) => setCbzDirInput(e.target.value)}
                   placeholder="CBZ 导出目录路径"
                   style={{ minWidth: 200 }}
                 />
-                <button className="btn btn-sm" onClick={() => handleUpdateSetting('cbz_export_dir', settings.cbz_export_dir || '')}>
+                <button className="btn btn-sm" onClick={() => handleUpdateSetting('cbz_export_dir', cbzDirInput)}>
                   保存
                 </button>
               </>
