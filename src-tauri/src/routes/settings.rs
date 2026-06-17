@@ -48,6 +48,9 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> Response {
 
     match db.get_setting("root_dir") {
         Ok(root_dir) => Json(serde_json::json!({ "root_dir": root_dir })).into_response(),
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            Json(serde_json::json!({ "root_dir": "" })).into_response()
+        }
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
