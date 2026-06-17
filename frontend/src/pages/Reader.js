@@ -46,6 +46,7 @@ export default function Reader() {
   // 长图模式虚拟滚动：追踪可见范围
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 20 });
   const sentinelRefs = useRef({});
+  const activeThumbRef = useRef(null);
 
   // 显示 overlay 信息
   const showOverlay = useCallback((text) => {
@@ -87,6 +88,14 @@ export default function Reader() {
       clearTimeout(saveTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (showThumbnails && activeThumbRef.current) {
+      setTimeout(() => {
+        activeThumbRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }, 100);
+    }
+  }, [showThumbnails]);
 
   // 保存进度（防抖 + 卸载时立即保存）
   const saveParamsRef = useRef({ archiveId: null, currentIndex: 0, pagesLength: 0 });
@@ -629,6 +638,7 @@ export default function Reader() {
               {pages.map((p, i) => (
                 <div
                   key={p.id}
+                  ref={i === currentIndex ? activeThumbRef : null}
                   className={`thumbnail-item ${i === currentIndex ? 'active' : ''}`}
                   onClick={() => { goPage(i); setShowThumbnails(false); }}
                 >
