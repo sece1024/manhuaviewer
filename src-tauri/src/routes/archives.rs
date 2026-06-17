@@ -657,7 +657,10 @@ pub async fn scan(
             for (title, path, archive_type, page_count, file_size) in &archive_infos {
                 match db.insert_archive(title, path, archive_type, *page_count, *file_size) {
                     Ok(_) => added += 1,
-                    Err(_) => errors += 1,
+                    Err(e) => {
+                        tracing::warn!("Failed to insert {}: {}", path, e);
+                        errors += 1;
+                    }
                 }
             }
 
