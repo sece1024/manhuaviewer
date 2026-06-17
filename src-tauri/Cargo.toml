@@ -17,7 +17,6 @@ tauri-plugin-fs = "2"
 
 # Web 框架
 axum = "0.7"
-tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs"] }
 
 # 数据库
@@ -28,7 +27,6 @@ image = "0.24"
 
 # 压缩包
 zip = "0.6"
-sevenz-rust = "0.5"
 
 # 序列化
 serde = { version = "1", features = ["derive"] }
@@ -43,13 +41,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # 其他
 tempfile = "3"
-dotenvy = "0.15"
-quick-xml = "0.36"
 walkdir = "2"
 mime_guess = "2"
 anyhow = "1"
-thiserror = "1"
 dirs = "5"
 natord = "1"
 chrono = "0.4"
-base64 = "0.22"
