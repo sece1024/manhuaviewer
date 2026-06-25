@@ -149,7 +149,7 @@ body {
   cursor: pointer;
   transition: all var(--transition);
   white-space: nowrap;
-  min-height: 38px;
+  min-height: 44px;
   -webkit-tap-highlight-color: transparent;
 }
 .btn:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
@@ -166,9 +166,9 @@ body {
 .btn-danger { background: #ef4444; }
 .btn-danger:hover { background: #dc2626; }
 
-.btn-icon { padding: 8px; min-width: 38px; min-height: 38px; }
+.btn-icon { padding: 8px; min-width: 44px; min-height: 44px; }
 
-.btn-sm { padding: 6px 12px; font-size: 13px; min-height: 32px; }
+.btn-sm { padding: 6px 12px; font-size: 13px; min-height: 36px; }
 
 /* ── Forms ── */
 input, select, textarea {
@@ -1087,7 +1087,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   .sidebar-nav a {
     margin: 8px 4px;
     font-size: 12px;
-    padding: 8px 12px;
+    padding: 10px 12px;
+    min-height: 44px;
     flex-direction: column;
     gap: 2px;
   }
