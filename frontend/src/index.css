@@ -330,9 +330,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 /* 网格视图 */
 .archive-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, 160px);
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 16px;
-  justify-content: start;
 }
 
 .archive-card {
