@@ -159,17 +159,16 @@ export default function Library({ mode = 'library' }) {
     setOpening(false);
   };
 
-  const handleQuickOpen = async () => {
+  const handleQuickOpen = async (type) => {
     if (!isTauri) {
       setShowOpenModal(true);
       return;
     }
     try {
-      const selected = await window.__TAURI__.dialog.open({
-        multiple: false,
-        title: '选择漫画文件或文件夹',
-        filters: [{ name: '漫画文件', extensions: ['zip', 'cbz', 'rar', 'cbr', '7z'] }],
-      });
+      const options = type === 'folder'
+        ? { directory: true, multiple: false, title: '选择漫画文件夹' }
+        : { multiple: false, title: '选择漫画文件', filters: [{ name: '漫画文件', extensions: ['zip', 'cbz', 'rar', 'cbr', '7z'] }] };
+      const selected = await window.__TAURI__.dialog.open(options);
       if (selected) {
         setOpening(true);
         try {
@@ -524,8 +523,11 @@ export default function Library({ mode = 'library' }) {
 
           {!isNarrow && (
             <>
-              <button className="btn btn-secondary" onClick={handleQuickOpen}>
-                📂 打开文件
+              <button className="btn btn-secondary" onClick={() => handleQuickOpen('folder')}>
+                📁 打开文件夹
+              </button>
+              <button className="btn btn-secondary" onClick={() => handleQuickOpen('archive')}>
+                📄 打开压缩包
               </button>
 
               {!isCollection && isTauri && (
@@ -556,7 +558,8 @@ export default function Library({ mode = 'library' }) {
         {/* 窄屏：折叠次要操作 */}
         {isNarrow && showMobileMenu && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: 8 }}>
-            <button className="btn btn-secondary btn-sm" onClick={() => { handleQuickOpen(); setShowMobileMenu(false); }}>📂 打开文件</button>
+            <button className="btn btn-secondary btn-sm" onClick={() => { handleQuickOpen('folder'); setShowMobileMenu(false); }}>📁 打开文件夹</button>
+            <button className="btn btn-secondary btn-sm" onClick={() => { handleQuickOpen('archive'); setShowMobileMenu(false); }}>📄 打开压缩包</button>
             {!isCollection && isTauri && (
               <button className="btn btn-secondary btn-sm" onClick={() => { handleConvertFolderToCbz(); setShowMobileMenu(false); }} disabled={packingCbz}>
                 {packingCbz ? '⏳ 打包中...' : '📦 转换 CBZ'}
