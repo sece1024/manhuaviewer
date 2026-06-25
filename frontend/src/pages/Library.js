@@ -377,19 +377,19 @@ export default function Library({ mode = 'library' }) {
   // Welcome screen — 仅漫画库模式下，无漫画且未配置根目录时显示
   if (!isCollection && !rootDir && !editingRoot && archives.length === 0) {
     return (
-      <div style={{ maxWidth: 500, margin: '80px auto', textAlign: 'center', padding: '0 16px' }}>
-        <div style={{ fontSize: 64, marginBottom: 16 }}>📚</div>
-        <h2 style={{ marginBottom: 12, fontWeight: 700 }}>欢迎使用 MangaViewer</h2>
-        <p style={{ color: 'var(--text-secondary)', marginBottom: 24, fontSize: 14 }}>
+      <div className="welcome-screen">
+        <div className="welcome-screen-icon">📚</div>
+        <h2>欢迎使用 MangaViewer</h2>
+        <p className="welcome-screen-desc">
           打开漫画文件夹或压缩包即可开始阅读<br />
-          <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+          <span className="welcome-screen-sub">
             支持文件夹、ZIP/CBZ、RAR/CBR、7Z 压缩包
           </span>
         </p>
 
         {/* 直接打开文件 */}
         {isTauri && (
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginBottom: 24 }}>
+          <div className="welcome-screen-actions">
             <button className="btn" onClick={handleWelcomeSelectFolder} disabled={opening}>
               📁 打开文件夹
             </button>
@@ -400,17 +400,17 @@ export default function Library({ mode = 'library' }) {
         )}
 
         {/* 配置根目录（折叠） */}
-        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 8 }}>
-          <p style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 8 }}>
+        <div className="welcome-screen-root">
+          <p className="welcome-screen-root-hint">
             也可以配置漫画根目录，批量扫描导入
           </p>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
             <input
+              className="welcome-screen-root-input"
               placeholder="例: /home/user/manga"
               value={tempRoot}
               onChange={(e) => setTempRoot(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSaveRoot()}
-              style={{ flex: 1, minWidth: 0, maxWidth: 360 }}
             />
             <button className="btn btn-secondary" onClick={handleSaveRoot}>确认</button>
           </div>
