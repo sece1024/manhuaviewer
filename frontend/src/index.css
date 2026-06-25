@@ -818,6 +818,15 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   white-space: nowrap;
 }
 
+.history-item .btn-danger {
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+.history-item:hover .btn-danger,
+.history-item:focus-within .btn-danger {
+  opacity: 1;
+}
+
 /* ═══════════════════════════════════════════════════════
    Settings Page
    ═══════════════════════════════════════════════════════ */
