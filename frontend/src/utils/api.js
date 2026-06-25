@@ -62,6 +62,9 @@ const api = {
   // Direct open
   openFile: (filePath) => request('/open', { method: 'POST', body: JSON.stringify({ filePath }) }),
 
+  // CBZ export
+  listCbz: () => request('/cbz/list'),
+
   // Archives
   getArchives: (params = {}) => {
     const qs = new URLSearchParams(params).toString();

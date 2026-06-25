@@ -20,17 +20,25 @@ export default function Settings() {
   const [importing, setImporting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState(null);
+  const [cbzFiles, setCbzFiles] = useState([]);
   const toast = useToast();
 
   // 检测 Tauri 环境
   const isTauri = window.__TAURI__ !== undefined;
+
+  const loadCbzFiles = useCallback(() => {
+    if (settings.cbz_export_dir) {
+      api.listCbz().then(setCbzFiles).catch(() => setCbzFiles([]));
+    }
+  }, [settings.cbz_export_dir]);
 
   useEffect(() => {
     api.getConfig().then(c => setRootDir(c.root_dir)).catch(() => {});
     api.getStats().then(setStats).catch(() => {});
     reloadTags();
     api.getCategories().then(setCategories).catch(() => {});
-  }, [reloadTags]);
+    loadCbzFiles();
+  }, [reloadTags, loadCbzFiles]);
 
   useEffect(() => {
     setCbzDirInput(settings.cbz_export_dir || '');
@@ -263,6 +271,20 @@ export default function Settings() {
             )}
           </div>
         </div>
+        {settings.cbz_export_dir && cbzFiles.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div className="settings-row-label" style={{ marginBottom: 8 }}>已导出文件</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 240, overflow: 'auto' }}>
+              {cbzFiles.map(f => (
+                <div key={f.path} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)' }}>
+                  <span style={{ flex: 1, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.path}>{f.name}</span>
+                  <span style={{ fontSize: 12, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>{formatSize(f.size)}</span>
+                  <button className="btn btn-sm" onClick={() => api.openFile(f.path).then(r => { toast(r.message || '已打开', 'success'); }).catch(e => toast(e.message, 'error'))}>打开</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 阅读器设置 */}

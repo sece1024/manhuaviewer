@@ -3,6 +3,7 @@ const api = {
   updateConfig: jest.fn().mockResolvedValue({ success: true }),
   scan: jest.fn().mockResolvedValue({ scanned: 5, message: '扫描完成' }),
   openFile: jest.fn().mockResolvedValue({ success: true }),
+  listCbz: jest.fn().mockResolvedValue([]),
   getArchives: jest.fn().mockResolvedValue([]),
   getArchive: jest.fn().mockResolvedValue({}),
   getPages: jest.fn().mockResolvedValue({ archive: {}, pages: [], read_page: 0 }),

@@ -38,6 +38,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/open", post(archives::open_file))
         .route("/scan", post(archives::scan))
         .route("/archives/pack-cbz", post(archives::pack_cbz))
+        .route("/cbz/list", get(archives::list_cbz_files))
         // Tags
         .route("/tags", get(tags::list_tags))
         .route("/tags", post(tags::create_tag))
