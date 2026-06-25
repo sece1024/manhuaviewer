@@ -1146,7 +1146,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
     display: flex !important;
   }
 
-  .toast-container { top: 12px; right: 12px; left: 12px; }
+  .toast-container { top: auto; bottom: 120px; right: 12px; left: 12px; }
 }
 
 @media (max-width: 480px) {
