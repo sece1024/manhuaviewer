@@ -856,15 +856,24 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 }
 .settings-content { flex: 1; min-width: 0; }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .settings-layout { flex-direction: column; }
   .settings-nav {
     position: static;
     flex-direction: row;
     overflow-x: auto;
     width: 100%;
+    gap: 0;
+    padding: 8px;
+    -webkit-overflow-scrolling: touch;
   }
-  .settings-nav a { white-space: nowrap; }
+  .settings-nav a {
+    white-space: nowrap;
+    padding: 10px 14px;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
 }
 
 .settings-section {
