@@ -41,8 +41,8 @@ export default function Reader() {
   const touchRef = useRef({ startX: 0, startY: 0, startTime: 0, lastTapTime: 0, pinchDist: 0 });
   const containerRef = useRef(null);
   const saveTimerRef = useRef(null);
-  // 预加载缓存：持有 Image 对象引用防止被 GC
-  const preloadCacheRef = useRef({});
+  // 预加载缓存（LRU）：持有 Image 对象引用防止被 GC，最多 30 张
+  const preloadCacheRef = useRef({ order: [], map: {} });
   // 长图模式虚拟滚动：追踪可见范围
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 20 });
   const sentinelRefs = useRef({});
@@ -123,26 +123,50 @@ export default function Reader() {
     };
   }, []);
 
-  // 预加载图片（持久化引用防止 GC）
+  // 预加载图片（LRU 缓存，最多 30 张 Image 对象）
   useEffect(() => {
     if (pages.length === 0) return;
+    const MAX_PRELOAD = 30;
     const cache = preloadCacheRef.current;
+
+    const touch = (url) => {
+      if (cache.map[url]) {
+        // 已存在，移到最新
+        cache.order = cache.order.filter(u => u !== url);
+        cache.order.push(url);
+        return;
+      }
+      // 新增
+      const img = new Image();
+      img.src = url;
+      cache.map[url] = img;
+      cache.order.push(url);
+      // LRU 淘汰
+      while (cache.order.length > MAX_PRELOAD) {
+        const oldest = cache.order.shift();
+        delete cache.map[oldest];
+      }
+    };
+
+    const remove = (url) => {
+      if (cache.map[url]) {
+        delete cache.map[url];
+        cache.order = cache.order.filter(u => u !== url);
+      }
+    };
+
+    // 预加载当前页前后 ±2 页
     const start = Math.max(0, currentIndex - 2);
     const end = Math.min(pages.length, currentIndex + 5);
     for (let i = start; i < end; i++) {
-      if (i === currentIndex) continue;
-      const url = pages[i].url;
-      if (!cache[url]) {
-        const img = new Image();
-        img.src = url;
-        cache[url] = img;
-      }
+      if (i !== currentIndex) touch(pages[i].url);
     }
-    // 清理远离当前页的缓存（保留窗口外 10 页范围）
-    for (const url of Object.keys(cache)) {
+
+    // 清理远离当前页的缓存（±10 页范围外）
+    for (const url of [...cache.order]) {
       const idx = pages.findIndex(p => p.url === url);
       if (idx !== -1 && (idx < currentIndex - 10 || idx > currentIndex + 10)) {
-        delete cache[url];
+        remove(url);
       }
     }
   }, [currentIndex, pages]);
