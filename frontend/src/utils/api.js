@@ -15,12 +15,91 @@ function fixUrl(url) {
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 500; // 500ms base delay
 
+// --- GET 请求内存缓存 ---
+const _cache = new Map();       // key -> { data, ts }
+const _inflight = new Map();    // key -> Promise (去重同 URL 的并发请求)
+const DEFAULT_TTL = 30_000;     // 默认 30s
+
+// 特定端点的 TTL 配置
+const _ttlConfig = {
+  '/api/settings': 60_000,
+  '/api/config': 60_000,
+  '/api/tags': 60_000,
+};
+
+function _getTtl(url) {
+  // 精确匹配优先
+  if (_ttlConfig[url]) return _ttlConfig[url];
+  // 前缀匹配
+  for (const [prefix, ttl] of Object.entries(_ttlConfig)) {
+    if (url.startsWith(prefix + '?') || url.startsWith(prefix + '/')) return ttl;
+  }
+  return DEFAULT_TTL;
+}
+
+// 匹配实际图片端点：/api/archives/{id}/pages/{idx} 或 .../thumb
+const _imagePageRe = /\/pages\/\d+(\/thumb)?$/;
+function _isCacheable(url, options) {
+  const method = (options?.method || 'GET').toUpperCase();
+  return method === 'GET' && !_imagePageRe.test(url); // 页面图片请求走浏览器缓存
+}
+
+function _getCached(url) {
+  const entry = _cache.get(url);
+  if (entry && Date.now() - entry.ts < _getTtl(url)) return entry.data;
+  if (entry) _cache.delete(url);
+  return null;
+}
+
+function _setCache(url, data) {
+  _cache.set(url, { data, ts: Date.now() });
+}
+
+function _invalidate(pattern) {
+  for (const key of _cache.keys()) {
+    if (key.includes(pattern)) _cache.delete(key);
+  }
+}
+
+export function clearCache(pattern) {
+  if (pattern) {
+    _invalidate(pattern);
+  } else {
+    _cache.clear();
+    _inflight.clear();
+  }
+}
+
 async function request(url, options = {}) {
   const method = (options.method || 'GET').toUpperCase();
   const isIdempotent = method === 'GET';
   const maxAttempts = isIdempotent ? MAX_RETRIES : 1;
+
+  // GET 请求：检查缓存 + in-flight dedup
+  if (isIdempotent && _isCacheable(url, options)) {
+    const cached = _getCached(url);
+    if (cached !== null) return cached;
+
+    // 同一 URL 正在请求中，复用 Promise
+    if (_inflight.has(url)) return _inflight.get(url);
+
+    const promise = _doFetch(url, options, maxAttempts);
+    _inflight.set(url, promise);
+    try {
+      const result = await promise;
+      _setCache(url, result);
+      return result;
+    } finally {
+      _inflight.delete(url);
+    }
+  }
+
+  return _doFetch(url, options, maxAttempts);
+}
+
+async function _doFetch(url, options, maxAttempts) {
   let lastError;
-  
+
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const res = await fetch(`${BASE}${url}`, {
@@ -34,33 +113,36 @@ async function request(url, options = {}) {
       return res.json();
     } catch (err) {
       lastError = err;
-      
+
       // Only retry on connection errors for idempotent requests
-      if (isIdempotent && attempt < maxAttempts - 1 &&
-          (err.message.includes('Failed to fetch') || 
+      if (maxAttempts > 1 && attempt < maxAttempts - 1 &&
+          (err.message.includes('Failed to fetch') ||
            err.message.includes('ECONNREFUSED') ||
            err.message.includes('NetworkError'))) {
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (attempt + 1)));
         continue;
       }
-      
+
       throw err;
     }
   }
-  
+
   throw lastError;
 }
 
 const api = {
   // Config
   getConfig: () => request('/config'),
-  updateConfig: (root_dir) => request('/config', { method: 'PUT', body: JSON.stringify({ root_dir }) }),
+  updateConfig: (root_dir) =>
+    request('/config', { method: 'PUT', body: JSON.stringify({ root_dir }) }).then(r => { _invalidate('/api/config'); return r; }),
 
   // Scan
-  scan: () => request('/scan', { method: 'POST' }),
+  scan: () =>
+    request('/scan', { method: 'POST' }).then(r => { _invalidate('/api/archives'); return r; }),
 
   // Direct open
-  openFile: (filePath) => request('/open', { method: 'POST', body: JSON.stringify({ filePath }) }),
+  openFile: (filePath) =>
+    request('/open', { method: 'POST', body: JSON.stringify({ filePath }) }).then(r => { _invalidate('/api/archives'); return r; }),
 
   // CBZ export
   listCbz: () => request('/cbz/list'),
@@ -80,16 +162,20 @@ const api = {
   pageUrl: (archiveId, pageIndex) => `${BASE}/archives/${archiveId}/pages/${pageIndex}`,
   pageThumbUrl: (archiveId, pageIndex) => `${BASE}/archives/${archiveId}/pages/${pageIndex}/thumb`,
   coverUrl: (archiveId) => `${BASE}/archives/${archiveId}/cover`,
-  deleteArchive: (id) => request(`/archives/${id}`, { method: 'DELETE' }),
+  deleteArchive: (id) =>
+    request(`/archives/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/api/archives'); _invalidate('/api/history'); return r; }),
 
   // History
   getHistory: () => request('/history').then(items =>
     items.map(h => ({ ...h, cover_url: fixUrl(h.cover_url) }))
   ),
   saveHistory: (archive_id, page_index, total_pages) =>
-    request('/history', { method: 'POST', body: JSON.stringify({ archive_id, page_index, total_pages }) }),
-  deleteHistory: (archiveId) => request(`/history/${archiveId}`, { method: 'DELETE' }),
-  clearHistory: () => request('/history', { method: 'DELETE' }),
+    request('/history', { method: 'POST', body: JSON.stringify({ archive_id, page_index, total_pages }) })
+      .then(r => { _invalidate('/api/history'); return r; }),
+  deleteHistory: (archiveId) =>
+    request(`/history/${archiveId}`, { method: 'DELETE' }).then(r => { _invalidate('/api/history'); return r; }),
+  clearHistory: () =>
+    request('/history', { method: 'DELETE' }).then(r => { _invalidate('/api/history'); return r; }),
 
   // Tags
   getTags: (params = {}) => {
@@ -98,34 +184,48 @@ const api = {
   },
   getNamespaces: () => request('/tags/namespaces'),
   getArchiveTags: (archiveId) => request(`/archives/${archiveId}/tags`),
-  createTag: (data) => request('/tags', { method: 'POST', body: JSON.stringify(data) }),
-  updateTag: (id, data) => request(`/tags/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  deleteTag: (id) => request(`/tags/${id}`, { method: 'DELETE' }),
-  assignTag: (archive_id, tag_id) => request('/tags/assign', { method: 'POST', body: JSON.stringify({ archive_id, tag_id }) }),
-  removeTag: (archiveId, tagId) => request(`/tags/${archiveId}/${tagId}`, { method: 'DELETE' }),
+  createTag: (data) =>
+    request('/tags', { method: 'POST', body: JSON.stringify(data) }).then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); return r; }),
+  updateTag: (id, data) =>
+    request(`/tags/${id}`, { method: 'PUT', body: JSON.stringify(data) }).then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); return r; }),
+  deleteTag: (id) =>
+    request(`/tags/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); return r; }),
+  assignTag: (archive_id, tag_id) =>
+    request('/tags/assign', { method: 'POST', body: JSON.stringify({ archive_id, tag_id }) }).then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); _invalidate(`/api/archives/${archive_id}/tags`); return r; }),
+  removeTag: (archiveId, tagId) =>
+    request(`/tags/${archiveId}/${tagId}`, { method: 'DELETE' }).then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); _invalidate(`/api/archives/${archiveId}/tags`); return r; }),
 
   // Categories
   getCategories: () => request('/categories'),
-  createCategory: (data) => request('/categories', { method: 'POST', body: JSON.stringify(data) }),
-  updateCategory: (id, data) => request(`/categories/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  deleteCategory: (id) => request(`/categories/${id}`, { method: 'DELETE' }),
-  assignCategory: (archive_id, category_id) => request('/categories/assign', { method: 'POST', body: JSON.stringify({ archive_id, category_id }) }),
-  removeCategory: (archiveId, categoryId) => request(`/categories/${archiveId}/${categoryId}`, { method: 'DELETE' }),
+  createCategory: (data) =>
+    request('/categories', { method: 'POST', body: JSON.stringify(data) }).then(r => { _invalidate('/api/categories'); return r; }),
+  updateCategory: (id, data) =>
+    request(`/categories/${id}`, { method: 'PUT', body: JSON.stringify(data) }).then(r => { _invalidate('/api/categories'); return r; }),
+  deleteCategory: (id) =>
+    request(`/categories/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/api/categories'); return r; }),
+  assignCategory: (archive_id, category_id) =>
+    request('/categories/assign', { method: 'POST', body: JSON.stringify({ archive_id, category_id }) }).then(r => { _invalidate('/api/categories'); _invalidate('/api/archives'); return r; }),
+  removeCategory: (archiveId, categoryId) =>
+    request(`/categories/${archiveId}/${categoryId}`, { method: 'DELETE' }).then(r => { _invalidate('/api/categories'); _invalidate('/api/archives'); return r; }),
 
   // Settings
   getSettings: () => request('/settings'),
-  updateSettings: (data) => request('/settings', { method: 'PUT', body: JSON.stringify(data) }),
+  updateSettings: (data) =>
+    request('/settings', { method: 'PUT', body: JSON.stringify(data) }).then(r => { _invalidate('/api/settings'); return r; }),
   getStats: () => request('/stats'),
 
   // Backup & Restore
   exportBackup: () => `${BASE}/backup`,
-  importBackup: (data) => request('/restore', { method: 'POST', body: JSON.stringify(data) }),
+  importBackup: (data) =>
+    request('/restore', { method: 'POST', body: JSON.stringify(data) }).then(r => {
+      _invalidate('/api/archives'); _invalidate('/api/tags'); _invalidate('/api/categories'); _invalidate('/api/history');
+      return r;
+    }),
 
   // CBZ 打包归档
-  packCbz: (folderPath, outputDir) => request('/archives/pack-cbz', {
-    method: 'POST',
-    body: JSON.stringify({ folderPath, outputDir }),
-  }),
+  packCbz: (folderPath, outputDir) =>
+    request('/archives/pack-cbz', { method: 'POST', body: JSON.stringify({ folderPath, outputDir }) })
+      .then(r => { _invalidate('/api/archives'); return r; }),
 };
 
 export default api;
