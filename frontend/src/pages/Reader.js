@@ -577,42 +577,25 @@ export default function Reader() {
           </div>
         ) : doublePage && currentIndex + 1 < pages.length ? (
           // 双页模式：RTL（日漫）右页=当前页，左页=下一页；LTR 反之
-          <div style={{ display: 'flex', gap: 4, height: '100%', alignItems: 'center' }}>
-            {pageDirection === 'rtl' ? (
-              <>
-                <img
-                  src={pages[currentIndex + 1]?.url}
-                  alt={pages[currentIndex + 1]?.filename}
-                  className="reader-image"
-                  style={imgStyle}
-                  draggable={false}
-                />
-                <img
-                  src={pages[currentIndex]?.url}
-                  alt={pages[currentIndex]?.filename}
-                  className="reader-image"
-                  style={imgStyle}
-                  draggable={false}
-                />
-              </>
-            ) : (
-              <>
-                <img
-                  src={pages[currentIndex]?.url}
-                  alt={pages[currentIndex]?.filename}
-                  className="reader-image"
-                  style={imgStyle}
-                  draggable={false}
-                />
-                <img
-                  src={pages[currentIndex + 1]?.url}
-                  alt={pages[currentIndex + 1]?.filename}
-                  className="reader-image"
-                  style={imgStyle}
-                  draggable={false}
-                />
-              </>
-            )}
+          (() => {
+            const [left, right] = pageDirection === 'rtl'
+              ? [pages[currentIndex + 1], pages[currentIndex]]
+              : [pages[currentIndex], pages[currentIndex + 1]];
+            return (
+              <div style={{ display: 'flex', gap: 4, height: '100%', alignItems: 'center' }}>
+                {[left, right].map((p) => (
+                  <img
+                    key={p.id}
+                    src={p.url}
+                    alt={p.filename}
+                    className="reader-image"
+                    style={imgStyle}
+                    draggable={false}
+                  />
+                ))}
+              </div>
+            );
+          })()
           </div>
         ) : (
           <div className="reader-page-wrapper">
