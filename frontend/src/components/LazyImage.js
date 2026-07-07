@@ -1,7 +1,29 @@
 import React, { useState, useEffect, useRef } from 'react';
 
+// 共享 IntersectionObserver：所有 LazyImage 实例共用一个 observer
+const _callbacks = new WeakMap();  // el -> callback
+let _sharedObserver = null;
+
+function getSharedObserver() {
+  if (_sharedObserver) return _sharedObserver;
+  _sharedObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          const cb = _callbacks.get(entry.target);
+          if (cb) cb();
+          _sharedObserver.unobserve(entry.target);
+          _callbacks.delete(entry.target);
+        }
+      }
+    },
+    { rootMargin: '200px' }
+  );
+  return _sharedObserver;
+}
+
 /**
- * LazyImage — 使用 IntersectionObserver 的懒加载图片组件
+ * LazyImage — 使用共享 IntersectionObserver 的懒加载图片组件
  * 仅当图片进入视口时才开始加载，配合骨架屏占位
  */
 export default function LazyImage({ src, alt, className, style, onClick }) {
@@ -14,18 +36,14 @@ export default function LazyImage({ src, alt, className, style, onClick }) {
     const el = ref.current;
     if (!el) return;
 
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setInView(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: '200px' } // 提前 200px 开始加载
-    );
+    const cb = () => setInView(true);
+    _callbacks.set(el, cb);
+    getSharedObserver().observe(el);
 
-    observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      getSharedObserver().unobserve(el);
+      _callbacks.delete(el);
+    };
   }, []);
 
   if (error || !src) {
