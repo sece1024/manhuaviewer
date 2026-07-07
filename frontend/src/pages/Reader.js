@@ -482,13 +482,6 @@ export default function Reader() {
             <option value="width">适应宽度</option>
             <option value="original">原始大小</option>
           </select>
-          <button className="btn btn-secondary btn-icon" onClick={() => setRotation(r => (r + 90) % 360)} title="旋转" aria-label="旋转 90 度">↻</button>
-          <button className="btn btn-secondary btn-icon" onClick={() => setShowThumbnails(true)} title="缩略图" aria-label="打开缩略图总览">📋</button>
-          <button className="btn btn-secondary btn-icon" onClick={() => setShowJump(true)} title="跳转" aria-label="跳转到指定页">🔢</button>
-          <button className="btn btn-secondary btn-icon" onClick={() => { setScale(1); setTranslate({ x: 0, y: 0 }); }} title="重置缩放" aria-label="重置缩放至 1:1">1:1</button>
-          <button className="btn btn-secondary btn-icon" onClick={() => setPageDirection(d => d === 'rtl' ? 'ltr' : 'rtl')} title="翻页方向" aria-label={`翻页方向：${pageDirection === 'rtl' ? '从右到左' : '从左到右'}`}>
-            {pageDirection === 'rtl' ? '→←' : '←→'}
-          </button>
           {archive && archive.archive_type === 'folder' && (
             <button className="btn btn-secondary btn-icon" onClick={handlePackCbz} disabled={packing} title="归档为 CBZ" aria-label="将当前文件夹归档为 CBZ">
               {packing ? '⏳' : '📦'}
@@ -496,26 +489,23 @@ export default function Reader() {
           )}
         </div>
 
-        {/* 移动端：折叠次要工具按钮 */}
-        <button className="btn btn-secondary btn-icon toolbar-menu-btn" onClick={() => setShowMenu(v => !v)} title="更多" aria-label="打开更多菜单">⋯</button>
+        <button className="btn btn-secondary btn-icon" onClick={() => setShowMenu(v => !v)} title="更多" aria-label="打开更多菜单">⋯</button>
 
         <span className="status-text">
           {currentIndex + 1}/{pages.length} · {Math.round(scale * 100)}% · {fitMode === 'height' ? '适应高' : fitMode === 'width' ? '适应宽' : '原始'}
         </span>
       </div>
 
-      {/* 移动端展开菜单 */}
+      {/* 展开菜单：缩略图、跳转、旋转、缩放、翻页方向、标签、CBZ */}
       {showMenu && (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: 8 }}>
-          <button className="btn btn-secondary btn-sm" onClick={() => { setRotation(r => (r + 90) % 360); setShowMenu(false); }}>↻ 旋转</button>
           <button className="btn btn-secondary btn-sm" onClick={() => { setShowThumbnails(true); setShowMenu(false); }}>📋 缩略图</button>
           <button className="btn btn-secondary btn-sm" onClick={() => { setShowJump(true); setShowMenu(false); }}>🔢 跳转</button>
-          <button className="btn btn-secondary btn-sm" onClick={() => { setScale(1); setTranslate({ x: 0, y: 0 }); setShowMenu(false); }}>重置缩放</button>
-          <select value={fitMode} onChange={(e) => { setFitMode(e.target.value); updateSetting('reader_fit', e.target.value); setShowMenu(false); }} style={{ minWidth: 80 }}>
-            <option value="height">适应高度</option>
-            <option value="width">适应宽度</option>
-            <option value="original">原始大小</option>
-          </select>
+          <button className="btn btn-secondary btn-sm" onClick={() => { setRotation(r => (r + 90) % 360); setShowMenu(false); }}>↻ 旋转</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => { setScale(1); setTranslate({ x: 0, y: 0 }); setShowMenu(false); }}>1:1 重置</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => { setPageDirection(d => d === 'rtl' ? 'ltr' : 'rtl'); setShowMenu(false); }}>
+            {pageDirection === 'rtl' ? '→← 右翻' : '←→ 左翻'}
+          </button>
           <button className="btn btn-secondary btn-sm" onClick={() => { setShowTagPicker(true); setShowMenu(false); }}>🏷️ 标签</button>
           {archive && archive.archive_type === 'folder' && (
             <button className="btn btn-secondary btn-sm" onClick={() => { handlePackCbz(); setShowMenu(false); }} disabled={packing}>
