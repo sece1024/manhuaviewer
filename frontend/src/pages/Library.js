@@ -185,47 +185,6 @@ export default function Library({ mode = 'library' }) {
     }
   };
 
-  const handleSelectFolder = async () => {
-    if (!isTauri) {
-      toast('文件夹选择仅在桌面应用中可用', 'warning');
-      return;
-    }
-    try {
-      const selected = await window.__TAURI__.dialog.open({
-        directory: true,
-        multiple: false,
-        title: '选择漫画文件夹',
-      });
-      if (selected) {
-        setOpenPath(selected);
-      }
-    } catch (e) {
-      toast('选择文件夹失败: ' + e.message, 'error');
-    }
-  };
-
-  const handleSelectFile = async () => {
-    if (!isTauri) {
-      toast('文件选择仅在桌面应用中可用', 'warning');
-      return;
-    }
-    try {
-      const selected = await window.__TAURI__.dialog.open({
-        multiple: false,
-        title: '选择漫画文件',
-        filters: [{
-          name: '漫画文件',
-          extensions: ['zip', 'cbz', 'rar', 'cbr', '7z']
-        }]
-      });
-      if (selected) {
-        setOpenPath(selected);
-      }
-    } catch (e) {
-      toast('选择文件失败: ' + e.message, 'error');
-    }
-  };
-
   // 选择文件夹并直接打包为 CBZ
   const handleConvertFolderToCbz = async () => {
     if (!isTauri) {
@@ -315,65 +274,6 @@ export default function Library({ mode = 'library' }) {
   // 标签多时才显示搜索框（>10 才有意义）
   const showTagSearch = tags.length > 10;
 
-  // 欢迎屏幕上直接选择文件夹打开
-  const handleWelcomeSelectFolder = async () => {
-    if (!isTauri) {
-      toast('文件夹选择仅在桌面应用中可用', 'warning');
-      return;
-    }
-    try {
-      const selected = await window.__TAURI__.dialog.open({
-        directory: true,
-        multiple: false,
-        title: '选择漫画文件夹',
-      });
-      if (selected) {
-        setOpening(true);
-        try {
-          const result = await api.openFile(selected);
-          toast(result.message || '已打开', 'success');
-          navigate(`/reader/${result.id}`);
-        } catch (e) {
-          toast(e.message, 'error');
-        }
-        setOpening(false);
-      }
-    } catch (e) {
-      toast('选择文件夹失败: ' + e.message, 'error');
-    }
-  };
-
-  // 欢迎屏幕上直接选择压缩包打开
-  const handleWelcomeSelectFile = async () => {
-    if (!isTauri) {
-      toast('文件选择仅在桌面应用中可用', 'warning');
-      return;
-    }
-    try {
-      const selected = await window.__TAURI__.dialog.open({
-        multiple: false,
-        title: '选择漫画文件',
-        filters: [{
-          name: '漫画文件',
-          extensions: ['zip', 'cbz', 'rar', 'cbr', '7z']
-        }]
-      });
-      if (selected) {
-        setOpening(true);
-        try {
-          const result = await api.openFile(selected);
-          toast(result.message || '已打开', 'success');
-          navigate(`/reader/${result.id}`);
-        } catch (e) {
-          toast(e.message, 'error');
-        }
-        setOpening(false);
-      }
-    } catch (e) {
-      toast('选择文件失败: ' + e.message, 'error');
-    }
-  };
-
   // Welcome screen — 仅漫画库模式下，无漫画且未配置根目录时显示
   if (!isCollection && !rootDir && !editingRoot && archives.length === 0) {
     return (
@@ -390,10 +290,10 @@ export default function Library({ mode = 'library' }) {
         {/* 直接打开文件 */}
         {isTauri && (
           <div className="welcome-screen-actions">
-            <button className="btn" onClick={handleWelcomeSelectFolder} disabled={opening}>
+            <button className="btn" onClick={() => handleQuickOpen('folder')} disabled={opening}>
               📁 打开文件夹
             </button>
-            <button className="btn" onClick={handleWelcomeSelectFile} disabled={opening}>
+            <button className="btn" onClick={() => handleQuickOpen('archive')} disabled={opening}>
               📄 打开压缩包
             </button>
           </div>
@@ -521,30 +421,7 @@ export default function Library({ mode = 'library' }) {
             {showSidebar ? '◁' : '▷'}
           </button>
 
-          {!isNarrow && (
-            <>
-              <button className="btn btn-secondary" onClick={() => handleQuickOpen('folder')}>
-                📁 打开文件夹
-              </button>
-              <button className="btn btn-secondary" onClick={() => handleQuickOpen('archive')}>
-                📄 打开压缩包
-              </button>
-
-              {!isCollection && isTauri && (
-                <button className="btn btn-secondary" onClick={handleConvertFolderToCbz} disabled={packingCbz}>
-                  📦 转换 CBZ
-                </button>
-              )}
-
-              {!isCollection && (
-                <button className="btn" onClick={handleScan} disabled={loading}>
-                  {loading ? '扫描中...' : '🔄 扫描'}
-                </button>
-              )}
-            </>
-          )}
-
-          {isNarrow && (
+          {isNarrow ? (
             <button
               className="btn btn-secondary btn-icon"
               onClick={() => setShowMobileMenu(v => !v)}
@@ -552,24 +429,36 @@ export default function Library({ mode = 'library' }) {
               aria-label="打开更多操作菜单"
               aria-expanded={showMobileMenu}
             >⋯</button>
+          ) : (
+            <ArchiveActionButtons
+              isCollection={isCollection}
+              isTauri={isTauri}
+              opening={opening}
+              loading={loading}
+              packingCbz={packingCbz}
+              onOpenFolder={() => handleQuickOpen('folder')}
+              onOpenArchive={() => handleQuickOpen('archive')}
+              onConvertCbz={handleConvertFolderToCbz}
+              onScan={handleScan}
+            />
           )}
         </div>
 
         {/* 窄屏：折叠次要操作 */}
         {isNarrow && showMobileMenu && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: 8 }}>
-            <button className="btn btn-secondary btn-sm" onClick={() => { handleQuickOpen('folder'); setShowMobileMenu(false); }}>📁 打开文件夹</button>
-            <button className="btn btn-secondary btn-sm" onClick={() => { handleQuickOpen('archive'); setShowMobileMenu(false); }}>📄 打开压缩包</button>
-            {!isCollection && isTauri && (
-              <button className="btn btn-secondary btn-sm" onClick={() => { handleConvertFolderToCbz(); setShowMobileMenu(false); }} disabled={packingCbz}>
-                {packingCbz ? '⏳ 打包中...' : '📦 转换 CBZ'}
-              </button>
-            )}
-            {!isCollection && (
-              <button className="btn btn-sm" onClick={() => { handleScan(); setShowMobileMenu(false); }} disabled={loading}>
-                {loading ? '⏳ 扫描中...' : '🔄 扫描'}
-              </button>
-            )}
+            <ArchiveActionButtons
+              isCollection={isCollection}
+              isTauri={isTauri}
+              opening={opening}
+              loading={loading}
+              packingCbz={packingCbz}
+              variant="mobile"
+              onOpenFolder={() => { handleQuickOpen('folder'); setShowMobileMenu(false); }}
+              onOpenArchive={() => { handleQuickOpen('archive'); setShowMobileMenu(false); }}
+              onConvertCbz={() => { handleConvertFolderToCbz(); setShowMobileMenu(false); }}
+              onScan={() => { handleScan(); setShowMobileMenu(false); }}
+            />
           </div>
         )}
 
@@ -723,3 +612,29 @@ export default function Library({ mode = 'library' }) {
 
 // 命名空间标签默认分组 key
 const NS_OTHER = '_other';
+
+// 漫画库操作按钮组（桌面 / 移动端共用）
+function ArchiveActionButtons({ isCollection, isTauri, opening, loading, packingCbz, variant, onOpenFolder, onOpenArchive, onConvertCbz, onScan }) {
+  const sizeClass = variant === 'mobile' ? 'btn-sm' : '';
+
+  return (
+    <>
+      <button className={`btn btn-secondary ${sizeClass}`} onClick={onOpenFolder} disabled={opening}>
+        📁 打开文件夹
+      </button>
+      <button className={`btn btn-secondary ${sizeClass}`} onClick={onOpenArchive} disabled={opening}>
+        📄 打开压缩包
+      </button>
+      {!isCollection && isTauri && (
+        <button className={`btn btn-secondary ${sizeClass}`} onClick={onConvertCbz} disabled={packingCbz}>
+          {packingCbz ? '⏳ 打包中...' : '📦 转换 CBZ'}
+        </button>
+      )}
+      {!isCollection && (
+        <button className={`btn ${sizeClass}`} onClick={onScan} disabled={loading}>
+          {loading ? '扫描中...' : '🔄 扫描'}
+        </button>
+      )}
+    </>
+  );
+}
