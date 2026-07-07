@@ -7,6 +7,7 @@ import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
 import LazyImage from '../components/LazyImage';
 import TagPicker from '../components/TagPicker';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 // 检测是否在 Tauri 环境中
 const isTauri = window.__TAURI__ !== undefined;
@@ -30,6 +31,8 @@ export default function Library({ mode = 'library' }) {
   const [opening, setOpening] = useState(false);
   const [packingCbz, setPackingCbz] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState(null);
   // 窄屏：把次要操作收进 ⋯ 菜单
   const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
   // 分页状态
@@ -212,8 +215,16 @@ export default function Library({ mode = 'library' }) {
     }
   };
 
-  const handleRemoveArchive = async (e, id) => {
+  const handleRemoveArchive = (e, id) => {
     e.stopPropagation();
+    setConfirmTarget(id);
+    setConfirmOpen(true);
+  };
+
+  const handleConfirmRemove = async () => {
+    setConfirmOpen(false);
+    const id = confirmTarget;
+    if (!id) return;
     try {
       await api.deleteArchive(id);
       toast('已移除', 'success');
@@ -606,6 +617,17 @@ export default function Library({ mode = 'library' }) {
       {tagPickerArchiveId && (
         <TagPicker archiveId={tagPickerArchiveId} onClose={handleCloseTagPicker} />
       )}
+
+      {/* 删除确认弹窗 */}
+      <ConfirmDialog
+        open={confirmOpen}
+        title="移除漫画"
+        message="确定从库中移除该漫画？此操作不会删除实际文件。"
+        danger
+        confirmText="移除"
+        onConfirm={handleConfirmRemove}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </div>
   );
 }
