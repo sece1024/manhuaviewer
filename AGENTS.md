@@ -52,6 +52,15 @@ Frontend tests live in `frontend/src/__tests__/` and use React Testing Library +
 2. Register it in `src-tauri/src/routes/mod.rs` via `Router::new().route(...)` (under `/api` unless it's OPDS).
 3. Add a client method in `frontend/src/utils/api.js`.
 
+## Implementation workflow
+
+After completing a feature or fix, follow this sequence before finishing:
+
+1. `pnpm lint` — Rust clippy must pass with zero warnings.
+2. `pnpm --filter manhuaviewer-frontend build` — frontend must compile.
+3. `cd src-tauri && cargo test` — all backend tests must pass.
+4. `git add` the changed files and `git commit` with a Conventional Commits message (`feat:`, `fix:`, etc.).
+
 ## Releasing
 
 Versions live in three places and must be kept in sync: `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`. Use `./scripts/bump-version.sh <x.y.z>` to update all three at once. Then `git tag v<x.y.z>` and push — `.github/workflows/release.yml` builds macOS arm64 + Windows x64 installers and creates a **draft** GitHub Release (manually publish from the Releases page). Full flow: see `CONTRIBUTING.md`.
