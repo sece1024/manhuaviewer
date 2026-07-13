@@ -14,6 +14,7 @@ export default function Reader() {
 
   const [archive, setArchive] = useState(null);
   const [pages, setPages] = useState([]);
+  const [chapters, setChapters] = useState(null); // 组内章节列表（仅 group 主档案）
   const [currentIndex, setCurrentIndex] = useState(0);
   const currentIndexRef = useRef(0);
   const [doublePage, setDoublePage] = useState(false);
@@ -61,6 +62,7 @@ export default function Reader() {
     // 重置状态，防止 save effect 用旧数据保存到新 archiveId
     setArchive(null);
     setPages([]);
+    setChapters(null);
     setCurrentIndex(0);
     currentIndexRef.current = 0;
     async function load() {
@@ -68,6 +70,14 @@ export default function Reader() {
         const data = await api.getPages(archiveId);
         if (cancelled) return;
         setArchive(data.archive);
+
+        // 检测是否为组的主档案（group_id 等于自身 id）
+        if (data.archive.group_id && data.archive.group_id === data.archive.id) {
+          const chapterList = await api.getGroupChapters(data.archive.group_id);
+          if (!cancelled) setChapters(chapterList);
+          return;
+        }
+
         setPages(data.pages);
         if (data.read_page > 0 && data.read_page < data.pages.length) {
           currentIndexRef.current = data.read_page;
@@ -419,6 +429,39 @@ export default function Reader() {
       <div className="empty-state">
         <div className="empty-state-icon">⏳</div>
         <div className="empty-state-text">加载中...</div>
+      </div>
+    );
+  }
+
+  // 组的章节列表视图
+  if (chapters) {
+    return (
+      <div className="reader-chapter-list" style={{ maxWidth: 600, margin: '0 auto', padding: '24px 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+          <button className="btn btn-secondary" onClick={() => navigate('/')}>← 返回</button>
+          <h2 style={{ margin: 0, fontSize: 20 }}>{archive.title}</h2>
+          <span style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>{chapters.length} 话</span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {chapters.map((ch, i) => (
+            <div
+              key={ch.id}
+              className="chapter-item"
+              onClick={() => navigate(`/reader/${ch.id}`)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+                borderRadius: 8, cursor: 'pointer', background: 'var(--card-bg)',
+                border: '1px solid var(--border)', transition: 'background 0.15s',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--hover-bg)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'var(--card-bg)'}
+            >
+              <span style={{ color: 'var(--text-tertiary)', fontSize: 13, minWidth: 24 }}>{i + 1}</span>
+              <span style={{ flex: 1 }}>{ch.title}</span>
+              <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>{ch.page_count} 页</span>
+            </div>
+          ))}
+        </div>
       </div>
     );
   }

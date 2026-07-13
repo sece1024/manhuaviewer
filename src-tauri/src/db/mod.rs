@@ -25,6 +25,7 @@ pub struct ArchiveRow {
     pub cover_image: Option<String>,
     pub file_size: i64,
     pub thumbnail_path: Option<String>,
+    pub group_id: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -105,7 +106,7 @@ impl Database {
     // Archive operations
     pub fn get_archive(&self, id: i64) -> Result<Option<ArchiveRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, created_at, updated_at FROM archives WHERE id = ?"
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at FROM archives WHERE id = ?"
         )?;
 
         let mut rows = stmt.query_map([id], |row| {
@@ -118,8 +119,9 @@ impl Database {
                 cover_image: row.get(5)?,
                 file_size: row.get(6)?,
                 thumbnail_path: row.get(7)?,
-                created_at: row.get(8)?,
-                updated_at: row.get(9)?,
+                group_id: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
             })
         })?;
 
@@ -131,7 +133,7 @@ impl Database {
 
     pub fn get_archive_by_path(&self, path: &str) -> Result<Option<ArchiveRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, created_at, updated_at FROM archives WHERE path = ?"
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at FROM archives WHERE path = ?"
         )?;
 
         let mut rows = stmt.query_map([path], |row| {
@@ -144,8 +146,9 @@ impl Database {
                 cover_image: row.get(5)?,
                 file_size: row.get(6)?,
                 thumbnail_path: row.get(7)?,
-                created_at: row.get(8)?,
-                updated_at: row.get(9)?,
+                group_id: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
             })
         })?;
 
@@ -214,7 +217,7 @@ impl Database {
         let direction = if order == "asc" { "ASC" } else { "DESC" };
 
         let sql = format!(
-            "SELECT a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.thumbnail_path, a.created_at, a.updated_at FROM archives a{} {} ORDER BY {} {} LIMIT ? OFFSET ?",
+            "SELECT a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.thumbnail_path, a.group_id, a.created_at, a.updated_at FROM archives a{} {} ORDER BY {} {} LIMIT ? OFFSET ?",
             join_clause, where_clause, order_clause, direction
         );
 
@@ -235,8 +238,9 @@ impl Database {
                         cover_image: row.get(5)?,
                         file_size: row.get(6)?,
                         thumbnail_path: row.get(7)?,
-                        created_at: row.get(8)?,
-                        updated_at: row.get(9)?,
+                        group_id: row.get(8)?,
+                        created_at: row.get(9)?,
+                        updated_at: row.get(10)?,
                     })
                 },
             )?
@@ -253,7 +257,7 @@ impl Database {
         offset: i64,
     ) -> Result<Vec<ArchiveRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.thumbnail_path, a.created_at, a.updated_at
+            "SELECT a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.thumbnail_path, a.group_id, a.created_at, a.updated_at
              FROM archives a
              JOIN archive_tags at ON at.archive_id = a.id
              WHERE at.tag_id = ?
@@ -272,8 +276,9 @@ impl Database {
                     cover_image: row.get(5)?,
                     file_size: row.get(6)?,
                     thumbnail_path: row.get(7)?,
-                    created_at: row.get(8)?,
-                    updated_at: row.get(9)?,
+                    group_id: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
                 })
             })?
             .filter_map(log_and_skip)
@@ -311,6 +316,63 @@ impl Database {
 
     pub fn delete_archive(&self, id: i64) -> Result<usize> {
         self.conn.execute("DELETE FROM archives WHERE id = ?", [id])
+    }
+
+    pub fn update_archive_title(&self, id: i64, title: &str) -> Result<usize> {
+        self.conn.execute(
+            "UPDATE archives SET title = ?, updated_at = datetime('now') WHERE id = ?",
+            (title, id),
+        )
+    }
+
+    /// 获取组内所有章节（按路径排序）
+    pub fn get_group_chapters(&self, group_id: i64) -> Result<Vec<ArchiveRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at
+             FROM archives WHERE group_id = ? ORDER BY path",
+        )?;
+
+        let archives = stmt
+            .query_map([group_id], |row| {
+                Ok(ArchiveRow {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    path: row.get(2)?,
+                    archive_type: row.get(3)?,
+                    page_count: row.get(4)?,
+                    cover_image: row.get(5)?,
+                    file_size: row.get(6)?,
+                    thumbnail_path: row.get(7)?,
+                    group_id: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                })
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+
+        Ok(archives)
+    }
+
+    /// 合并多个档案：第一个为主档案，其余 group_id 设为主档案 id
+    pub fn merge_archives(&self, archive_ids: &[i64]) -> Result<i64> {
+        let primary_id = archive_ids[0];
+
+        // 主档案: group_id 设为自身 id
+        self.conn.execute(
+            "UPDATE archives SET group_id = ?, updated_at = datetime('now') WHERE id = ?",
+            (primary_id, primary_id),
+        )?;
+
+        // 其余档案: group_id 设为主档案 id
+        for &id in &archive_ids[1..] {
+            self.conn.execute(
+                "UPDATE archives SET group_id = ?, updated_at = datetime('now') WHERE id = ?",
+                (primary_id, id),
+            )?;
+        }
+
+        Ok(primary_id)
     }
 
     // Thumbnail cache operations

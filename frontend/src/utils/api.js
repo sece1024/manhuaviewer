@@ -164,6 +164,14 @@ const api = {
   coverUrl: (archiveId) => `${BASE}/archives/${archiveId}/cover`,
   deleteArchive: (id) =>
     request(`/archives/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/api/archives'); _invalidate('/api/history'); return r; }),
+  updateTitle: (id, title) =>
+    request(`/archives/${id}/title`, { method: 'PUT', body: JSON.stringify({ title }) })
+      .then(r => { _invalidate('/api/archives'); return r; }),
+  mergeArchives: (archiveIds) =>
+    request('/merge', { method: 'POST', body: JSON.stringify({ archive_ids: archiveIds }) })
+      .then(r => { _invalidate('/api/archives'); return r; }),
+  getGroupChapters: (groupId) =>
+    request(`/archives?group_id=${groupId}`),
 
   // History
   getHistory: () => request('/history').then(items =>

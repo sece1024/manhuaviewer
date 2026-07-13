@@ -33,6 +33,12 @@ export default function Library({ mode = 'library' }) {
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState(null);
+  // 重命名弹窗
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+  // 多选模式
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
   // 窄屏：把次要操作收进 ⋯ 菜单
   const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
   // 分页状态
@@ -248,9 +254,86 @@ export default function Library({ mode = 'library' }) {
     }
   };
 
+  // 重命名
+  const handleOpenRename = (e, a) => {
+    e.stopPropagation();
+    setRenamingId(a.id);
+    setRenameValue(a.title);
+  };
+  const handleConfirmRename = async () => {
+    if (!renameValue.trim() || !renamingId) return;
+    try {
+      await api.updateTitle(renamingId, renameValue.trim());
+      toast('已重命名', 'success');
+      setRenamingId(null);
+      loadArchives({ search, tag: selectedTag });
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  // 多选
+  const handleToggleSelect = (e, id) => {
+    e.stopPropagation();
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const handleExitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+  const handleMerge = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length < 2) return;
+    try {
+      await api.mergeArchives(ids);
+      toast(`已合并 ${ids.length} 个档案`, 'success');
+      handleExitSelectMode();
+      loadArchives({ search, tag: selectedTag });
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  // 将档案按 group_id 聚合：同一组显示为一个卡片
+  const groupedArchives = useMemo(() => {
+    const groups = new Map(); // group_id -> [archives]
+    const singles = [];
+
+    for (const a of archives) {
+      const gid = a.group_id;
+      if (gid && gid === a.id) {
+        // 主档案：以其为组的代表
+        if (!groups.has(gid)) groups.set(gid, []);
+        groups.get(gid).push(a);
+      } else if (gid) {
+        // 子档案：加入组
+        if (!groups.has(gid)) groups.set(gid, []);
+        groups.get(gid).push(a);
+      } else {
+        singles.push(a);
+      }
+    }
+
+    // 每组只显示主档案卡片，附加 chapter_count
+    const result = [];
+    for (const [gid, members] of groups) {
+      const primary = members.find(a => a.id === gid) || members[0];
+      result.push({ ...primary, chapter_count: members.length, _isGroup: true });
+    }
+    for (const a of singles) {
+      result.push(a);
+    }
+    return result;
+  }, [archives]);
+
   // 将档案按类型分成收藏（压缩包）和文件夹两组
-  const compressedArchives = useMemo(() => archives.filter(a => a.archive_type !== 'folder'), [archives]);
-  const folderArchives = useMemo(() => archives.filter(a => a.archive_type === 'folder'), [archives]);
+  const compressedArchives = useMemo(() => groupedArchives.filter(a => a.archive_type !== 'folder'), [groupedArchives]);
+  const folderArchives = useMemo(() => groupedArchives.filter(a => a.archive_type === 'folder'), [groupedArchives]);
 
   // 根据 mode 决定展示哪组
   const isCollection = mode === 'collection';
@@ -432,6 +515,12 @@ export default function Library({ mode = 'library' }) {
             {showSidebar ? '◁' : '▷'}
           </button>
 
+          {selectMode ? (
+            <button className="btn btn-secondary" onClick={handleExitSelectMode}>取消选择</button>
+          ) : (
+            <button className="btn btn-secondary" onClick={() => { setSelectMode(true); setSelectedIds(new Set()); }}>选择</button>
+          )}
+
           {isNarrow ? (
             <button
               className="btn btn-secondary btn-icon"
@@ -496,11 +585,37 @@ export default function Library({ mode = 'library' }) {
         ) : viewMode === 'grid' ? (
           <div className="archive-grid">
             {displayArchives.map(a => (
-              <div key={a.id} className="archive-card" onClick={() => navigate(`/reader/${a.id}`)} tabIndex={0} role="button" onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/reader/${a.id}`); } }}>
+              <div
+                key={a.id}
+                className={`archive-card ${selectMode && selectedIds.has(a.id) ? 'archive-card-selected' : ''}`}
+                onClick={(e) => {
+                  if (selectMode) { handleToggleSelect(e, a.id); return; }
+                  navigate(`/reader/${a.id}`);
+                }}
+                tabIndex={0}
+                role="button"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    if (selectMode) { handleToggleSelect(e, a.id); return; }
+                    navigate(`/reader/${a.id}`);
+                  }
+                }}
+              >
                 <div className="archive-card-cover">
                   <LazyImage src={a.cover_url} alt={a.title} />
-                  <button className="archive-tag-btn" onClick={(e) => handleOpenTagPicker(e, a.id)} title="标签">🏷️</button>
-                  <button className="archive-remove-btn" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
+                  {selectMode && (
+                    <div className={`archive-select-check ${selectedIds.has(a.id) ? 'checked' : ''}`}>
+                      {selectedIds.has(a.id) ? '✓' : ''}
+                    </div>
+                  )}
+                  {!selectMode && (
+                    <>
+                      <button className="archive-tag-btn" onClick={(e) => handleOpenTagPicker(e, a.id)} title="标签">🏷️</button>
+                      <button className="archive-rename-btn" onClick={(e) => handleOpenRename(e, a)} title="重命名">✏️</button>
+                      <button className="archive-remove-btn" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
+                    </>
+                  )}
                   {a.read_page > 0 && (
                     <div className="archive-card-progress">
                       <div className="archive-card-progress-bar" style={{ width: `${(a.read_page / (a.page_count || 1)) * 100}%` }} />
@@ -510,7 +625,11 @@ export default function Library({ mode = 'library' }) {
                 <div className="archive-card-info">
                   <div className="archive-card-title" title={a.title}>{a.title}</div>
                   <div className="archive-card-meta">
-                    <span>{a.page_count} 页</span>
+                    {a._isGroup ? (
+                      <span>{a.chapter_count} 话</span>
+                    ) : (
+                      <span>{a.page_count} 页</span>
+                    )}
                     {a.file_size > 0 && <span>· {formatSize(a.file_size)}</span>}
                   </div>
                   {a.tags && a.tags.length > 0 && (
@@ -531,14 +650,27 @@ export default function Library({ mode = 'library' }) {
         ) : (
           <div className="archive-list">
             {displayArchives.map(a => (
-              <div key={a.id} className="archive-list-item" onClick={() => navigate(`/reader/${a.id}`)}>
+              <div
+                key={a.id}
+                className={`archive-list-item ${selectMode && selectedIds.has(a.id) ? 'archive-list-item-selected' : ''}`}
+                onClick={(e) => {
+                  if (selectMode) { handleToggleSelect(e, a.id); return; }
+                  navigate(`/reader/${a.id}`);
+                }}
+              >
+                {selectMode && (
+                  <div className={`archive-select-check-list ${selectedIds.has(a.id) ? 'checked' : ''}`}>
+                    {selectedIds.has(a.id) ? '✓' : ''}
+                  </div>
+                )}
                 <div className="archive-list-thumb">
                   <LazyImage src={a.cover_url} alt={a.title} />
                 </div>
                 <div className="archive-list-info">
                   <div className="archive-list-title">{a.title}</div>
                   <div className="archive-list-meta">
-                    {a.page_count} 页 · {a.archive_type === 'folder' ? '文件夹' : '压缩包'}
+                    {a._isGroup ? `${a.chapter_count} 话` : `${a.page_count} 页`}
+                    {' · '}{a.archive_type === 'folder' ? '文件夹' : '压缩包'}
                     {a.file_size > 0 && ` · ${formatSize(a.file_size)}`}
                     {a.read_page > 0 && ` · 已读 ${a.read_page}/${a.page_count || '?'}`}
                   </div>
@@ -553,8 +685,13 @@ export default function Library({ mode = 'library' }) {
                     </div>
                   )}
                 </div>
-                <button className="archive-tag-btn-list" onClick={(e) => handleOpenTagPicker(e, a.id)} title="标签">🏷️</button>
-                <button className="archive-remove-btn-list" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
+                {!selectMode && (
+                  <>
+                    <button className="archive-tag-btn-list" onClick={(e) => handleOpenTagPicker(e, a.id)} title="标签">🏷️</button>
+                    <button className="archive-rename-btn-list" onClick={(e) => handleOpenRename(e, a)} title="重命名">✏️</button>
+                    <button className="archive-remove-btn-list" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -573,6 +710,69 @@ export default function Library({ mode = 'library' }) {
           </div>
         )}
       </div>
+
+      {/* 多选合并浮动工具栏 */}
+      {selectMode && (
+        <div className="select-toolbar">
+          <span>已选 {selectedIds.size} 个</span>
+          <button className="btn" onClick={handleMerge} disabled={selectedIds.size < 2}>
+            合并
+          </button>
+          <button className="btn btn-secondary" onClick={handleExitSelectMode}>
+            取消
+          </button>
+        </div>
+      )}
+
+      {/* 重命名弹窗 */}
+      {renamingId && (
+        <div className="modal-overlay" onClick={() => setRenamingId(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-title">重命名漫画</div>
+            <div className="modal-body">
+              <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>
+                输入新名称，或点击下方路径中的某一层快速采用
+              </p>
+              <input
+                className="modal-input"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleConfirmRename()}
+                autoFocus
+                style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12 }}
+              />
+              {(() => {
+                const a = archives.find(x => x.id === renamingId);
+                if (!a || !a.path) return null;
+                const rel = rootDir && a.path.startsWith(rootDir)
+                  ? a.path.slice(rootDir.length).replace(/^\//, '')
+                  : a.path;
+                const parts = rel.split('/').filter(Boolean);
+                if (parts.length <= 1) return null;
+                return (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {parts.map((p, i) => (
+                      <button
+                        key={i}
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setRenameValue(p)}
+                        title={parts.slice(0, i + 1).join('/')}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setRenamingId(null)}>取消</button>
+              <button className="btn" onClick={handleConfirmRename} disabled={!renameValue.trim()}>确认</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 打开文件弹窗 */}
       {showOpenModal && (
         <div className="modal-overlay" onClick={() => setShowOpenModal(false)}>

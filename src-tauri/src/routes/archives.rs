@@ -79,6 +79,7 @@ pub struct ArchiveQuery {
     pub tag: Option<String>,
     #[allow(dead_code)]
     pub category: Option<String>,
+    pub group_id: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -108,6 +109,14 @@ pub async fn list_archives(
     Query(query): Query<ArchiveQuery>,
 ) -> Response {
     let db = state.db.lock().await;
+
+    // 如果指定了 group_id，返回组内所有章节
+    if let Some(group_id) = query.group_id {
+        return match db.get_group_chapters(group_id) {
+            Ok(chapters) => Json(chapters).into_response(),
+            Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        };
+    }
 
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(20);
@@ -149,6 +158,50 @@ pub async fn delete_archive(State(state): State<Arc<AppState>>, Path(id): Path<i
             // 删除缩略图目录
             let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
             Json(serde_json::json!({ "success": true })).into_response()
+        }
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct UpdateTitleRequest {
+    title: String,
+}
+
+pub async fn update_archive_title(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(payload): Json<UpdateTitleRequest>,
+) -> Response {
+    let db = state.db.lock().await;
+    match db.update_archive_title(id, &payload.title) {
+        Ok(_) => Json(serde_json::json!({ "id": id, "title": payload.title })).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct MergeRequest {
+    archive_ids: Vec<i64>,
+}
+
+pub async fn merge_archives(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<MergeRequest>,
+) -> Response {
+    if payload.archive_ids.len() < 2 {
+        return error_response(StatusCode::BAD_REQUEST, "需要至少选择 2 个档案进行合并");
+    }
+
+    let db = state.db.lock().await;
+    match db.merge_archives(&payload.archive_ids) {
+        Ok(primary_id) => {
+            let chapters = db.get_group_chapters(primary_id).unwrap_or_default();
+            Json(serde_json::json!({
+                "group_id": primary_id,
+                "chapter_count": chapters.len(),
+            }))
+            .into_response()
         }
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -617,11 +670,30 @@ pub async fn scan(
         let mut archive_infos = Vec::new();
         for archive_path in &archives {
             let archive_type = scanner.detect_archive_type(archive_path);
-            let title = std::path::Path::new(archive_path)
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
+            let title = {
+                let path = std::path::Path::new(archive_path);
+                let relative = path.strip_prefix(&root_dir).unwrap_or(path);
+                let first = relative.components().next();
+                match first {
+                    Some(std::path::Component::Normal(name)) => {
+                        let s = name.to_string_lossy().to_string();
+                        if path.is_file() {
+                            std::path::Path::new(&s)
+                                .file_stem()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string()
+                        } else {
+                            s
+                        }
+                    }
+                    _ => path
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                }
+            };
 
             let file_size = std::fs::metadata(archive_path)
                 .map(|m| m.len() as i64)

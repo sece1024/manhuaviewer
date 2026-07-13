@@ -28,6 +28,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/archives", get(archives::list_archives))
         .route("/archives/:id", get(archives::get_archive))
         .route("/archives/:id", delete(archives::delete_archive))
+        .route("/archives/:id/title", put(archives::update_archive_title))
         .route("/archives/:id/cover", get(archives::get_cover))
         .route("/archives/:id/pages", get(archives::list_pages))
         .route("/archives/:id/pages/:page", get(archives::get_page))
@@ -37,6 +38,7 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/open", post(archives::open_file))
         .route("/scan", post(archives::scan))
+        .route("/merge", post(archives::merge_archives))
         .route("/archives/pack-cbz", post(archives::pack_cbz))
         .route("/cbz/list", get(archives::list_cbz_files))
         // Tags

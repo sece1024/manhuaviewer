@@ -15,6 +15,23 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("ALTER TABLE archives ADD COLUMN thumbnail_path TEXT", [])?;
     }
 
+    // Add group_id column to archives if missing
+    let has_group_id: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('archives') WHERE name='group_id'",
+            [],
+            |row| row.get::<_, i64>(0).map(|c| c > 0),
+        )
+        .unwrap_or(false);
+
+    if !has_group_id {
+        tracing::info!("Adding group_id column to archives...");
+        conn.execute(
+            "ALTER TABLE archives ADD COLUMN group_id INTEGER REFERENCES archives(id) ON DELETE SET NULL",
+            [],
+        )?;
+    }
+
     // Check for legacy 'folders' table and migrate
     let has_folders: bool = conn
         .query_row(
