@@ -56,6 +56,9 @@ pub struct HistoryRow {
     pub updated_at: String,
 }
 
+/// (history row, archive title, archive path, archive type)
+pub type HistoryEntry = (HistoryRow, String, String, String);
+
 pub struct Database {
     conn: Connection,
 }
@@ -636,16 +639,21 @@ impl Database {
     }
 
     // History operations
-    pub fn get_history(&self) -> Result<Vec<(HistoryRow, String, String, String)>> {
+    pub fn get_history(&self, limit: i64, offset: i64) -> Result<(Vec<HistoryEntry>, i64)> {
+        let total: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM history", [], |row| row.get(0))?;
+
         let mut stmt = self.conn.prepare(
             "SELECT h.archive_id, h.page_index, h.total_pages, h.updated_at, a.title, a.path, a.archive_type
              FROM history h
              JOIN archives a ON a.id = h.archive_id
-             ORDER BY h.updated_at DESC"
+             ORDER BY h.updated_at DESC
+             LIMIT ? OFFSET ?"
         )?;
 
         let history = stmt
-            .query_map([], |row| {
+            .query_map(rusqlite::params![limit, offset], |row| {
                 Ok((
                     HistoryRow {
                         archive_id: row.get(0)?,
@@ -661,7 +669,7 @@ impl Database {
             .filter_map(log_and_skip)
             .collect();
 
-        Ok(history)
+        Ok((history, total))
     }
 
     pub fn save_history(
@@ -1077,16 +1085,18 @@ mod tests {
         db.save_history(archive_id, 5, 10).unwrap();
 
         // Get history
-        let history = db.get_history().unwrap();
+        let (history, total) = db.get_history(50, 0).unwrap();
         assert_eq!(history.len(), 1);
+        assert_eq!(total, 1);
         assert_eq!(history[0].0.archive_id, archive_id);
         assert_eq!(history[0].0.page_index, 5);
         assert_eq!(history[0].0.total_pages, 10);
 
         // Delete history
         db.delete_history(archive_id).unwrap();
-        let history = db.get_history().unwrap();
+        let (history, total) = db.get_history(50, 0).unwrap();
         assert_eq!(history.len(), 0);
+        assert_eq!(total, 0);
     }
 
     #[test]

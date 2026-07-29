@@ -1,6 +1,6 @@
 use crate::AppState;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -17,11 +17,24 @@ pub struct SaveHistory {
     pub total_pages: i64,
 }
 
-pub async fn get_history(State(state): State<Arc<AppState>>) -> Response {
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
+}
+
+pub async fn get_history(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<HistoryQuery>,
+) -> Response {
     let db = state.db.lock().await;
 
-    match db.get_history() {
-        Ok(history) => {
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(30).clamp(1, 200);
+    let offset = (page - 1) * limit;
+
+    match db.get_history(limit, offset) {
+        Ok((history, total)) => {
             // Batch fetch tags for all archives in one query
             let archive_ids: Vec<i64> = history.iter().map(|(h, _, _, _)| h.archive_id).collect();
             let tags_map = db.get_archive_tags_batch(&archive_ids).unwrap_or_default();
@@ -58,7 +71,7 @@ pub async fn get_history(State(state): State<Arc<AppState>>) -> Response {
                     })
                 })
                 .collect();
-            Json(data).into_response()
+            Json(serde_json::json!({ "items": data, "total": total })).into_response()
         }
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }

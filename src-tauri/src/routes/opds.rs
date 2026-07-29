@@ -222,11 +222,11 @@ pub async fn archive_detail(
 pub async fn recent(State(state): State<Arc<AppState>>) -> Html<String> {
     let db = state.db.lock().await;
 
-    match db.get_history() {
-        Ok(history) => {
+    match db.get_history(20, 0) {
+        Ok((history, _total)) => {
             let mut entries = String::new();
 
-            for (h, title, _path, _archive_type) in history.iter().take(20) {
+            for (h, title, _path, _archive_type) in history.iter() {
                 entries.push_str(&format!(r#"
   <entry>
     <title>{}</title>
