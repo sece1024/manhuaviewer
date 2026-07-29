@@ -78,4 +78,15 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- 索引：加速列表排序、搜索与历史记录查询
+CREATE INDEX IF NOT EXISTS idx_archives_updated_at ON archives(updated_at);
+CREATE INDEX IF NOT EXISTS idx_archives_created_at ON archives(created_at);
+CREATE INDEX IF NOT EXISTS idx_archives_title ON archives(title);
+CREATE INDEX IF NOT EXISTS idx_archives_page_count ON archives(page_count);
+CREATE INDEX IF NOT EXISTS idx_archives_file_size ON archives(file_size);
+CREATE INDEX IF NOT EXISTS idx_archives_group_id ON archives(group_id);
+CREATE INDEX IF NOT EXISTS idx_history_updated_at ON history(updated_at);
+CREATE INDEX IF NOT EXISTS idx_archive_tags_tag_id ON archive_tags(tag_id);
+CREATE INDEX IF NOT EXISTS idx_pages_archive_id ON pages(archive_id);
 "#;
