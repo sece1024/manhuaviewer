@@ -639,33 +639,71 @@ impl Database {
     }
 
     // History operations
-    pub fn get_history(&self, limit: i64, offset: i64) -> Result<(Vec<HistoryEntry>, i64)> {
-        let total: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM history", [], |row| row.get(0))?;
+    pub fn get_history(
+        &self,
+        search: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<HistoryEntry>, i64)> {
+        let mut where_clause = String::from("WHERE 1=1");
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
-        let mut stmt = self.conn.prepare(
+        if let Some(s) = search {
+            if !s.is_empty() {
+                where_clause.push_str(
+                    " AND (a.title LIKE ? OR EXISTS (
+                        SELECT 1 FROM archive_tags at2
+                        JOIN tags t2 ON t2.id = at2.tag_id
+                        WHERE at2.archive_id = h.archive_id AND t2.name LIKE ?
+                    ))",
+                );
+                let pattern = format!("%{}%", s);
+                params.push(Box::new(pattern.clone()));
+                params.push(Box::new(pattern));
+            }
+        }
+
+        let count_sql = format!(
+            "SELECT COUNT(*) FROM history h JOIN archives a ON a.id = h.archive_id {}",
+            where_clause
+        );
+        let total: i64 = self.conn.query_row(
+            &count_sql,
+            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            |row| row.get(0),
+        )?;
+
+        let sql = format!(
             "SELECT h.archive_id, h.page_index, h.total_pages, h.updated_at, a.title, a.path, a.archive_type
              FROM history h
              JOIN archives a ON a.id = h.archive_id
+             {}
              ORDER BY h.updated_at DESC
-             LIMIT ? OFFSET ?"
-        )?;
+             LIMIT ? OFFSET ?",
+            where_clause
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        params.push(Box::new(limit));
+        params.push(Box::new(offset));
 
         let history = stmt
-            .query_map(rusqlite::params![limit, offset], |row| {
-                Ok((
-                    HistoryRow {
-                        archive_id: row.get(0)?,
-                        page_index: row.get(1)?,
-                        total_pages: row.get(2)?,
-                        updated_at: row.get(3)?,
-                    },
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                ))
-            })?
+            .query_map(
+                rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                |row| {
+                    Ok((
+                        HistoryRow {
+                            archive_id: row.get(0)?,
+                            page_index: row.get(1)?,
+                            total_pages: row.get(2)?,
+                            updated_at: row.get(3)?,
+                        },
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                },
+            )?
             .filter_map(log_and_skip)
             .collect();
 
@@ -1085,7 +1123,7 @@ mod tests {
         db.save_history(archive_id, 5, 10).unwrap();
 
         // Get history
-        let (history, total) = db.get_history(50, 0).unwrap();
+        let (history, total) = db.get_history(None, 50, 0).unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(total, 1);
         assert_eq!(history[0].0.archive_id, archive_id);
@@ -1094,7 +1132,7 @@ mod tests {
 
         // Delete history
         db.delete_history(archive_id).unwrap();
-        let (history, total) = db.get_history(50, 0).unwrap();
+        let (history, total) = db.get_history(None, 50, 0).unwrap();
         assert_eq!(history.len(), 0);
         assert_eq!(total, 0);
     }

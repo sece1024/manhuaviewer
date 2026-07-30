@@ -9,7 +9,7 @@ const api = {
   getPages: jest.fn().mockResolvedValue({ archive: {}, pages: [], read_page: 0 }),
   deleteArchive: jest.fn().mockResolvedValue({ success: true }),
   packCbz: jest.fn().mockResolvedValue({ success: true, path: '/test/output.cbz' }),
-  getHistory: jest.fn().mockResolvedValue([]),
+  getHistory: jest.fn().mockResolvedValue({ items: [], total: 0 }),
   saveHistory: jest.fn().mockResolvedValue({ success: true }),
   deleteHistory: jest.fn().mockResolvedValue({ success: true }),
   clearHistory: jest.fn().mockResolvedValue({ success: true }),

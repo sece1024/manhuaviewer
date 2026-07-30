@@ -174,9 +174,13 @@ const api = {
     request(`/archives?group_id=${groupId}`),
 
   // History
-  getHistory: () => request('/history').then(items =>
-    items.map(h => ({ ...h, cover_url: fixUrl(h.cover_url) }))
-  ),
+  getHistory: (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/history${qs ? '?' + qs : ''}`).then(res => ({
+      items: (res.items || []).map(h => ({ ...h, cover_url: fixUrl(h.cover_url) })),
+      total: res.total ?? 0,
+    }));
+  },
   saveHistory: (archive_id, page_index, total_pages) =>
     request('/history', { method: 'POST', body: JSON.stringify({ archive_id, page_index, total_pages }) })
       .then(r => { _invalidate('/api/history'); return r; }),

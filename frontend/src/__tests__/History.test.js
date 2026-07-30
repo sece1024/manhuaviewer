@@ -20,19 +20,22 @@ function renderHistory() {
 describe('History 页面', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    api.getHistory.mockResolvedValue([
-      {
-        archive_id: 1,
-        title: '测试漫画',
-        page_index: 5,
-        total_pages: 10,
-        page_count: 10,
-        archive_type: 'folder',
-        cover_url: '/api/archives/1/cover',
-        updated_at: new Date().toISOString(),
-        tags: [{ namespace: '', name: '已读', color: '#4a86e8' }],
-      },
-    ]);
+    api.getHistory.mockResolvedValue({
+      items: [
+        {
+          archive_id: 1,
+          title: '测试漫画',
+          page_index: 5,
+          total_pages: 10,
+          page_count: 10,
+          archive_type: 'folder',
+          cover_url: '/api/archives/1/cover',
+          updated_at: new Date().toISOString(),
+          tags: [{ namespace: '', name: '已读', color: '#4a86e8' }],
+        },
+      ],
+      total: 1,
+    });
   });
 
   test('加载并显示历史记录', async () => {
@@ -57,7 +60,7 @@ describe('History 页面', () => {
   });
 
   test('空历史显示提示', async () => {
-    api.getHistory.mockResolvedValue([]);
+    api.getHistory.mockResolvedValue({ items: [], total: 0 });
     renderHistory();
     await waitFor(() => {
       expect(screen.getByText('暂无阅读记录')).toBeInTheDocument();

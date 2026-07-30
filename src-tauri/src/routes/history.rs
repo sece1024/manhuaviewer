@@ -21,6 +21,7 @@ pub struct SaveHistory {
 pub struct HistoryQuery {
     pub page: Option<i64>,
     pub limit: Option<i64>,
+    pub search: Option<String>,
 }
 
 pub async fn get_history(
@@ -33,7 +34,7 @@ pub async fn get_history(
     let limit = query.limit.unwrap_or(30).clamp(1, 200);
     let offset = (page - 1) * limit;
 
-    match db.get_history(limit, offset) {
+    match db.get_history(query.search.as_deref(), limit, offset) {
         Ok((history, total)) => {
             // Batch fetch tags for all archives in one query
             let archive_ids: Vec<i64> = history.iter().map(|(h, _, _, _)| h.archive_id).collect();
