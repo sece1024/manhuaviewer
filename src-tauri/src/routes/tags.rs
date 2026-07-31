@@ -119,6 +119,46 @@ pub async fn remove_tag(
     }
 }
 
+#[derive(Deserialize)]
+pub struct BatchAssignTagRequest {
+    pub archive_ids: Vec<i64>,
+    pub tag_id: i64,
+}
+
+pub async fn batch_assign_tag(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<BatchAssignTagRequest>,
+) -> Response {
+    if payload.archive_ids.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "archive_ids 不能为空");
+    }
+
+    let mut db = state.db.lock().await;
+    match db.batch_assign_tag(&payload.archive_ids, payload.tag_id) {
+        Ok(affected) => {
+            Json(serde_json::json!({ "success": true, "affected": affected })).into_response()
+        }
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+pub async fn batch_remove_tag(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<BatchAssignTagRequest>,
+) -> Response {
+    if payload.archive_ids.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "archive_ids 不能为空");
+    }
+
+    let mut db = state.db.lock().await;
+    match db.batch_remove_tag(&payload.archive_ids, payload.tag_id) {
+        Ok(affected) => {
+            Json(serde_json::json!({ "success": true, "affected": affected })).into_response()
+        }
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
 pub async fn get_archive_tags(
     State(state): State<Arc<AppState>>,
     Path(archive_id): Path<i64>,

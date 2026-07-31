@@ -41,6 +41,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/merge", post(archives::merge_archives))
         .route("/archives/pack-cbz", post(archives::pack_cbz))
         .route("/cbz/list", get(archives::list_cbz_files))
+        .route(
+            "/archives/batch-delete",
+            post(archives::batch_delete_archives),
+        )
         // Tags
         .route("/tags", get(tags::list_tags))
         .route("/tags", post(tags::create_tag))
@@ -49,6 +53,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/tags/assign", post(tags::assign_tag))
         .route("/tags/:archive_id/:tag_id", delete(tags::remove_tag))
         .route("/tags/namespaces", get(tags::list_namespaces))
+        .route("/tags/batch-assign", post(tags::batch_assign_tag))
+        .route("/tags/batch-remove", post(tags::batch_remove_tag))
         .route("/archives/:id/tags", get(tags::get_archive_tags))
         // Categories
         .route("/categories", get(categories::list_categories))
@@ -59,6 +65,18 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/categories/:archive_id/:category_id",
             delete(categories::remove_category),
+        )
+        .route(
+            "/categories/batch-assign",
+            post(categories::batch_assign_category),
+        )
+        .route(
+            "/categories/batch-remove",
+            post(categories::batch_remove_category),
+        )
+        .route(
+            "/archives/:id/categories",
+            get(categories::get_archive_categories),
         )
         // History
         .route("/history", get(history::get_history))

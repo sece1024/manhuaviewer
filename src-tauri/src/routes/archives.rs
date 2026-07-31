@@ -77,8 +77,7 @@ pub struct ArchiveQuery {
     pub limit: Option<i64>,
     pub search: Option<String>,
     pub tag: Option<String>,
-    #[allow(dead_code)]
-    pub category: Option<String>,
+    pub category_id: Option<i64>,
     pub group_id: Option<i64>,
 }
 
@@ -124,10 +123,10 @@ pub async fn list_archives(
     let sort = query.sort.as_deref().unwrap_or("updated");
     let order = query.order.as_deref().unwrap_or("desc");
 
-    // TODO: Implement category filtering
     match db.list_archives(
         query.search.as_deref(),
         query.tag.as_deref(),
+        query.category_id,
         sort,
         order,
         limit,
@@ -158,6 +157,34 @@ pub async fn delete_archive(State(state): State<Arc<AppState>>, Path(id): Path<i
             // 删除缩略图目录
             let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
             Json(serde_json::json!({ "success": true })).into_response()
+        }
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct BatchDeleteRequest {
+    pub ids: Vec<i64>,
+}
+
+pub async fn batch_delete_archives(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<BatchDeleteRequest>,
+) -> Response {
+    if payload.ids.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "ids 不能为空");
+    }
+
+    let mut db = state.db.lock().await;
+    match db.batch_delete_archives(&payload.ids) {
+        Ok(affected) => {
+            drop(db);
+            // 逐个清理缩略图目录
+            for id in &payload.ids {
+                let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
+                let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
+            }
+            Json(serde_json::json!({ "success": true, "affected": affected })).into_response()
         }
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }

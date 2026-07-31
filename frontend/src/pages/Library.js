@@ -7,6 +7,7 @@ import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
 import LazyImage from '../components/LazyImage';
 import TagPicker from '../components/TagPicker';
+import CategoryPicker from '../components/CategoryPicker';
 import ConfirmDialog from '../components/ConfirmDialog';
 
 // 检测是否在 Tauri 环境中
@@ -25,6 +26,8 @@ export default function Library({ mode = 'library' }) {
   const [sortBy, setSortBy] = useState(() => settings.sort_by || 'updated');
   const [sortOrder, setSortOrder] = useState(() => settings.sort_order || 'desc');
   const [selectedTag, setSelectedTag] = useState('');
+  const [categories, setCategories] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState(null);
   const [showSidebar, setShowSidebar] = useState(true);
   const [showOpenModal, setShowOpenModal] = useState(false);
   const [openPath, setOpenPath] = useState('');
@@ -50,6 +53,7 @@ export default function Library({ mode = 'library' }) {
   const sortByRef = useRef(sortBy);
   const sortOrderRef = useRef(sortOrder);
   const selectedTagRef = useRef(selectedTag);
+  const selectedCategoryRef = useRef(selectedCategory);
   const searchRef = useRef(search);
   const requestIdRef = useRef(0);
   const navigate = useNavigate();
@@ -59,11 +63,17 @@ export default function Library({ mode = 'library' }) {
   useEffect(() => { sortByRef.current = sortBy; }, [sortBy]);
   useEffect(() => { sortOrderRef.current = sortOrder; }, [sortOrder]);
   useEffect(() => { selectedTagRef.current = selectedTag; }, [selectedTag]);
+  useEffect(() => { selectedCategoryRef.current = selectedCategory; }, [selectedCategory]);
   useEffect(() => { searchRef.current = search; }, [search]);
+
+  const reloadCategories = useCallback(() => {
+    return api.getCategories().then(data => { setCategories(data); return data; }).catch(() => []);
+  }, []);
 
   useEffect(() => {
     api.getConfig().then(c => setRootDir(c.root_dir));
     loadArchives();
+    reloadCategories();
     return () => clearTimeout(searchDebounceRef.current);
   }, []);
 
@@ -82,13 +92,17 @@ export default function Library({ mode = 'library' }) {
     }
     try {
       const nextPage = append ? page + 1 : 1;
-      const data = await api.getArchives({
+      const categoryId = params.category_id !== undefined ? params.category_id : selectedCategoryRef.current;
+      const baseParams = {
         sort_by: sortByRef.current,
         sort_order: sortOrderRef.current,
         limit: PAGE_SIZE,
         page: nextPage,
         ...params,
-      });
+      };
+      if (categoryId) baseParams.category_id = categoryId;
+      else delete baseParams.category_id;
+      const data = await api.getArchives(baseParams);
       if (id !== requestIdRef.current) return;
       setArchives(prev => append ? [...prev, ...data] : data);
       setPage(nextPage);
@@ -104,8 +118,8 @@ export default function Library({ mode = 'library' }) {
   };
 
   useEffect(() => {
-    loadArchives({ search: searchRef.current, tag: selectedTag });
-  }, [sortBy, sortOrder, selectedTag]);
+    loadArchives({ search: searchRef.current, tag: selectedTag, category_id: selectedCategory });
+  }, [sortBy, sortOrder, selectedTag, selectedCategory]);
 
   const handleSaveRoot = async () => {
     try {
@@ -151,6 +165,12 @@ export default function Library({ mode = 'library' }) {
     clearTimeout(searchDebounceRef.current);
     const next = selectedTag === tagName ? '' : tagName;
     setSelectedTag(next);
+  };
+
+  const handleCategoryFilter = (categoryId) => {
+    clearTimeout(searchDebounceRef.current);
+    const next = selectedCategory === categoryId ? null : categoryId;
+    setSelectedCategory(next);
   };
 
   const handleOpenFile = async () => {
@@ -254,6 +274,20 @@ export default function Library({ mode = 'library' }) {
     }
   };
 
+  // CategoryPicker 状态
+  const [categoryPickerArchiveId, setCategoryPickerArchiveId] = useState(null);
+  const handleOpenCategoryPicker = (e, id) => {
+    e.stopPropagation();
+    setCategoryPickerArchiveId(id);
+  };
+  const handleCloseCategoryPicker = (changed) => {
+    setCategoryPickerArchiveId(null);
+    if (changed) {
+      loadArchives({ search, tag: selectedTag });
+      reloadCategories();
+    }
+  };
+
   // 重命名
   const handleOpenRename = (e, a) => {
     e.stopPropagation();
@@ -292,6 +326,40 @@ export default function Library({ mode = 'library' }) {
     try {
       await api.mergeArchives(ids);
       toast(`已合并 ${ids.length} 个档案`, 'success');
+      handleExitSelectMode();
+      loadArchives({ search, tag: selectedTag });
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  // 批量打标签 / 批量分类
+  const [batchTagPickerOpen, setBatchTagPickerOpen] = useState(false);
+  const [batchCategoryPickerOpen, setBatchCategoryPickerOpen] = useState(false);
+  const handleCloseBatchTagPicker = (changed) => {
+    setBatchTagPickerOpen(false);
+    if (changed) {
+      loadArchives({ search, tag: selectedTag });
+      reloadTags();
+    }
+  };
+  const handleCloseBatchCategoryPicker = (changed) => {
+    setBatchCategoryPickerOpen(false);
+    if (changed) {
+      loadArchives({ search, tag: selectedTag });
+      reloadCategories();
+    }
+  };
+
+  // 批量删除
+  const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false);
+  const handleBatchDelete = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setBatchDeleteConfirmOpen(false);
+    try {
+      await api.batchDeleteArchives(ids);
+      toast(`已删除 ${ids.length} 个档案`, 'success');
       handleExitSelectMode();
       loadArchives({ search, tag: selectedTag });
     } catch (e) {
@@ -439,6 +507,27 @@ export default function Library({ mode = 'library' }) {
                   📂 {rootDir.length > 20 ? rootDir.slice(0, 20) + '...' : rootDir}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* 分类过滤 */}
+          {categories.length > 0 && (
+            <div className="filter-section">
+              <div className="filter-section-title">分类</div>
+              {[...categories].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)).map(c => (
+                <div
+                  key={c.id}
+                  className={`filter-tag ${selectedCategory === c.id ? 'active' : ''}`}
+                  onClick={() => handleCategoryFilter(c.id)}
+                  title={c.search ? `动态分类：${c.search}` : undefined}
+                >
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: c.color, flexShrink: 0 }} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {c.pinned ? '📌 ' : ''}{c.name}
+                  </span>
+                  <span className="count">{c.archive_count}</span>
+                </div>
+              ))}
             </div>
           )}
 
@@ -612,6 +701,7 @@ export default function Library({ mode = 'library' }) {
                   {!selectMode && (
                     <>
                       <button className="archive-tag-btn" onClick={(e) => handleOpenTagPicker(e, a.id)} title="标签">🏷️</button>
+                      <button className="archive-tag-btn" onClick={(e) => handleOpenCategoryPicker(e, a.id)} title="分类">📂</button>
                       <button className="archive-rename-btn" onClick={(e) => handleOpenRename(e, a)} title="重命名">✏️</button>
                       <button className="archive-remove-btn" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
                     </>
@@ -688,6 +778,7 @@ export default function Library({ mode = 'library' }) {
                 {!selectMode && (
                   <>
                     <button className="archive-tag-btn-list" onClick={(e) => handleOpenTagPicker(e, a.id)} title="标签">🏷️</button>
+                    <button className="archive-tag-btn-list" onClick={(e) => handleOpenCategoryPicker(e, a.id)} title="分类">📂</button>
                     <button className="archive-rename-btn-list" onClick={(e) => handleOpenRename(e, a)} title="重命名">✏️</button>
                     <button className="archive-remove-btn-list" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
                   </>
@@ -718,11 +809,39 @@ export default function Library({ mode = 'library' }) {
           <button className="btn" onClick={handleMerge} disabled={selectedIds.size < 2}>
             合并
           </button>
+          <button className="btn btn-secondary" onClick={() => setBatchTagPickerOpen(true)} disabled={selectedIds.size === 0}>
+            打标签
+          </button>
+          <button className="btn btn-secondary" onClick={() => setBatchCategoryPickerOpen(true)} disabled={selectedIds.size === 0}>
+            分类
+          </button>
+          <button className="btn btn-danger" onClick={() => setBatchDeleteConfirmOpen(true)} disabled={selectedIds.size === 0}>
+            删除
+          </button>
           <button className="btn btn-secondary" onClick={handleExitSelectMode}>
             取消
           </button>
         </div>
       )}
+
+      {/* 批量打标签 / 批量分类弹窗 */}
+      {batchTagPickerOpen && (
+        <TagPicker archiveIds={Array.from(selectedIds)} onClose={handleCloseBatchTagPicker} />
+      )}
+      {batchCategoryPickerOpen && (
+        <CategoryPicker archiveIds={Array.from(selectedIds)} onClose={handleCloseBatchCategoryPicker} />
+      )}
+
+      {/* 批量删除确认 */}
+      <ConfirmDialog
+        open={batchDeleteConfirmOpen}
+        title="批量删除"
+        message={`确定要从库中移除已选的 ${selectedIds.size} 个档案吗？此操作不会删除磁盘上的源文件。`}
+        confirmText="删除"
+        danger
+        onConfirm={handleBatchDelete}
+        onCancel={() => setBatchDeleteConfirmOpen(false)}
+      />
 
       {/* 重命名弹窗 */}
       {renamingId && (
@@ -816,6 +935,11 @@ export default function Library({ mode = 'library' }) {
       {/* 标签选择弹窗 */}
       {tagPickerArchiveId && (
         <TagPicker archiveId={tagPickerArchiveId} onClose={handleCloseTagPicker} />
+      )}
+
+      {/* 分类选择弹窗 */}
+      {categoryPickerArchiveId && (
+        <CategoryPicker archiveId={categoryPickerArchiveId} onClose={handleCloseCategoryPicker} />
       )}
 
       {/* 删除确认弹窗 */}

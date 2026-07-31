@@ -164,6 +164,9 @@ const api = {
   coverUrl: (archiveId) => `${BASE}/archives/${archiveId}/cover`,
   deleteArchive: (id) =>
     request(`/archives/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/api/archives'); _invalidate('/api/history'); return r; }),
+  batchDeleteArchives: (ids) =>
+    request('/archives/batch-delete', { method: 'POST', body: JSON.stringify({ ids }) })
+      .then(r => { _invalidate('/api/archives'); _invalidate('/api/history'); return r; }),
   updateTitle: (id, title) =>
     request(`/archives/${id}/title`, { method: 'PUT', body: JSON.stringify({ title }) })
       .then(r => { _invalidate('/api/archives'); return r; }),
@@ -206,9 +209,16 @@ const api = {
     request('/tags/assign', { method: 'POST', body: JSON.stringify({ archive_id, tag_id }) }).then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); _invalidate(`/api/archives/${archive_id}/tags`); return r; }),
   removeTag: (archiveId, tagId) =>
     request(`/tags/${archiveId}/${tagId}`, { method: 'DELETE' }).then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); _invalidate(`/api/archives/${archiveId}/tags`); return r; }),
+  batchAssignTag: (archiveIds, tagId) =>
+    request('/tags/batch-assign', { method: 'POST', body: JSON.stringify({ archive_ids: archiveIds, tag_id: tagId }) })
+      .then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); return r; }),
+  batchRemoveTag: (archiveIds, tagId) =>
+    request('/tags/batch-remove', { method: 'POST', body: JSON.stringify({ archive_ids: archiveIds, tag_id: tagId }) })
+      .then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); return r; }),
 
   // Categories
   getCategories: () => request('/categories'),
+  getArchiveCategories: (archiveId) => request(`/archives/${archiveId}/categories`),
   createCategory: (data) =>
     request('/categories', { method: 'POST', body: JSON.stringify(data) }).then(r => { _invalidate('/api/categories'); return r; }),
   updateCategory: (id, data) =>
@@ -219,6 +229,12 @@ const api = {
     request('/categories/assign', { method: 'POST', body: JSON.stringify({ archive_id, category_id }) }).then(r => { _invalidate('/api/categories'); _invalidate('/api/archives'); return r; }),
   removeCategory: (archiveId, categoryId) =>
     request(`/categories/${archiveId}/${categoryId}`, { method: 'DELETE' }).then(r => { _invalidate('/api/categories'); _invalidate('/api/archives'); return r; }),
+  batchAssignCategory: (archiveIds, categoryId) =>
+    request('/categories/batch-assign', { method: 'POST', body: JSON.stringify({ archive_ids: archiveIds, category_id: categoryId }) })
+      .then(r => { _invalidate('/api/categories'); _invalidate('/api/archives'); return r; }),
+  batchRemoveCategory: (archiveIds, categoryId) =>
+    request('/categories/batch-remove', { method: 'POST', body: JSON.stringify({ archive_ids: archiveIds, category_id: categoryId }) })
+      .then(r => { _invalidate('/api/categories'); _invalidate('/api/archives'); return r; }),
 
   // Settings
   getSettings: () => request('/settings'),

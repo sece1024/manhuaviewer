@@ -36,6 +36,8 @@ pub struct TagRow {
     pub namespace: String,
     pub name: String,
     pub color: String,
+    #[serde(default)]
+    pub archive_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +48,8 @@ pub struct CategoryRow {
     pub pinned: bool,
     pub search: String,
     pub created_at: String,
+    #[serde(default)]
+    pub archive_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,10 +165,12 @@ impl Database {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn list_archives(
         &self,
         search: Option<&str>,
         tag: Option<&str>,
+        category_id: Option<i64>,
         sort: &str,
         order: &str,
         limit: i64,
@@ -194,6 +200,27 @@ impl Database {
                 } else {
                     where_clause.push_str(" AND t_f.name = ? AND t_f.namespace = ''");
                     params.push(Box::new(t.to_string()));
+                }
+            }
+        }
+
+        // 按分类过滤：静态分类走关联表 JOIN，动态分类（配置了 search）走标题匹配
+        if let Some(cid) = category_id {
+            let dynamic_search: Option<String> = self
+                .conn
+                .query_row("SELECT search FROM categories WHERE id = ?", [cid], |row| {
+                    row.get(0)
+                })
+                .ok();
+            match dynamic_search {
+                Some(s) if !s.is_empty() => {
+                    where_clause.push_str(" AND a.title LIKE ?");
+                    params.push(Box::new(format!("%{}%", s)));
+                }
+                _ => {
+                    join_clause.push_str(" JOIN archive_categories ac_f ON ac_f.archive_id = a.id");
+                    where_clause.push_str(" AND ac_f.category_id = ?");
+                    params.push(Box::new(cid));
                 }
             }
         }
@@ -321,6 +348,20 @@ impl Database {
         self.conn.execute("DELETE FROM archives WHERE id = ?", [id])
     }
 
+    /// 批量删除档案，单事务执行
+    pub fn batch_delete_archives(&mut self, ids: &[i64]) -> Result<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let mut affected = 0;
+        for &id in ids {
+            affected += tx.execute("DELETE FROM archives WHERE id = ?", [id])?;
+        }
+        tx.commit()?;
+        Ok(affected)
+    }
+
     pub fn update_archive_title(&self, id: i64, title: &str) -> Result<usize> {
         self.conn.execute(
             "UPDATE archives SET title = ?, updated_at = datetime('now') WHERE id = ?",
@@ -435,9 +476,13 @@ impl Database {
 
     // Tag operations
     pub fn list_tags(&self) -> Result<Vec<TagRow>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, namespace, name, color FROM tags ORDER BY namespace, name")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT t.id, t.namespace, t.name, t.color, COUNT(at.archive_id)
+             FROM tags t
+             LEFT JOIN archive_tags at ON at.tag_id = t.id
+             GROUP BY t.id
+             ORDER BY t.namespace, t.name",
+        )?;
         let tags = stmt
             .query_map([], |row| {
                 Ok(TagRow {
@@ -445,6 +490,7 @@ impl Database {
                     namespace: row.get(1)?,
                     name: row.get(2)?,
                     color: row.get(3)?,
+                    archive_count: row.get(4)?,
                 })
             })?
             .filter_map(log_and_skip)
@@ -485,6 +531,40 @@ impl Database {
         )
     }
 
+    /// 批量为多个档案分配标签，单事务执行
+    pub fn batch_assign_tag(&mut self, archive_ids: &[i64], tag_id: i64) -> Result<usize> {
+        if archive_ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let mut affected = 0;
+        for &archive_id in archive_ids {
+            affected += tx.execute(
+                "INSERT OR IGNORE INTO archive_tags (archive_id, tag_id) VALUES (?, ?)",
+                (archive_id, tag_id),
+            )?;
+        }
+        tx.commit()?;
+        Ok(affected)
+    }
+
+    /// 批量移除多个档案的标签，单事务执行
+    pub fn batch_remove_tag(&mut self, archive_ids: &[i64], tag_id: i64) -> Result<usize> {
+        if archive_ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let mut affected = 0;
+        for &archive_id in archive_ids {
+            affected += tx.execute(
+                "DELETE FROM archive_tags WHERE archive_id = ? AND tag_id = ?",
+                (archive_id, tag_id),
+            )?;
+        }
+        tx.commit()?;
+        Ok(affected)
+    }
+
     pub fn list_namespaces(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT namespace FROM tags WHERE namespace != '' ORDER BY namespace",
@@ -512,6 +592,7 @@ impl Database {
                     namespace: row.get(1)?,
                     name: row.get(2)?,
                     color: row.get(3)?,
+                    archive_count: 0,
                 })
             })?
             .filter_map(log_and_skip)
@@ -559,6 +640,7 @@ impl Database {
                     namespace: row.get(2)?,
                     name: row.get(3)?,
                     color: row.get(4)?,
+                    archive_count: 0,
                 },
             ))
         })?;
@@ -575,7 +657,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, color, pinned, search, created_at FROM categories ORDER BY name",
         )?;
-        let categories = stmt
+        let mut categories: Vec<CategoryRow> = stmt
             .query_map([], |row| {
                 Ok(CategoryRow {
                     id: row.get(0)?,
@@ -584,10 +666,56 @@ impl Database {
                     pinned: row.get::<_, i64>(3)? != 0,
                     search: row.get(4)?,
                     created_at: row.get(5)?,
+                    archive_count: 0,
                 })
             })?
             .filter_map(log_and_skip)
             .collect();
+
+        for cat in categories.iter_mut() {
+            cat.archive_count = if cat.search.is_empty() {
+                self.conn.query_row(
+                    "SELECT COUNT(*) FROM archive_categories WHERE category_id = ?",
+                    [cat.id],
+                    |row| row.get(0),
+                )?
+            } else {
+                self.conn.query_row(
+                    "SELECT COUNT(*) FROM archives WHERE title LIKE ?",
+                    [format!("%{}%", cat.search)],
+                    |row| row.get(0),
+                )?
+            };
+        }
+
+        Ok(categories)
+    }
+
+    /// 获取指定档案已分配的（静态）分类
+    pub fn get_archive_categories(&self, archive_id: i64) -> Result<Vec<CategoryRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT c.id, c.name, c.color, c.pinned, c.search, c.created_at
+             FROM categories c
+             JOIN archive_categories ac ON ac.category_id = c.id
+             WHERE ac.archive_id = ?
+             ORDER BY c.name",
+        )?;
+
+        let categories = stmt
+            .query_map([archive_id], |row| {
+                Ok(CategoryRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    color: row.get(2)?,
+                    pinned: row.get::<_, i64>(3)? != 0,
+                    search: row.get(4)?,
+                    created_at: row.get(5)?,
+                    archive_count: 0,
+                })
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+
         Ok(categories)
     }
 
@@ -629,6 +757,48 @@ impl Database {
             "INSERT OR IGNORE INTO archive_categories (archive_id, category_id) VALUES (?, ?)",
             (archive_id, category_id),
         )
+    }
+
+    /// 批量为多个档案分配分类，单事务执行
+    pub fn batch_assign_category(
+        &mut self,
+        archive_ids: &[i64],
+        category_id: i64,
+    ) -> Result<usize> {
+        if archive_ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let mut affected = 0;
+        for &archive_id in archive_ids {
+            affected += tx.execute(
+                "INSERT OR IGNORE INTO archive_categories (archive_id, category_id) VALUES (?, ?)",
+                (archive_id, category_id),
+            )?;
+        }
+        tx.commit()?;
+        Ok(affected)
+    }
+
+    /// 批量移除多个档案的分类，单事务执行
+    pub fn batch_remove_category(
+        &mut self,
+        archive_ids: &[i64],
+        category_id: i64,
+    ) -> Result<usize> {
+        if archive_ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let mut affected = 0;
+        for &archive_id in archive_ids {
+            affected += tx.execute(
+                "DELETE FROM archive_categories WHERE archive_id = ? AND category_id = ?",
+                (archive_id, category_id),
+            )?;
+        }
+        tx.commit()?;
+        Ok(affected)
     }
 
     pub fn remove_category(&self, archive_id: i64, category_id: i64) -> Result<usize> {
@@ -1015,7 +1185,9 @@ mod tests {
         db.insert_archive("Manga C", "/path/c", "rar", 15, 1500)
             .unwrap();
 
-        let (archives, total) = db.list_archives(None, None, "title", "asc", 10, 0).unwrap();
+        let (archives, total) = db
+            .list_archives(None, None, None, "title", "asc", 10, 0)
+            .unwrap();
         assert_eq!(total, 3);
         assert_eq!(archives.len(), 3);
         assert_eq!(archives[0].title, "Manga A");
@@ -1035,7 +1207,7 @@ mod tests {
             .unwrap();
 
         let (archives, total) = db
-            .list_archives(Some("Naruto"), None, "title", "asc", 10, 0)
+            .list_archives(Some("Naruto"), None, None, "title", "asc", 10, 0)
             .unwrap();
         assert_eq!(total, 1);
         assert_eq!(archives.len(), 1);
@@ -1188,7 +1360,7 @@ mod tests {
 
         // Verify data
         let (archives, _) = db2
-            .list_archives(None, None, "title", "asc", 10, 0)
+            .list_archives(None, None, None, "title", "asc", 10, 0)
             .unwrap();
         assert_eq!(archives.len(), 1);
         assert_eq!(archives[0].title, "Manga A");
