@@ -92,6 +92,7 @@ impl Database {
             ("reader_bg", "#1a1a1a"),
             ("auto_scan_interval", "0"),
             ("scan_depth", "1"),
+            ("rename_suggest_depth", "3"),
             ("page_direction", "rtl"),
             ("theme", "dark"),
         ];

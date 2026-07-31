@@ -188,6 +188,7 @@ export default function Settings() {
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="设置分类">
           <a href="#settings-section-cbz">CBZ 归档</a>
+          <a href="#settings-section-library">漫画库</a>
           <a href="#settings-section-reader">阅读器</a>
           <a href="#settings-section-appearance">外观</a>
           <a href="#settings-section-tags">标签管理</a>
@@ -244,6 +245,25 @@ export default function Settings() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* 漫画库设置 */}
+      <div id="settings-section-library" className="settings-section">
+        <div className="settings-section-title">🗂️ 漫画库</div>
+        <div className="settings-row">
+          <div>
+            <div className="settings-row-label">重命名建议路径层数</div>
+            <div className="settings-row-desc">重命名弹窗中，路径建议只显示最后 N 层目录（0=显示完整路径）</div>
+          </div>
+          <select value={settings.rename_suggest_depth || '3'} onChange={(e) => handleUpdateSetting('rename_suggest_depth', e.target.value)}>
+            <option value="0">显示完整路径</option>
+            <option value="1">1 层</option>
+            <option value="2">2 层</option>
+            <option value="3">3 层</option>
+            <option value="4">4 层</option>
+            <option value="5">5 层</option>
+          </select>
+        </div>
       </div>
 
       {/* 阅读器设置 */}

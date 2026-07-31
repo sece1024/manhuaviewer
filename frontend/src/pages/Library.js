@@ -794,7 +794,9 @@ export default function Library({ mode = 'library' }) {
                 const a = archives.find(x => x.id === renamingId);
                 if (!a || !a.path) return null;
                 const rel = a.path;
-                const parts = rel.split('/').filter(Boolean);
+                const allParts = rel.split('/').filter(Boolean);
+                const depth = parseInt(settings.rename_suggest_depth, 10) || 3;
+                const parts = depth > 0 ? allParts.slice(-depth) : allParts;
                 if (parts.length <= 1) return null;
                 return (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
