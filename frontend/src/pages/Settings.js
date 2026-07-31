@@ -9,7 +9,6 @@ import ConfirmDialog from '../components/ConfirmDialog';
 export default function Settings() {
   const { settings, updateSetting } = useSettings();
   const { tags, reload: reloadTags } = useTags();
-  const [rootDir, setRootDir] = useState('');
   const [stats, setStats] = useState(null);
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#6366f1');
@@ -33,7 +32,6 @@ export default function Settings() {
   }, [settings.cbz_export_dir]);
 
   useEffect(() => {
-    api.getConfig().then(c => setRootDir(c.root_dir)).catch(() => {});
     api.getStats().then(setStats).catch(() => {});
     reloadTags();
     api.getCategories().then(setCategories).catch(() => {});
@@ -48,15 +46,6 @@ export default function Settings() {
     try {
       await updateSetting(key, value);
       toast('已保存', 'success');
-    } catch (e) {
-      toast(e.message, 'error');
-    }
-  };
-
-  const handleSaveRoot = async () => {
-    try {
-      await api.updateConfig(rootDir);
-      toast('根目录已更新', 'success');
     } catch (e) {
       toast(e.message, 'error');
     }
@@ -198,7 +187,6 @@ export default function Settings() {
 
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="设置分类">
-          <a href="#settings-section-dir">目录</a>
           <a href="#settings-section-cbz">CBZ 归档</a>
           <a href="#settings-section-reader">阅读器</a>
           <a href="#settings-section-appearance">外观</a>
@@ -209,35 +197,6 @@ export default function Settings() {
         </nav>
 
         <div className="settings-content">
-      {/* 目录设置 */}
-      <div id="settings-section-dir" className="settings-section">
-        <div className="settings-section-title">📂 目录</div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          <input
-            value={rootDir}
-            onChange={(e) => setRootDir(e.target.value)}
-            placeholder="漫画根目录路径"
-            style={{ flex: 1 }}
-          />
-          <button className="btn btn-sm" onClick={handleSaveRoot}>保存</button>
-        </div>
-        <div className="settings-row">
-          <div>
-            <div className="settings-row-label">扫描深度</div>
-            <div className="settings-row-desc">递归扫描子目录的层数（0=仅根目录，1=默认扫描一层子目录）</div>
-          </div>
-          <select value={settings.scan_depth || '1'} onChange={(e) => handleUpdateSetting('scan_depth', e.target.value)}>
-            <option value="0">0 — 仅根目录</option>
-            <option value="1">1 — 一层子目录</option>
-            <option value="2">2 — 两层子目录</option>
-            <option value="3">3 — 三层子目录</option>
-            <option value="4">4 — 四层子目录</option>
-            <option value="5">5 — 五层子目录</option>
-          </select>
-        </div>
-        <div className="settings-row-desc">支持文件夹和 ZIP/CBZ/RAR/CBR/7Z 压缩包</div>
-      </div>
-
       {/* CBZ 归档设置 */}
       <div id="settings-section-cbz" className="settings-section">
         <div className="settings-section-title">📦 CBZ 归档</div>
@@ -315,20 +274,6 @@ export default function Settings() {
             <div className="settings-row-label">阅读器背景色</div>
           </div>
           <input type="color" value={settings.reader_bg || '#1a1a1a'} onChange={(e) => handleUpdateSetting('reader_bg', e.target.value)} style={{ width: 50, padding: 2 }} />
-        </div>
-        <div className="settings-row">
-          <div>
-            <div className="settings-row-label">自动扫描间隔</div>
-            <div className="settings-row-desc">定时自动扫描漫画目录（0=关闭）</div>
-          </div>
-          <select value={settings.auto_scan_interval || '0'} onChange={(e) => handleUpdateSetting('auto_scan_interval', e.target.value)}>
-            <option value="0">关闭</option>
-            <option value="5">5 分钟</option>
-            <option value="15">15 分钟</option>
-            <option value="30">30 分钟</option>
-            <option value="60">1 小时</option>
-            <option value="120">2 小时</option>
-          </select>
         </div>
       </div>
 

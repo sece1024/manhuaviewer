@@ -17,9 +17,6 @@ export default function Library({ mode = 'library' }) {
   const { settings, updateSetting } = useSettings();
   const { tags, reload: reloadTags } = useTags();
   const [archives, setArchives] = useState([]);
-  const [rootDir, setRootDir] = useState('');
-  const [editingRoot, setEditingRoot] = useState(false);
-  const [tempRoot, setTempRoot] = useState('');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [viewMode, setViewMode] = useState(() => settings.view_mode || 'grid');
@@ -71,7 +68,6 @@ export default function Library({ mode = 'library' }) {
   }, []);
 
   useEffect(() => {
-    api.getConfig().then(c => setRootDir(c.root_dir));
     loadArchives();
     reloadCategories();
     return () => clearTimeout(searchDebounceRef.current);
@@ -120,29 +116,6 @@ export default function Library({ mode = 'library' }) {
   useEffect(() => {
     loadArchives({ search: searchRef.current, tag: selectedTag, category_id: selectedCategory });
   }, [sortBy, sortOrder, selectedTag, selectedCategory]);
-
-  const handleSaveRoot = async () => {
-    try {
-      await api.updateConfig(tempRoot);
-      setRootDir(tempRoot);
-      setEditingRoot(false);
-      toast('根目录已更新', 'success');
-    } catch (e) {
-      toast(e.message, 'error');
-    }
-  };
-
-  const handleScan = async () => {
-    setLoading(true);
-    try {
-      const result = await api.scan();
-      toast(result.message, 'success');
-      await loadArchives({ search, tag: selectedTag });
-    } catch (e) {
-      toast(e.message, 'error');
-    }
-    setLoading(false);
-  };
 
   const handleSearch = useCallback((val) => {
     setSearch(val);
@@ -436,8 +409,8 @@ export default function Library({ mode = 'library' }) {
   // 标签多时才显示搜索框（>10 才有意义）
   const showTagSearch = tags.length > 10;
 
-  // Welcome screen — 仅漫画库模式下，无漫画且未配置根目录时显示
-  if (!isCollection && !rootDir && !editingRoot && archives.length === 0) {
+  // Welcome screen — 仅漫画库模式下，无漫画时显示
+  if (!isCollection && archives.length === 0) {
     return (
       <div className="welcome-screen">
         <div className="welcome-screen-icon">📚</div>
@@ -460,23 +433,6 @@ export default function Library({ mode = 'library' }) {
             </button>
           </div>
         )}
-
-        {/* 配置根目录（折叠） */}
-        <div className="welcome-screen-root">
-          <p className="welcome-screen-root-hint">
-            也可以配置漫画根目录，批量扫描导入
-          </p>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
-            <input
-              className="welcome-screen-root-input"
-              placeholder="例: /home/user/manga"
-              value={tempRoot}
-              onChange={(e) => setTempRoot(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSaveRoot()}
-            />
-            <button className="btn btn-secondary" onClick={handleSaveRoot}>确认</button>
-          </div>
-        </div>
       </div>
     );
   }
@@ -486,30 +442,6 @@ export default function Library({ mode = 'library' }) {
       {/* 侧边栏过滤器 */}
       {showSidebar && (
         <div className="library-sidebar">
-          {/* 目录配置 — 仅漫画库模式 */}
-          {!isCollection && rootDir && (
-            <div className="filter-section">
-              <div className="filter-section-title">目录</div>
-              {editingRoot ? (
-                <>
-                  <input value={tempRoot} onChange={(e) => setTempRoot(e.target.value)} style={{ width: '100%', marginBottom: 8 }} />
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    <button className="btn btn-sm" onClick={handleSaveRoot}>保存</button>
-                    <button className="btn btn-sm btn-secondary" onClick={() => setEditingRoot(false)}>取消</button>
-                  </div>
-                </>
-              ) : (
-                <div
-                  className="filter-tag"
-                  onClick={() => { setTempRoot(rootDir); setEditingRoot(true); }}
-                  title={rootDir}
-                >
-                  📂 {rootDir.length > 20 ? rootDir.slice(0, 20) + '...' : rootDir}
-                </div>
-              )}
-            </div>
-          )}
-
           {/* 分类过滤 */}
           {categories.length > 0 && (
             <div className="filter-section">
@@ -628,7 +560,6 @@ export default function Library({ mode = 'library' }) {
               onOpenFolder={() => handleQuickOpen('folder')}
               onOpenArchive={() => handleQuickOpen('archive')}
               onConvertCbz={handleConvertFolderToCbz}
-              onScan={handleScan}
             />
           )}
         </div>
@@ -646,7 +577,6 @@ export default function Library({ mode = 'library' }) {
               onOpenFolder={() => { handleQuickOpen('folder'); setShowMobileMenu(false); }}
               onOpenArchive={() => { handleQuickOpen('archive'); setShowMobileMenu(false); }}
               onConvertCbz={() => { handleConvertFolderToCbz(); setShowMobileMenu(false); }}
-              onScan={() => { handleScan(); setShowMobileMenu(false); }}
             />
           </div>
         )}
@@ -668,7 +598,7 @@ export default function Library({ mode = 'library' }) {
           <div className="empty-state">
             <div className="empty-state-icon">{isCollection ? '📦' : '📚'}</div>
             <div className="empty-state-text">
-              {search || selectedTag ? '没有匹配的漫画' : isCollection ? '暂无收藏' : rootDir ? '暂无漫画，点击「扫描」按钮' : '点击「打开文件」添加漫画'}
+              {search || selectedTag ? '没有匹配的漫画' : isCollection ? '暂无收藏' : '点击「打开文件」添加漫画'}
             </div>
           </div>
         ) : viewMode === 'grid' ? (
@@ -863,9 +793,7 @@ export default function Library({ mode = 'library' }) {
               {(() => {
                 const a = archives.find(x => x.id === renamingId);
                 if (!a || !a.path) return null;
-                const rel = rootDir && a.path.startsWith(rootDir)
-                  ? a.path.slice(rootDir.length).replace(/^\//, '')
-                  : a.path;
+                const rel = a.path;
                 const parts = rel.split('/').filter(Boolean);
                 if (parts.length <= 1) return null;
                 return (
@@ -960,7 +888,7 @@ export default function Library({ mode = 'library' }) {
 const NS_OTHER = '_other';
 
 // 漫画库操作按钮组（桌面 / 移动端共用）
-function ArchiveActionButtons({ isCollection, isTauri, opening, loading, packingCbz, variant, onOpenFolder, onOpenArchive, onConvertCbz, onScan }) {
+function ArchiveActionButtons({ isCollection, isTauri, opening, packingCbz, variant, onOpenFolder, onOpenArchive, onConvertCbz }) {
   const sizeClass = variant === 'mobile' ? 'btn-sm' : '';
 
   return (
@@ -974,11 +902,6 @@ function ArchiveActionButtons({ isCollection, isTauri, opening, loading, packing
       {!isCollection && isTauri && (
         <button className={`btn btn-secondary ${sizeClass}`} onClick={onConvertCbz} disabled={packingCbz}>
           {packingCbz ? '⏳ 打包中...' : '📦 转换 CBZ'}
-        </button>
-      )}
-      {!isCollection && (
-        <button className={`btn ${sizeClass}`} onClick={onScan} disabled={loading}>
-          {loading ? '扫描中...' : '🔄 扫描'}
         </button>
       )}
     </>

@@ -1,7 +1,4 @@
 const api = {
-  getConfig: jest.fn().mockResolvedValue({ root_dir: '/test/manga' }),
-  updateConfig: jest.fn().mockResolvedValue({ success: true }),
-  scan: jest.fn().mockResolvedValue({ scanned: 5, message: '扫描完成' }),
   openFile: jest.fn().mockResolvedValue({ success: true }),
   listCbz: jest.fn().mockResolvedValue([]),
   getArchives: jest.fn().mockResolvedValue([]),

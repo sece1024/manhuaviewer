@@ -339,9 +339,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .welcome-screen-desc { color: var(--text-secondary); margin-bottom: 24px; font-size: 14px; }
 .welcome-screen-sub { font-size: 12px; color: var(--text-tertiary); }
 .welcome-screen-actions { display: flex; gap: 8px; justify-content: center; margin-bottom: 24px; }
-.welcome-screen-root { border-top: 1px solid var(--border); padding-top: 16px; margin-top: 8px; }
-.welcome-screen-root-hint { color: var(--text-tertiary); font-size: 12px; margin-bottom: 8px; }
-.welcome-screen-root-input { flex: 1; min-width: 0; max-width: 360px; }
 
 /* 网格视图 */
 .archive-grid {

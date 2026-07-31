@@ -131,15 +131,6 @@ async function _doFetch(url, options, maxAttempts) {
 }
 
 const api = {
-  // Config
-  getConfig: () => request('/config'),
-  updateConfig: (root_dir) =>
-    request('/config', { method: 'PUT', body: JSON.stringify({ root_dir }) }).then(r => { _invalidate('/api/config'); return r; }),
-
-  // Scan
-  scan: () =>
-    request('/scan', { method: 'POST' }).then(r => { _invalidate('/api/archives'); return r; }),
-
   // Direct open
   openFile: (filePath) =>
     request('/open', { method: 'POST', body: JSON.stringify({ filePath }) }).then(r => { _invalidate('/api/archives'); return r; }),

@@ -26,7 +26,6 @@ function renderSettings() {
 describe('Settings 页面', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    api.getConfig.mockResolvedValue({ root_dir: '/test/manga' });
     api.getSettings.mockResolvedValue({ page_direction: 'rtl', reader_fit: 'height', theme: 'dark' });
     api.getStats.mockResolvedValue({ archives: 10, tags: 5, categories: 3, history: 20, total_pages: 500, total_size: 1024000 });
     api.getTags.mockResolvedValue([
