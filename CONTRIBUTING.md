@@ -144,6 +144,32 @@ git push origin main --tags
 - 构建使用 [tauri-apps/tauri-action@v0](https://github.com/nicegui-org/tauri-action)，配置详见 `release.yml`
 - macOS 构建暂不包含代码签名，用户首次打开需在"系统设置 > 隐私与安全性"中允许
 
+## 日志与启动问题排查
+
+应用启动时会在数据目录下自动生成按天滚动的日志文件（保留最近 7 天）：
+
+```
+<data_dir>/logs/manhuaviewer.log.YYYY-MM-DD
+```
+
+其中 `<data_dir>` 默认路径：
+
+| 平台 | 默认路径 |
+|------|----------|
+| macOS | `~/Library/Application Support/MangaViewer/data` |
+| Windows | `%APPDATA%\MangaViewer\data` |
+| Linux | `~/.local/share/MangaViewer/data` |
+
+也可以通过 `DATA_DIR` 环境变量自定义位置。
+
+### "安装完成后打开没有反应"排查步骤
+
+1. **查看日志文件**：按上表找到 `logs/manhuaviewer.log.*`，日志中会记录启动失败的具体原因（数据库初始化失败、端口绑定失败、panic 等）。
+2. **端口冲突**：应用内嵌的 HTTP 服务默认监听 `127.0.0.1:5002`。若已有一个 MangaViewer 实例在后台残留运行，新启动的实例会绑定失败并弹出错误提示（而不是静默退出）。可在任务管理器中检查是否有残留的 `manhuaviewer.exe` 进程并结束它；正常情况下应用已内置单实例锁，重复启动会自动聚焦到已打开的窗口而不是再开一个实例。
+3. **WebView2 运行时**：Windows 安装包默认使用联网下载 WebView2 Bootstrapper 的安装方式（`webviewInstallMode` 未显式配置，使用 Tauri 默认值）。如果安装时无网络连接或下载失败，安装程序可能"看似成功"但系统缺少 WebView2 运行时，导致窗口无法渲染。可手动安装 [Microsoft Edge WebView2 运行时](https://developer.microsoft.com/microsoft-edge/webview2/) 后重试。
+4. **杀毒软件/安全策略拦截**：部分杀毒软件会静默拦截未签名的应用进程，可临时关闭或加入信任列表后重试。
+5. 若以上步骤仍无法定位问题，请在提交 Issue 时附上 `manhuaviewer.log.*` 日志文件内容。
+
 ## 问题反馈
 
 - 提交 [Issue](https://github.com/sece1024/manhuaviewer/issues) 描述问题

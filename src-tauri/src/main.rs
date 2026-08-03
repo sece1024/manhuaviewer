@@ -2,13 +2,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod db;
+mod logging;
 mod routes;
 mod services;
 
 use std::sync::Arc;
+use tauri::Manager;
 use tokio::sync::Mutex;
-use tracing::{info, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing::info;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -16,16 +17,27 @@ pub struct AppState {
     pub data_dir: std::path::PathBuf,
 }
 
+/// Logs a fatal startup error, shows a native error dialog so the user isn't
+/// left staring at an unresponsive/vanishing app, and exits the process.
+///
+/// This replaces `.expect()`/`panic!` for startup failures: on Windows the
+/// release build hides the console (`windows_subsystem = "windows"`), so an
+/// unhandled panic previously meant the app would just silently disappear
+/// with no indication of what went wrong.
+fn fatal_error(context: &str, err: impl std::fmt::Display) -> ! {
+    let message = format!("{}: {}", context, err);
+    tracing::error!("{}", message);
+    let _ = rfd::MessageDialog::new()
+        .set_title("MangaViewer 启动失败")
+        .set_description(&message)
+        .set_level(rfd::MessageLevel::Error)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+    std::process::exit(1);
+}
+
 #[tokio::main]
 async fn main() {
-    // Initialize logging
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
-
-    info!("Starting MangaViewer v{}", env!("CARGO_PKG_VERSION"));
-
     // Determine data directory
     let data_dir = if let Ok(dir) = std::env::var("DATA_DIR") {
         std::path::PathBuf::from(dir)
@@ -36,16 +48,30 @@ async fn main() {
             .join("data")
     };
 
+    // Initialize file logging (rotates daily, keeps 7 days, installs a panic
+    // hook). The guard must stay alive for the whole process lifetime.
+    let _log_guard = logging::init_logging(&data_dir);
+
+    info!("Starting MangaViewer v{}", env!("CARGO_PKG_VERSION"));
+
     // Create data directory if it doesn't exist
-    std::fs::create_dir_all(&data_dir).expect("Failed to create data directory");
+    if let Err(e) = std::fs::create_dir_all(&data_dir) {
+        fatal_error(&format!("无法创建数据目录 {:?}", data_dir), e);
+    }
 
     // Initialize database
     let db_path = data_dir.join("manhuaviewer.db");
-    let db_path_str = db_path
-        .to_str()
-        .expect("Database path contains invalid UTF-8");
-    let database = db::Database::new(db_path_str).expect("Failed to open database");
-    database.init().expect("Failed to initialize database");
+    let db_path_str = match db_path.to_str() {
+        Some(s) => s,
+        None => fatal_error("数据库路径包含无效字符", db_path.display()),
+    };
+    let database = match db::Database::new(db_path_str) {
+        Ok(d) => d,
+        Err(e) => fatal_error("无法打开数据库", e),
+    };
+    if let Err(e) = database.init() {
+        fatal_error("无法初始化数据库", e);
+    }
 
     info!("Database initialized at {:?}", db_path);
 
@@ -60,6 +86,13 @@ async fn main() {
 
     // Start Tauri application
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            info!("Another instance was launched; focusing existing window instead");
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -72,9 +105,17 @@ async fn main() {
                     .parse()
                     .unwrap_or(5002);
 
-                let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
-                    .await
-                    .expect("Failed to bind to port");
+                let listener =
+                    match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
+                        Ok(l) => l,
+                        Err(e) => fatal_error(
+                            &format!(
+                            "无法绑定端口 {}，可能已有 MangaViewer 实例正在运行，请检查任务管理器",
+                            port
+                        ),
+                            e,
+                        ),
+                    };
 
                 let addr = listener.local_addr().unwrap();
                 info!("API server listening on http://{}", addr);
