@@ -61,15 +61,6 @@ function _invalidate(pattern) {
   }
 }
 
-export function clearCache(pattern) {
-  if (pattern) {
-    _invalidate(pattern);
-  } else {
-    _cache.clear();
-    _inflight.clear();
-  }
-}
-
 async function request(url, options = {}) {
   const method = (options.method || 'GET').toUpperCase();
   const isIdempotent = method === 'GET';
@@ -145,14 +136,10 @@ const api = {
       archives.map(a => ({ ...a, cover_url: a.cover_url ? fixUrl(a.cover_url) : `${BASE}/archives/${a.id}/cover` }))
     );
   },
-  getArchive: (id) => request(`/archives/${id}`),
   getPages: (archiveId) => request(`/archives/${archiveId}/pages`).then(data => ({
     ...data,
     pages: data.pages.map(p => ({ ...p, url: fixUrl(p.url), thumb_url: fixUrl(p.thumb_url) })),
   })),
-  pageUrl: (archiveId, pageIndex) => `${BASE}/archives/${archiveId}/pages/${pageIndex}`,
-  pageThumbUrl: (archiveId, pageIndex) => `${BASE}/archives/${archiveId}/pages/${pageIndex}/thumb`,
-  coverUrl: (archiveId) => `${BASE}/archives/${archiveId}/cover`,
   deleteArchive: (id) =>
     request(`/archives/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/api/archives'); _invalidate('/api/history'); return r; }),
   batchDeleteArchives: (ids) =>
@@ -188,7 +175,6 @@ const api = {
     const qs = new URLSearchParams(params).toString();
     return request(`/tags${qs ? '?' + qs : ''}`);
   },
-  getNamespaces: () => request('/tags/namespaces'),
   getArchiveTags: (archiveId) => request(`/archives/${archiveId}/tags`),
   createTag: (data) =>
     request('/tags', { method: 'POST', body: JSON.stringify(data) }).then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); return r; }),

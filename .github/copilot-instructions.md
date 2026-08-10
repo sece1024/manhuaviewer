@@ -26,9 +26,9 @@ pnpm lint                      # cargo clippy -D warnings
 
 Tauri 2.0 desktop app: Rust backend spawns an Axum HTTP server on port 5002; React frontend communicates via REST. In dev mode the CRA dev server proxies to `:5002`; in production Tauri loads the built frontend via `tauri://localhost` with CORS to the Axum server.
 
-- **Backend** (`src-tauri/src/`): `routes/` (Axum handlers), `services/` (archive extraction, scanning, thumbnails, CBZ packing), `db/` (rusqlite wrapper + schema + migrations).
+- **Backend** (`src-tauri/src/`): `routes/` (Axum handlers), `services/` (archive extraction, scanning, thumbnails, CBZ packing), `db/` (rusqlite wrapper + schema + migrations), `logging.rs` (file logging, panic hook).
 - **Frontend** (`frontend/src/`): React 19 + React Router v7 (CRA). Pages: `Library`, `Reader`, `History`, `Settings`. Shared hooks in `hooks/`, all API calls through `utils/api.js`.
-- **Database**: SQLite via rusqlite at `~/Library/Application Support/MangaViewer/data/manhuaviewer.db` (macOS). Overridable via `DATA_DIR` env var. Schema defined in `db/schema.rs`; additive migrations in `db/migrations.rs`.
+- **Database**: SQLite via rusqlite at `~/Library/Application Support/MangaViewer/data/manhuaviewer.db` (macOS). Overridable via `DATA_DIR` env var. `db/mod.rs` holds the `Database` struct + all queries; `db/schema.rs` is the canonical idempotent schema; `db/migrations.rs` migrates legacy tables (`folders`, `folder_tags`, `read_history`) and adds columns.
 - **Two archive types**: `folder` (directory scanned at request time, no pages stored in DB) vs compressed (`zip`/`cbz`/`rar`/`cbr`/`7z` — page list stored in DB, extracted on demand).
 
 ## Key Conventions
@@ -41,7 +41,7 @@ Tauri 2.0 desktop app: Rust backend spawns an Axum HTTP server on port 5002; Rea
 - **Error responses**: Use `routes::error_response(StatusCode, &str)` helper which returns `{ "error": "..." }` JSON.
 - **Blocking I/O** (archive extraction, thumbnail generation) must use `spawn_blocking` to avoid starving the tokio runtime.
 - **Temp files** for RAR/7z extraction use `tempfile::tempdir()` to prevent race conditions.
-- **Search** uses a custom DSL server-side: `keyword`, `tag:name`, `-exclusion`.
+- **Logging** is file-based (`logging.rs`): daily-rotating files under `<data_dir>/logs/`, 7-day retention, panic hook. Startup failures also show a native error dialog.
 - **Commit messages**: Follow [Conventional Commits](https://www.conventionalcommits.org/) — `feat:`, `fix:`, `docs:`, `ci:`, `chore:`.
 
 ## Adding a New API Route
@@ -52,10 +52,11 @@ Tauri 2.0 desktop app: Rust backend spawns an Axum HTTP server on port 5002; Rea
 
 ## Releasing
 
-Version must be synchronized in three places before tagging: `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and root `package.json`. Push a `v*` tag to trigger the release workflow (`.github/workflows/release.yml`), which creates a draft GitHub Release with platform installers.
+Version must be synchronized in three places before tagging: `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and root `package.json` (use `scripts/bump-version.sh`). Push a `v*` tag to trigger the release workflow (`.github/workflows/release.yml`), which creates a draft GitHub Release with platform installers. `frontend/package.json` has its own separate version that is intentionally NOT synced.
 
 ## Gotchas
 
-- `pnpm install` may fail with `ERR_PNPM_IGNORED_BUILDS` — add the offending package to `allowBuilds` in `pnpm-workspace.yaml`.
-- RAR support may require a system `unrar` binary as fallback.
+- Package manager is pnpm (CI pins pnpm 9); `.npmrc` sets `node-linker=hoisted`. Always use `pnpm`, never `npm install` (`frontend/` still carries a legacy `package-lock.json`).
+- If `pnpm install` fails with `ERR_PNPM_IGNORED_BUILDS`, whitelist the native package via `onlyBuiltDependencies` in pnpm config (the old `allowBuilds` entries were removed as invalid).
+- RAR/7Z support shells out to system binaries (`unrar`, `7z`); on macOS install via Homebrew (`brew install unrar p7zip`). ZIP/CBZ are handled natively by the Rust `zip` crate.
 - Tauri uses the system WebView — CSS/JS behavior varies across platforms.
