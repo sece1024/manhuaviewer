@@ -522,11 +522,16 @@ pub async fn get_page_thumb(
         return error_response(StatusCode::BAD_REQUEST, "Page index must be non-negative");
     }
 
-    let (archive_path, archive_type, thumb_dir) =
+    let (archive_path, archive_type, thumb_dir, thumb_already_set) =
         match super::run_db(&state, move |db| db.get_archive(id)).await {
             Ok(Some(a)) => {
                 let dir = state.data_dir.join("thumbnails").join(id.to_string());
-                (a.path, a.archive_type, dir)
+                (
+                    a.path,
+                    a.archive_type,
+                    dir,
+                    a.thumbnail_path.is_some(),
+                )
             }
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
             Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -594,14 +599,37 @@ pub async fn get_page_thumb(
 
     match result {
         Ok(Ok(thumb_data)) => {
-            // 首次生成成功，更新数据库记录并执行淘汰
+            // 首次生成成功，更新数据库记录；LRU 淘汰最多每分钟跑一次
             let thumb_dir_str = thumb_dir.to_string_lossy().to_string();
-            let evicted = super::run_db(&state, move |db| {
-                db.set_thumbnail_path(id, &thumb_dir_str)?;
-                db.evict_old_thumbnails()
-            })
-            .await
-            .unwrap_or_default();
+            let mut do_evict = false;
+            {
+                let mut last = state.last_thumb_eviction.lock().unwrap();
+                let elapsed = last
+                    .as_ref()
+                    .map(|t| t.elapsed().as_secs() >= 60)
+                    .unwrap_or(true);
+                if elapsed {
+                    *last = Some(std::time::Instant::now());
+                    do_evict = true;
+                }
+            }
+
+            let evicted = if do_evict {
+                super::run_db(&state, move |db| {
+                    db.set_thumbnail_path(id, &thumb_dir_str)?;
+                    db.evict_old_thumbnails()
+                })
+                .await
+                .unwrap_or_default()
+            } else {
+                if !thumb_already_set {
+                    let _ = super::run_db(&state, move |db| {
+                        db.set_thumbnail_path(id, &thumb_dir_str)
+                    })
+                    .await;
+                }
+                vec![]
+            };
 
             // 删除被淘汰漫画的缩略图目录
             for (_evicted_id, evicted_path) in evicted {

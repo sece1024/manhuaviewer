@@ -6,7 +6,7 @@ mod logging;
 mod routes;
 mod services;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 use tracing::info;
 
@@ -14,6 +14,9 @@ use tracing::info;
 pub struct AppState {
     pub db: Arc<db::Database>,
     pub data_dir: std::path::PathBuf,
+    /// Timestamp of the last thumbnail eviction run, so the expensive LRU
+    /// scan runs at most every `THUMB_EVICTION_INTERVAL`.
+    pub last_thumb_eviction: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 /// Logs a fatal startup error, shows a native error dialog so the user isn't
@@ -78,6 +81,7 @@ async fn main() {
     let state = AppState {
         db: Arc::new(database),
         data_dir: data_dir.clone(),
+        last_thumb_eviction: Arc::new(Mutex::new(None)),
     };
 
     // Build Axum router for API

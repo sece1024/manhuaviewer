@@ -522,11 +522,9 @@ impl Database {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT a.id FROM archives a
+             LEFT JOIN history h ON h.archive_id = a.id
              WHERE a.thumbnail_path IS NOT NULL
-             ORDER BY COALESCE(
-                 (SELECT h.updated_at FROM history h WHERE h.archive_id = a.id),
-                 a.updated_at
-             ) DESC",
+             ORDER BY COALESCE(h.updated_at, a.updated_at) DESC",
         )?;
         let ids = stmt
             .query_map([], |row| row.get::<_, i64>(0))?
