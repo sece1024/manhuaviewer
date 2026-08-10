@@ -1,7 +1,9 @@
 pub mod migrations;
 pub mod schema;
 
-use rusqlite::{Connection, Result};
+use r2d2::{Pool, PooledConnection};
+use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::{OptionalExtension, Result};
 use serde::{Deserialize, Serialize};
 
 /// Helper: log and skip row-level errors instead of silently swallowing them
@@ -63,21 +65,38 @@ pub struct HistoryRow {
 /// (history row, archive title, archive path, archive type)
 pub type HistoryEntry = (HistoryRow, String, String, String);
 
+/// Connection pool wrapper. Each query acquires its own SQLite connection, so
+/// concurrent requests no longer serialize on a single `Connection` behind a
+/// global mutex (WAL mode already permits concurrent readers).
 pub struct Database {
-    conn: Connection,
+    pool: Pool<SqliteConnectionManager>,
 }
 
 impl Database {
-    pub fn new(path: &str) -> Result<Self> {
-        let conn = Connection::open(path)?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "foreign_keys", "ON")?;
-        Ok(Self { conn })
+    pub fn new(path: &str) -> anyhow::Result<Self> {
+        let manager = SqliteConnectionManager::file(path).with_init(|conn| {
+            conn.pragma_update(None, "journal_mode", "WAL")?;
+            conn.pragma_update(None, "foreign_keys", "ON")?;
+            Ok(())
+        });
+        let pool = r2d2::Pool::builder().max_size(8).build(manager)?;
+        Ok(Self { pool })
+    }
+
+    /// Acquire a pooled connection. A pool exhaustion / init failure is a real
+    /// runtime error, not a SQL issue; map it into rusqlite's error space so
+    /// callers keep working with `?`.
+    fn conn(&self) -> Result<PooledConnection<SqliteConnectionManager>> {
+        self.pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
     }
 
     pub fn init(&self) -> Result<()> {
-        self.conn.execute_batch(schema::SCHEMA)?;
-        migrations::run_migrations(&self.conn)?;
+        let conn = self.conn()?;
+        conn.execute_batch(schema::SCHEMA)?;
+        migrations::run_migrations(&conn)?;
+        drop(conn);
         self.init_settings()?;
         Ok(())
     }
@@ -97,8 +116,9 @@ impl Database {
             ("theme", "dark"),
         ];
 
+        let conn = self.conn()?;
         for (key, value) in defaults {
-            self.conn.execute(
+            conn.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)",
                 (key, value),
             )?;
@@ -107,13 +127,10 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_conn(&self) -> &Connection {
-        &self.conn
-    }
-
     // Archive operations
     pub fn get_archive(&self, id: i64) -> Result<Option<ArchiveRow>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at FROM archives WHERE id = ?"
         )?;
 
@@ -140,7 +157,8 @@ impl Database {
     }
 
     pub fn get_archive_by_path(&self, path: &str) -> Result<Option<ArchiveRow>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at FROM archives WHERE path = ?"
         )?;
 
@@ -177,6 +195,7 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<ArchiveRow>, i64)> {
+        let conn = self.conn()?;
         let mut where_clause = String::from("WHERE 1=1");
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -207,8 +226,7 @@ impl Database {
 
         // 按分类过滤：静态分类走关联表 JOIN，动态分类（配置了 search）走标题匹配
         if let Some(cid) = category_id {
-            let dynamic_search: Option<String> = self
-                .conn
+            let dynamic_search: Option<String> = conn
                 .query_row("SELECT search FROM categories WHERE id = ?", [cid], |row| {
                     row.get(0)
                 })
@@ -231,7 +249,7 @@ impl Database {
             "SELECT COUNT(*) FROM archives a{} {}",
             join_clause, where_clause
         );
-        let total: i64 = self.conn.query_row(
+        let total: i64 = conn.query_row(
             &count_sql,
             rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
             |row| row.get(0),
@@ -255,7 +273,7 @@ impl Database {
         params.push(Box::new(limit));
         params.push(Box::new(offset));
 
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(&sql)?;
         let archives = stmt
             .query_map(
                 rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
@@ -287,7 +305,8 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<ArchiveRow>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.thumbnail_path, a.group_id, a.created_at, a.updated_at
              FROM archives a
              JOIN archive_tags at ON at.archive_id = a.id
@@ -326,35 +345,37 @@ impl Database {
         page_count: i64,
         file_size: i64,
     ) -> Result<i64> {
+        let conn = self.conn()?;
         // Check for existing archive with the same path first
-        let existing: Option<i64> = self
-            .conn
+        let existing: Option<i64> = conn
             .query_row("SELECT id FROM archives WHERE path = ?", [path], |row| {
                 row.get(0)
             })
-            .ok();
+            .optional()?;
 
         if let Some(id) = existing {
             return Ok(id);
         }
 
-        self.conn.execute(
+        conn.execute(
             "INSERT INTO archives (title, path, archive_type, page_count, file_size) VALUES (?, ?, ?, ?, ?)",
             (title, path, archive_type, page_count, file_size),
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     pub fn delete_archive(&self, id: i64) -> Result<usize> {
-        self.conn.execute("DELETE FROM archives WHERE id = ?", [id])
+        self.conn()?
+            .execute("DELETE FROM archives WHERE id = ?", [id])
     }
 
     /// 批量删除档案，单事务执行
-    pub fn batch_delete_archives(&mut self, ids: &[i64]) -> Result<usize> {
+    pub fn batch_delete_archives(&self, ids: &[i64]) -> Result<usize> {
         if ids.is_empty() {
             return Ok(0);
         }
-        let tx = self.conn.transaction()?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
         let mut affected = 0;
         for &id in ids {
             affected += tx.execute("DELETE FROM archives WHERE id = ?", [id])?;
@@ -364,7 +385,7 @@ impl Database {
     }
 
     pub fn update_archive_title(&self, id: i64, title: &str) -> Result<usize> {
-        self.conn.execute(
+        self.conn()?.execute(
             "UPDATE archives SET title = ?, updated_at = datetime('now') WHERE id = ?",
             (title, id),
         )
@@ -372,7 +393,8 @@ impl Database {
 
     /// 获取组内所有章节（按路径排序）
     pub fn get_group_chapters(&self, group_id: i64) -> Result<Vec<ArchiveRow>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at
              FROM archives WHERE group_id = ? ORDER BY path",
         )?;
@@ -402,16 +424,17 @@ impl Database {
     /// 合并多个档案：第一个为主档案，其余 group_id 设为主档案 id
     pub fn merge_archives(&self, archive_ids: &[i64]) -> Result<i64> {
         let primary_id = archive_ids[0];
+        let conn = self.conn()?;
 
         // 主档案: group_id 设为自身 id
-        self.conn.execute(
+        conn.execute(
             "UPDATE archives SET group_id = ?, updated_at = datetime('now') WHERE id = ?",
             (primary_id, primary_id),
         )?;
 
         // 其余档案: group_id 设为主档案 id
         for &id in &archive_ids[1..] {
-            self.conn.execute(
+            conn.execute(
                 "UPDATE archives SET group_id = ?, updated_at = datetime('now') WHERE id = ?",
                 (primary_id, id),
             )?;
@@ -424,7 +447,7 @@ impl Database {
     const MAX_CACHED_ARCHIVES: i64 = 20;
 
     pub fn set_thumbnail_path(&self, archive_id: i64, thumb_path: &str) -> Result<()> {
-        self.conn.execute(
+        self.conn()?.execute(
             "UPDATE archives SET thumbnail_path = ? WHERE id = ?",
             (thumb_path, archive_id),
         )?;
@@ -432,7 +455,8 @@ impl Database {
     }
 
     pub fn get_cached_archive_ids(&self) -> Result<Vec<i64>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT a.id FROM archives a
              WHERE a.thumbnail_path IS NOT NULL
              ORDER BY COALESCE(
@@ -456,15 +480,16 @@ impl Database {
         // 要淘汰的：超出限制的最旧条目
         let to_evict = &cached_ids[Self::MAX_CACHED_ARCHIVES as usize..];
         let mut evicted = Vec::new();
+        let conn = self.conn()?;
 
         for &id in to_evict {
-            let thumb_path: Option<String> = self.conn.query_row(
+            let thumb_path: Option<String> = conn.query_row(
                 "SELECT thumbnail_path FROM archives WHERE id = ?",
                 [id],
                 |row| row.get(0),
             )?;
             if let Some(path) = thumb_path {
-                self.conn.execute(
+                conn.execute(
                     "UPDATE archives SET thumbnail_path = NULL WHERE id = ?",
                     [id],
                 )?;
@@ -477,7 +502,8 @@ impl Database {
 
     // Tag operations
     pub fn list_tags(&self) -> Result<Vec<TagRow>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT t.id, t.namespace, t.name, t.color, COUNT(at.archive_id)
              FROM tags t
              LEFT JOIN archive_tags at ON at.tag_id = t.id
@@ -500,44 +526,46 @@ impl Database {
     }
 
     pub fn create_tag(&self, namespace: &str, name: &str, color: &str) -> Result<i64> {
-        self.conn.execute(
+        let conn = self.conn()?;
+        conn.execute(
             "INSERT INTO tags (namespace, name, color) VALUES (?, ?, ?)",
             (namespace, name, color),
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     pub fn update_tag(&self, id: i64, namespace: &str, name: &str, color: &str) -> Result<usize> {
-        self.conn.execute(
+        self.conn()?.execute(
             "UPDATE tags SET namespace = ?, name = ?, color = ? WHERE id = ?",
             (namespace, name, color, id),
         )
     }
 
     pub fn delete_tag(&self, id: i64) -> Result<usize> {
-        self.conn.execute("DELETE FROM tags WHERE id = ?", [id])
+        self.conn()?.execute("DELETE FROM tags WHERE id = ?", [id])
     }
 
     pub fn assign_tag(&self, archive_id: i64, tag_id: i64) -> Result<usize> {
-        self.conn.execute(
+        self.conn()?.execute(
             "INSERT OR IGNORE INTO archive_tags (archive_id, tag_id) VALUES (?, ?)",
             (archive_id, tag_id),
         )
     }
 
     pub fn remove_tag(&self, archive_id: i64, tag_id: i64) -> Result<usize> {
-        self.conn.execute(
+        self.conn()?.execute(
             "DELETE FROM archive_tags WHERE archive_id = ? AND tag_id = ?",
             (archive_id, tag_id),
         )
     }
 
     /// 批量为多个档案分配标签，单事务执行
-    pub fn batch_assign_tag(&mut self, archive_ids: &[i64], tag_id: i64) -> Result<usize> {
+    pub fn batch_assign_tag(&self, archive_ids: &[i64], tag_id: i64) -> Result<usize> {
         if archive_ids.is_empty() {
             return Ok(0);
         }
-        let tx = self.conn.transaction()?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
         let mut affected = 0;
         for &archive_id in archive_ids {
             affected += tx.execute(
@@ -550,11 +578,12 @@ impl Database {
     }
 
     /// 批量移除多个档案的标签，单事务执行
-    pub fn batch_remove_tag(&mut self, archive_ids: &[i64], tag_id: i64) -> Result<usize> {
+    pub fn batch_remove_tag(&self, archive_ids: &[i64], tag_id: i64) -> Result<usize> {
         if archive_ids.is_empty() {
             return Ok(0);
         }
-        let tx = self.conn.transaction()?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
         let mut affected = 0;
         for &archive_id in archive_ids {
             affected += tx.execute(
@@ -567,7 +596,8 @@ impl Database {
     }
 
     pub fn list_namespaces(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT DISTINCT namespace FROM tags WHERE namespace != '' ORDER BY namespace",
         )?;
         let namespaces = stmt
@@ -578,7 +608,8 @@ impl Database {
     }
 
     pub fn get_archive_tags(&self, archive_id: i64) -> Result<Vec<TagRow>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT t.id, t.namespace, t.name, t.color
              FROM tags t
              JOIN archive_tags at ON at.tag_id = t.id
@@ -624,7 +655,8 @@ impl Database {
             placeholders
         );
 
-        let mut stmt = self.conn.prepare(&sql)?;
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&sql)?;
         let params: Vec<Box<dyn rusqlite::types::ToSql>> = archive_ids
             .iter()
             .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
@@ -655,7 +687,8 @@ impl Database {
 
     // Category operations
     pub fn list_categories(&self) -> Result<Vec<CategoryRow>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT id, name, color, pinned, search, created_at FROM categories ORDER BY name",
         )?;
         let mut categories: Vec<CategoryRow> = stmt
@@ -675,13 +708,13 @@ impl Database {
 
         for cat in categories.iter_mut() {
             cat.archive_count = if cat.search.is_empty() {
-                self.conn.query_row(
+                conn.query_row(
                     "SELECT COUNT(*) FROM archive_categories WHERE category_id = ?",
                     [cat.id],
                     |row| row.get(0),
                 )?
             } else {
-                self.conn.query_row(
+                conn.query_row(
                     "SELECT COUNT(*) FROM archives WHERE title LIKE ?",
                     [format!("%{}%", cat.search)],
                     |row| row.get(0),
@@ -694,7 +727,8 @@ impl Database {
 
     /// 获取指定档案已分配的（静态）分类
     pub fn get_archive_categories(&self, archive_id: i64) -> Result<Vec<CategoryRow>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT c.id, c.name, c.color, c.pinned, c.search, c.created_at
              FROM categories c
              JOIN archive_categories ac ON ac.category_id = c.id
@@ -727,11 +761,12 @@ impl Database {
         pinned: bool,
         search: &str,
     ) -> Result<i64> {
-        self.conn.execute(
+        let conn = self.conn()?;
+        conn.execute(
             "INSERT INTO categories (name, color, pinned, search) VALUES (?, ?, ?, ?)",
             (name, color, pinned as i64, search),
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     pub fn update_category(
@@ -742,19 +777,19 @@ impl Database {
         pinned: bool,
         search: &str,
     ) -> Result<usize> {
-        self.conn.execute(
+        self.conn()?.execute(
             "UPDATE categories SET name = ?, color = ?, pinned = ?, search = ? WHERE id = ?",
             (name, color, pinned as i64, search, id),
         )
     }
 
     pub fn delete_category(&self, id: i64) -> Result<usize> {
-        self.conn
+        self.conn()?
             .execute("DELETE FROM categories WHERE id = ?", [id])
     }
 
     pub fn assign_category(&self, archive_id: i64, category_id: i64) -> Result<usize> {
-        self.conn.execute(
+        self.conn()?.execute(
             "INSERT OR IGNORE INTO archive_categories (archive_id, category_id) VALUES (?, ?)",
             (archive_id, category_id),
         )
@@ -762,14 +797,15 @@ impl Database {
 
     /// 批量为多个档案分配分类，单事务执行
     pub fn batch_assign_category(
-        &mut self,
+        &self,
         archive_ids: &[i64],
         category_id: i64,
     ) -> Result<usize> {
         if archive_ids.is_empty() {
             return Ok(0);
         }
-        let tx = self.conn.transaction()?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
         let mut affected = 0;
         for &archive_id in archive_ids {
             affected += tx.execute(
@@ -783,14 +819,15 @@ impl Database {
 
     /// 批量移除多个档案的分类，单事务执行
     pub fn batch_remove_category(
-        &mut self,
+        &self,
         archive_ids: &[i64],
         category_id: i64,
     ) -> Result<usize> {
         if archive_ids.is_empty() {
             return Ok(0);
         }
-        let tx = self.conn.transaction()?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
         let mut affected = 0;
         for &archive_id in archive_ids {
             affected += tx.execute(
@@ -803,7 +840,7 @@ impl Database {
     }
 
     pub fn remove_category(&self, archive_id: i64, category_id: i64) -> Result<usize> {
-        self.conn.execute(
+        self.conn()?.execute(
             "DELETE FROM archive_categories WHERE archive_id = ? AND category_id = ?",
             (archive_id, category_id),
         )
@@ -816,6 +853,7 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<HistoryEntry>, i64)> {
+        let conn = self.conn()?;
         let mut where_clause = String::from("WHERE 1=1");
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -838,7 +876,7 @@ impl Database {
             "SELECT COUNT(*) FROM history h JOIN archives a ON a.id = h.archive_id {}",
             where_clause
         );
-        let total: i64 = self.conn.query_row(
+        let total: i64 = conn.query_row(
             &count_sql,
             rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
             |row| row.get(0),
@@ -853,7 +891,7 @@ impl Database {
              LIMIT ? OFFSET ?",
             where_clause
         );
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(&sql)?;
 
         params.push(Box::new(limit));
         params.push(Box::new(offset));
@@ -887,14 +925,15 @@ impl Database {
         page_index: i64,
         total_pages: i64,
     ) -> Result<usize> {
-        self.conn.execute(
+        self.conn()?.execute(
             "INSERT OR REPLACE INTO history (archive_id, page_index, total_pages, updated_at) VALUES (?, ?, ?, datetime('now'))",
             (archive_id, page_index, total_pages),
         )
     }
 
     pub fn get_history_for_archive(&self, archive_id: i64) -> Result<Option<HistoryRow>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT archive_id, page_index, total_pages, updated_at FROM history WHERE archive_id = ?",
         )?;
 
@@ -914,17 +953,18 @@ impl Database {
     }
 
     pub fn delete_history(&self, archive_id: i64) -> Result<usize> {
-        self.conn
+        self.conn()?
             .execute("DELETE FROM history WHERE archive_id = ?", [archive_id])
     }
 
     pub fn clear_history(&self) -> Result<usize> {
-        self.conn.execute("DELETE FROM history", [])
+        self.conn()?.execute("DELETE FROM history", [])
     }
 
     // Settings operations
     pub fn get_settings(&self) -> Result<std::collections::HashMap<String, String>> {
-        let mut stmt = self.conn.prepare("SELECT key, value FROM settings")?;
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
         let settings = stmt
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -938,8 +978,9 @@ impl Database {
         &self,
         settings: &std::collections::HashMap<String, String>,
     ) -> Result<()> {
+        let conn = self.conn()?;
         for (key, value) in settings {
-            self.conn.execute(
+            conn.execute(
                 "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
                 (key, value),
             )?;
@@ -948,7 +989,7 @@ impl Database {
     }
 
     pub fn get_setting(&self, key: &str) -> Result<String> {
-        self.conn
+        self.conn()?
             .query_row("SELECT value FROM settings WHERE key = ?", [key], |row| {
                 row.get(0)
             })
@@ -956,23 +997,19 @@ impl Database {
 
     // Stats
     pub fn get_stats(&self) -> Result<serde_json::Value> {
+        let conn = self.conn()?;
         let total_archives: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM archives", [], |row| row.get(0))?;
-        let total_pages: i64 = self.conn.query_row(
+            conn.query_row("SELECT COUNT(*) FROM archives", [], |row| row.get(0))?;
+        let total_pages: i64 = conn.query_row(
             "SELECT COALESCE(SUM(page_count), 0) FROM archives",
             [],
             |row| row.get(0),
         )?;
-        let total_tags: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM tags", [], |row| row.get(0))?;
+        let total_tags: i64 = conn.query_row("SELECT COUNT(*) FROM tags", [], |row| row.get(0))?;
         let total_categories: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM categories", [], |row| row.get(0))?;
+            conn.query_row("SELECT COUNT(*) FROM categories", [], |row| row.get(0))?;
         let history_count: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM history", [], |row| row.get(0))?;
+            conn.query_row("SELECT COUNT(*) FROM history", [], |row| row.get(0))?;
 
         Ok(serde_json::json!({
             "total_archives": total_archives,
@@ -985,9 +1022,8 @@ impl Database {
 
     // Backup
     pub fn export_backup(&self) -> Result<serde_json::Value> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT title, path, archive_type, page_count FROM archives")?;
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT title, path, archive_type, page_count FROM archives")?;
         let archives: Vec<serde_json::Value> = stmt
             .query_map([], |row| {
                 Ok(serde_json::json!({
@@ -1000,9 +1036,7 @@ impl Database {
             .filter_map(log_and_skip)
             .collect();
 
-        let mut stmt = self
-            .conn
-            .prepare("SELECT namespace, name, color FROM tags")?;
+        let mut stmt = conn.prepare("SELECT namespace, name, color FROM tags")?;
         let tags: Vec<serde_json::Value> = stmt
             .query_map([], |row| {
                 Ok(serde_json::json!({
@@ -1014,9 +1048,7 @@ impl Database {
             .filter_map(log_and_skip)
             .collect();
 
-        let mut stmt = self
-            .conn
-            .prepare("SELECT name, color, search FROM categories")?;
+        let mut stmt = conn.prepare("SELECT name, color, search FROM categories")?;
         let categories: Vec<serde_json::Value> = stmt
             .query_map([], |row| {
                 Ok(serde_json::json!({
@@ -1041,7 +1073,8 @@ impl Database {
     }
 
     pub fn import_backup(&self, backup: &serde_json::Value) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
 
         // Import archives
         if let Some(archives) = backup["archives"].as_array() {
@@ -1107,6 +1140,21 @@ impl Database {
         tx.commit()?;
         Ok(())
     }
+
+    /// 单个标签的名称查询（供 OPDS 使用）
+    pub fn get_tag_name(&self, tag_id: i64) -> Result<Option<String>> {
+        self.conn()?
+            .query_row("SELECT name FROM tags WHERE id = ?", [tag_id], |row| {
+                row.get(0)
+            })
+            .optional()
+    }
+
+    /// 测试专用：暴露一条原始连接
+    #[cfg(test)]
+    pub fn conn_for_test(&self) -> Result<PooledConnection<SqliteConnectionManager>> {
+        self.conn()
+    }
 }
 
 #[cfg(test)]
@@ -1125,7 +1173,7 @@ mod tests {
     #[test]
     fn test_database_creation() {
         let db = setup_test_db();
-        let conn = db.get_conn();
+        let conn = db.conn_for_test().unwrap();
 
         // Verify tables exist
         let tables: Vec<String> = conn

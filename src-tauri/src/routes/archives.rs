@@ -107,40 +107,45 @@ pub async fn list_archives(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ArchiveQuery>,
 ) -> Response {
-    let db = state.db.lock().await;
-
-    // 如果指定了 group_id，返回组内所有章节
-    if let Some(group_id) = query.group_id {
-        return match db.get_group_chapters(group_id) {
-            Ok(chapters) => Json(chapters).into_response(),
-            Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        };
+    enum ListResult {
+        Group(Vec<crate::db::ArchiveRow>),
+        List(Vec<crate::db::ArchiveRow>),
     }
 
-    let page = query.page.unwrap_or(1);
-    let limit = query.limit.unwrap_or(20);
-    let offset = (page - 1) * limit;
-    let sort = query.sort.as_deref().unwrap_or("updated");
-    let order = query.order.as_deref().unwrap_or("desc");
+    let result = super::run_db(&state, move |db| {
+        // 如果指定了 group_id，返回组内所有章节
+        if let Some(group_id) = query.group_id {
+            return db.get_group_chapters(group_id).map(ListResult::Group);
+        }
 
-    match db.list_archives(
-        query.search.as_deref(),
-        query.tag.as_deref(),
-        query.category_id,
-        sort,
-        order,
-        limit,
-        offset,
-    ) {
-        Ok((archives, _total)) => Json(archives).into_response(),
+        let page = query.page.unwrap_or(1);
+        let limit = query.limit.unwrap_or(20);
+        let offset = (page - 1) * limit;
+        let sort = query.sort.as_deref().unwrap_or("updated");
+        let order = query.order.as_deref().unwrap_or("desc");
+
+        db.list_archives(
+            query.search.as_deref(),
+            query.tag.as_deref(),
+            query.category_id,
+            sort,
+            order,
+            limit,
+            offset,
+        )
+        .map(|(archives, _total)| ListResult::List(archives))
+    })
+    .await;
+
+    match result {
+        Ok(ListResult::Group(chapters)) => Json(chapters).into_response(),
+        Ok(ListResult::List(archives)) => Json(archives).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
 
 pub async fn get_archive(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
-    let db = state.db.lock().await;
-
-    match db.get_archive(id) {
+    match super::run_db(&state, move |db| db.get_archive(id)).await {
         Ok(Some(archive)) => Json(serde_json::json!({ "data": archive })).into_response(),
         Ok(None) => error_response(StatusCode::NOT_FOUND, "Archive not found"),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -149,11 +154,9 @@ pub async fn get_archive(State(state): State<Arc<AppState>>, Path(id): Path<i64>
 
 pub async fn delete_archive(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
     let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
-    let db = state.db.lock().await;
 
-    match db.delete_archive(id) {
+    match super::run_db(&state, move |db| db.delete_archive(id)).await {
         Ok(_) => {
-            drop(db);
             // 删除缩略图目录
             let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
             Json(serde_json::json!({ "success": true })).into_response()
@@ -175,12 +178,12 @@ pub async fn batch_delete_archives(
         return error_response(StatusCode::BAD_REQUEST, "ids 不能为空");
     }
 
-    let mut db = state.db.lock().await;
-    match db.batch_delete_archives(&payload.ids) {
+    let ids = payload.ids;
+    let ids_db = ids.clone();
+    match super::run_db(&state, move |db| db.batch_delete_archives(&ids_db)).await {
         Ok(affected) => {
-            drop(db);
             // 逐个清理缩略图目录
-            for id in &payload.ids {
+            for id in &ids {
                 let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
                 let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
             }
@@ -200,8 +203,8 @@ pub async fn update_archive_title(
     Path(id): Path<i64>,
     Json(payload): Json<UpdateTitleRequest>,
 ) -> Response {
-    let db = state.db.lock().await;
-    match db.update_archive_title(id, &payload.title) {
+    let title_db = payload.title.clone();
+    match super::run_db(&state, move |db| db.update_archive_title(id, &title_db)).await {
         Ok(_) => Json(serde_json::json!({ "id": id, "title": payload.title })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -220,16 +223,20 @@ pub async fn merge_archives(
         return error_response(StatusCode::BAD_REQUEST, "需要至少选择 2 个档案进行合并");
     }
 
-    let db = state.db.lock().await;
-    match db.merge_archives(&payload.archive_ids) {
-        Ok(primary_id) => {
-            let chapters = db.get_group_chapters(primary_id).unwrap_or_default();
-            Json(serde_json::json!({
-                "group_id": primary_id,
-                "chapter_count": chapters.len(),
-            }))
-            .into_response()
-        }
+    let ids = payload.archive_ids;
+    let result = super::run_db(&state, move |db| {
+        let primary_id = db.merge_archives(&ids)?;
+        let chapter_count = db.get_group_chapters(primary_id)?.len();
+        Ok((primary_id, chapter_count))
+    })
+    .await;
+
+    match result {
+        Ok((primary_id, chapter_count)) => Json(serde_json::json!({
+            "group_id": primary_id,
+            "chapter_count": chapter_count,
+        }))
+        .into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -239,13 +246,12 @@ pub async fn get_cover(
     Path(id): Path<i64>,
     headers: HeaderMap,
 ) -> Response {
-    let (archive_path, archive_type) = {
-        let db = state.db.lock().await;
-        match db.get_archive(id) {
-            Ok(Some(a)) => (a.path, a.archive_type),
-            Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
-            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        }
+    let (archive_path, archive_type) = match super::run_db(&state, move |db| db.get_archive(id))
+        .await
+    {
+        Ok(Some(a)) => (a.path, a.archive_type),
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
     let mtime = archive_mtime(&archive_path);
@@ -297,19 +303,19 @@ pub async fn get_cover(
 }
 
 pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
-    let (archive, read_page) = {
-        let db = state.db.lock().await;
-        match db.get_archive(id) {
-            Ok(Some(a)) => {
-                let read_page = db
-                    .get_history_for_archive(id)
-                    .map(|h| h.map(|h| h.page_index).unwrap_or(0))
-                    .unwrap_or(0);
-                (a, read_page)
-            }
-            Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
-            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        }
+    let (archive, read_page) = match super::run_db(&state, move |db| {
+        let archive = db.get_archive(id)?;
+        let read_page = db
+            .get_history_for_archive(id)
+            .map(|h| h.map(|h| h.page_index).unwrap_or(0))
+            .unwrap_or(0);
+        Ok((archive, read_page))
+    })
+    .await
+    {
+        Ok((Some(a), read_page)) => (a, read_page),
+        Ok((None, _)) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
     let archive_path = archive.path.clone();
@@ -373,13 +379,12 @@ pub async fn get_page(
         return error_response(StatusCode::BAD_REQUEST, "Page index must be non-negative");
     }
 
-    let (archive_path, archive_type) = {
-        let db = state.db.lock().await;
-        match db.get_archive(id) {
-            Ok(Some(a)) => (a.path, a.archive_type),
-            Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
-            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        }
+    let (archive_path, archive_type) = match super::run_db(&state, move |db| db.get_archive(id))
+        .await
+    {
+        Ok(Some(a)) => (a.path, a.archive_type),
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
     let mtime = archive_mtime(&archive_path);
@@ -456,17 +461,15 @@ pub async fn get_page_thumb(
         return error_response(StatusCode::BAD_REQUEST, "Page index must be non-negative");
     }
 
-    let (archive_path, archive_type, thumb_dir) = {
-        let db = state.db.lock().await;
-        match db.get_archive(id) {
+    let (archive_path, archive_type, thumb_dir) =
+        match super::run_db(&state, move |db| db.get_archive(id)).await {
             Ok(Some(a)) => {
                 let dir = state.data_dir.join("thumbnails").join(id.to_string());
                 (a.path, a.archive_type, dir)
             }
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
             Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        }
-    };
+        };
 
     let cache_path = thumb_dir.join(format!("{}.jpg", page_index));
 
@@ -529,10 +532,13 @@ pub async fn get_page_thumb(
     match result {
         Ok(Ok(thumb_data)) => {
             // 首次生成成功，更新数据库记录并执行淘汰
-            let db = state.db.lock().await;
-            let _ = db.set_thumbnail_path(id, &thumb_dir.to_string_lossy());
-            let evicted = db.evict_old_thumbnails().unwrap_or_default();
-            drop(db);
+            let thumb_dir_str = thumb_dir.to_string_lossy().to_string();
+            let evicted = super::run_db(&state, move |db| {
+                db.set_thumbnail_path(id, &thumb_dir_str)?;
+                db.evict_old_thumbnails()
+            })
+            .await
+            .unwrap_or_default();
 
             // 删除被淘汰漫画的缩略图目录
             for (_evicted_id, evicted_path) in evicted {
@@ -570,15 +576,17 @@ pub async fn open_file(
     let file_path = payload.file_path.clone();
 
     // Check DB first (quick operation)
-    {
-        let db = state.db.lock().await;
-        if let Ok(Some(existing)) = db.get_archive_by_path(&file_path) {
-            return Json(serde_json::json!({
-                "id": existing.id,
-                "message": "文件已存在于库中"
-            }))
-            .into_response();
-        }
+    let existing = super::run_db(&state, {
+        let file_path = file_path.clone();
+        move |db| db.get_archive_by_path(&file_path)
+    })
+    .await;
+    if let Ok(Some(existing)) = existing {
+        return Json(serde_json::json!({
+            "id": existing.id,
+            "message": "文件已存在于库中"
+        }))
+        .into_response();
     }
 
     // Detect archive type (fast string check)
@@ -591,6 +599,7 @@ pub async fn open_file(
 
     // Do blocking I/O in spawn_blocking
     let archive_type_clone = archive_type.clone();
+    let file_path_for_insert = file_path.clone();
     let result = tokio::task::spawn_blocking(move || {
         let path = std::path::Path::new(&file_path);
         if !path.exists() {
@@ -630,14 +639,17 @@ pub async fn open_file(
                 return error_response(StatusCode::BAD_REQUEST, msg);
             }
 
-            let db = state.db.lock().await;
-            match db.insert_archive(
-                &title,
-                &payload.file_path,
-                &archive_type,
-                page_count,
-                file_size,
-            ) {
+            let result = super::run_db(&state, {
+                let file_path = file_path_for_insert.clone();
+                let title = title.clone();
+                let archive_type = archive_type.clone();
+                move |db| {
+                    db.insert_archive(&title, &file_path, &archive_type, page_count, file_size)
+                }
+            })
+            .await;
+
+            match result {
                 Ok(id) => Json(serde_json::json!({
                     "id": id,
                     "title": title,
@@ -666,9 +678,7 @@ pub async fn scan(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ScanRequest>,
 ) -> Response {
-    let (root_dir, depth) = {
-        let db = state.db.lock().await;
-
+    let (root_dir, depth) = match super::run_db(&state, move |db| {
         let root_dir = if let Some(p) = payload.path {
             p
         } else {
@@ -676,7 +686,7 @@ pub async fn scan(
         };
 
         if root_dir.is_empty() {
-            return error_response(StatusCode::BAD_REQUEST, "No root directory configured");
+            return Ok(None);
         }
 
         let depth = payload.depth.unwrap_or_else(|| {
@@ -686,7 +696,13 @@ pub async fn scan(
                 .unwrap_or(1)
         });
 
-        (root_dir, depth)
+        Ok::<Option<(String, u32)>, rusqlite::Error>(Some((root_dir, depth)))
+    })
+    .await
+    {
+        Ok(Some(v)) => v,
+        Ok(None) => return error_response(StatusCode::BAD_REQUEST, "No root directory configured"),
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
     // Scan directory and count pages in blocking thread
@@ -749,25 +765,34 @@ pub async fn scan(
 
     match result {
         Ok(Ok(archive_infos)) => {
-            let db = state.db.lock().await;
-            let mut added = 0;
-            let mut errors = 0;
-
-            for (title, path, archive_type, page_count, file_size) in &archive_infos {
-                match db.insert_archive(title, path, archive_type, *page_count, *file_size) {
-                    Ok(_) => added += 1,
-                    Err(e) => {
-                        tracing::warn!("Failed to insert {}: {}", path, e);
-                        errors += 1;
+            let total = archive_infos.len();
+            let infos = archive_infos.clone();
+            let added = super::run_db(&state, move |db| {
+                let mut added = 0;
+                let mut errors = 0;
+                for (title, path, archive_type, page_count, file_size) in &infos {
+                    match db.insert_archive(title, path, archive_type, *page_count, *file_size) {
+                        Ok(_) => added += 1,
+                        Err(e) => {
+                            tracing::warn!("Failed to insert {}: {}", path, e);
+                            errors += 1;
+                        }
                     }
                 }
-            }
+                Ok::<(usize, usize), rusqlite::Error>((added, errors))
+            })
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!("Failed to insert scanned archives: {}", e);
+                (0, total)
+            });
 
+            let (added, errors) = added;
             Json(serde_json::json!({
-                "scanned": archive_infos.len(),
+                "scanned": total,
                 "added": added,
                 "errors": errors,
-                "message": format!("扫描完成：{} 个档案，{} 个新增，{} 个错误", archive_infos.len(), added, errors)
+                "message": format!("扫描完成：{} 个档案，{} 个新增，{} 个错误", total, added, errors)
             })).into_response()
         }
         Ok(Err(e)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -783,21 +808,26 @@ pub async fn pack_cbz(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<PackCbzRequest>,
 ) -> Response {
-    let db = state.db.lock().await;
-
-    // 确定输出目录：优先使用请求参数，否则从设置中读取
-    let output_dir = match payload.output_dir {
-        Some(ref dir) if !dir.is_empty() => dir.clone(),
-        _ => match db.get_setting("cbz_export_dir") {
-            Ok(dir) if !dir.is_empty() => dir,
-            _ => return error_response(StatusCode::BAD_REQUEST, "请先在设置中配置 CBZ 归档目录"),
-        },
-    };
-
     let folder_path = payload.folder_path.clone();
 
-    // 释放 DB 锁，避免在打包期间长时间持有
-    drop(db);
+    // 确定输出目录：优先使用请求参数，否则从设置中读取
+    let output_dir = match super::run_db(&state, move |db| {
+        if let Some(ref dir) = payload.output_dir {
+            if !dir.is_empty() {
+                return Ok::<Option<String>, rusqlite::Error>(Some(dir.clone()));
+            }
+        }
+        match db.get_setting("cbz_export_dir") {
+            Ok(dir) if !dir.is_empty() => Ok(Some(dir)),
+            _ => Ok(None),
+        }
+    })
+    .await
+    {
+        Ok(Some(dir)) => dir,
+        Ok(None) => return error_response(StatusCode::BAD_REQUEST, "请先在设置中配置 CBZ 归档目录"),
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
 
     // 在独立线程中执行 CPU/IO 密集型打包任务
     let result = tokio::task::spawn_blocking(move || {
@@ -822,12 +852,10 @@ pub async fn pack_cbz(
 
 /// 列出 CBZ 导出目录中的所有 .cbz 文件
 pub async fn list_cbz_files(State(state): State<Arc<AppState>>) -> Response {
-    let db = state.db.lock().await;
-    let export_dir = match db.get_setting("cbz_export_dir") {
+    let export_dir = match super::run_db(&state, move |db| db.get_setting("cbz_export_dir")).await {
         Ok(dir) if !dir.is_empty() => dir,
         _ => return Json(serde_json::json!([])).into_response(),
     };
-    drop(db);
 
     let dir = std::path::Path::new(&export_dir);
     if !dir.exists() || !dir.is_dir() {

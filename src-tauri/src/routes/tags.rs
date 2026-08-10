@@ -8,7 +8,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::error_response;
+use super::{error_response, run_db};
 
 #[derive(Deserialize)]
 pub struct TagQuery {
@@ -24,18 +24,14 @@ pub struct AssignTagRequest {
 }
 
 pub async fn list_tags(State(state): State<Arc<AppState>>) -> Response {
-    let db = state.db.lock().await;
-
-    match db.list_tags() {
+    match run_db(&state, |db| db.list_tags()).await {
         Ok(tags) => Json(tags).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
 
 pub async fn list_namespaces(State(state): State<Arc<AppState>>) -> Response {
-    let db = state.db.lock().await;
-
-    match db.list_namespaces() {
+    match run_db(&state, |db| db.list_namespaces()).await {
         Ok(namespaces) => Json(serde_json::json!({ "data": namespaces })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -45,11 +41,13 @@ pub async fn create_tag(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<TagQuery>,
 ) -> Response {
-    let db = state.db.lock().await;
     let namespace = payload.namespace.unwrap_or_default();
     let color = payload.color.unwrap_or_else(|| "#4a86e8".to_string());
+    let name = payload.name.clone();
+    let namespace_db = namespace.clone();
+    let color_db = color.clone();
 
-    match db.create_tag(&namespace, &payload.name, &color) {
+    match run_db(&state, move |db| db.create_tag(&namespace_db, &name, &color_db)).await {
         Ok(id) => Json(serde_json::json!({
             "data": {
                 "id": id,
@@ -68,11 +66,13 @@ pub async fn update_tag(
     Path(id): Path<i64>,
     Json(payload): Json<TagQuery>,
 ) -> Response {
-    let db = state.db.lock().await;
     let namespace = payload.namespace.unwrap_or_default();
     let color = payload.color.unwrap_or_else(|| "#4a86e8".to_string());
+    let name = payload.name.clone();
+    let namespace_db = namespace.clone();
+    let color_db = color.clone();
 
-    match db.update_tag(id, &namespace, &payload.name, &color) {
+    match run_db(&state, move |db| db.update_tag(id, &namespace_db, &name, &color_db)).await {
         Ok(_) => Json(serde_json::json!({
             "data": {
                 "id": id,
@@ -87,9 +87,7 @@ pub async fn update_tag(
 }
 
 pub async fn delete_tag(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
-    let db = state.db.lock().await;
-
-    match db.delete_tag(id) {
+    match run_db(&state, move |db| db.delete_tag(id)).await {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -99,9 +97,7 @@ pub async fn assign_tag(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<AssignTagRequest>,
 ) -> Response {
-    let db = state.db.lock().await;
-
-    match db.assign_tag(payload.archive_id, payload.tag_id) {
+    match run_db(&state, move |db| db.assign_tag(payload.archive_id, payload.tag_id)).await {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -111,9 +107,7 @@ pub async fn remove_tag(
     State(state): State<Arc<AppState>>,
     Path((archive_id, tag_id)): Path<(i64, i64)>,
 ) -> Response {
-    let db = state.db.lock().await;
-
-    match db.remove_tag(archive_id, tag_id) {
+    match run_db(&state, move |db| db.remove_tag(archive_id, tag_id)).await {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -133,8 +127,8 @@ pub async fn batch_assign_tag(
         return error_response(StatusCode::BAD_REQUEST, "archive_ids 不能为空");
     }
 
-    let mut db = state.db.lock().await;
-    match db.batch_assign_tag(&payload.archive_ids, payload.tag_id) {
+    match run_db(&state, move |db| db.batch_assign_tag(&payload.archive_ids, payload.tag_id)).await
+    {
         Ok(affected) => {
             Json(serde_json::json!({ "success": true, "affected": affected })).into_response()
         }
@@ -150,8 +144,8 @@ pub async fn batch_remove_tag(
         return error_response(StatusCode::BAD_REQUEST, "archive_ids 不能为空");
     }
 
-    let mut db = state.db.lock().await;
-    match db.batch_remove_tag(&payload.archive_ids, payload.tag_id) {
+    match run_db(&state, move |db| db.batch_remove_tag(&payload.archive_ids, payload.tag_id)).await
+    {
         Ok(affected) => {
             Json(serde_json::json!({ "success": true, "affected": affected })).into_response()
         }
@@ -163,9 +157,7 @@ pub async fn get_archive_tags(
     State(state): State<Arc<AppState>>,
     Path(archive_id): Path<i64>,
 ) -> Response {
-    let db = state.db.lock().await;
-
-    match db.get_archive_tags(archive_id) {
+    match run_db(&state, move |db| db.get_archive_tags(archive_id)).await {
         Ok(tags) => Json(tags).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }

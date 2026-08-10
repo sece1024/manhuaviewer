@@ -19,6 +19,23 @@ pub fn error_response(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
+/// Run a blocking closure against the DB pool off the async runtime.
+///
+/// All rusqlite calls are synchronous and must not run on the Tokio worker
+/// threads; this offloads them to a blocking thread. The connection pool
+/// (inside `Database`) handles concurrency, so handlers no longer serialize
+/// on a single global mutex.
+pub async fn run_db<T, F>(state: &Arc<AppState>, f: F) -> Result<T, rusqlite::Error>
+where
+    F: FnOnce(&crate::db::Database) -> rusqlite::Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || f(&db))
+        .await
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+}
+
 pub fn create_router(state: AppState) -> Router {
     // 生产模式下前端从 tauri://localhost 加载，需要 CORS
     let cors = CorsLayer::permissive();

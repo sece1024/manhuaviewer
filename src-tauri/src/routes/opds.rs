@@ -6,6 +6,8 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
+use super::run_db;
+
 #[derive(Deserialize)]
 pub struct OpdsQuery {
     pub page: Option<i64>,
@@ -86,13 +88,15 @@ pub async fn catalog(
     State(state): State<Arc<AppState>>,
     Query(query): Query<OpdsQuery>,
 ) -> Html<String> {
-    let db = state.db.lock().await;
-
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(20);
     let offset = (page - 1) * limit;
 
-    match db.list_archives(None, None, None, "updated", "desc", limit, offset) {
+    match run_db(&state, move |db| {
+        db.list_archives(None, None, None, "updated", "desc", limit, offset)
+    })
+    .await
+    {
         Ok((archives, _total)) => {
             let mut entries = String::new();
 
@@ -143,9 +147,8 @@ pub async fn archive_detail(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Html<String> {
-    let (archive_path, archive_type, archive_title) = {
-        let db = state.db.lock().await;
-        match db.get_archive(id) {
+    let (archive_path, archive_type, archive_title) =
+        match run_db(&state, move |db| db.get_archive(id)).await {
             Ok(Some(a)) => (a.path, a.archive_type, a.title),
             Ok(None) => {
                 return Html(opds_error_xml("Archive not found"));
@@ -154,8 +157,7 @@ pub async fn archive_detail(
                 tracing::error!("Failed to get archive {}: {}", id, e);
                 return Html(opds_error_xml("Database error"));
             }
-        }
-    };
+        };
 
     let result = tokio::task::spawn_blocking(move || {
         let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
@@ -220,9 +222,7 @@ pub async fn archive_detail(
 }
 
 pub async fn recent(State(state): State<Arc<AppState>>) -> Html<String> {
-    let db = state.db.lock().await;
-
-    match db.get_history(None, 20, 0) {
+    match run_db(&state, move |db| db.get_history(None, 20, 0)).await {
         Ok((history, _total)) => {
             let mut entries = String::new();
 
@@ -270,9 +270,7 @@ pub async fn recent(State(state): State<Arc<AppState>>) -> Html<String> {
 }
 
 pub async fn tags_list(State(state): State<Arc<AppState>>) -> Html<String> {
-    let db = state.db.lock().await;
-
-    match db.list_tags() {
+    match run_db(&state, |db| db.list_tags()).await {
         Ok(tags) => {
             let mut entries = String::new();
 
@@ -327,21 +325,18 @@ pub async fn tag_archives(
     State(state): State<Arc<AppState>>,
     Path(tag_id): Path<i64>,
 ) -> Html<String> {
-    let db = state.db.lock().await;
-
     // Get archives with this tag using a single JOIN query
-    let tag_name =
-        match db
-            .get_conn()
-            .query_row("SELECT name FROM tags WHERE id = ?", [tag_id], |row| {
-                row.get::<_, String>(0)
-            }) {
-            Ok(name) => name,
-            Err(_) => "Unknown".to_string(),
-        };
+    let result = run_db(&state, move |db| {
+        let tag_name = db
+            .get_tag_name(tag_id)?
+            .unwrap_or_else(|| "Unknown".to_string());
+        let archives = db.list_archives_by_tag(tag_id, 100, 0)?;
+        Ok((tag_name, archives))
+    })
+    .await;
 
-    match db.list_archives_by_tag(tag_id, 100, 0) {
-        Ok(archives) => {
+    match result {
+        Ok((tag_name, archives)) => {
             let mut entries = String::new();
 
             for archive in archives {
@@ -387,9 +382,7 @@ pub async fn tag_archives(
 }
 
 pub async fn categories_list(State(state): State<Arc<AppState>>) -> Html<String> {
-    let db = state.db.lock().await;
-
-    match db.list_categories() {
+    match run_db(&state, |db| db.list_categories()).await {
         Ok(categories) => {
             let mut entries = String::new();
 

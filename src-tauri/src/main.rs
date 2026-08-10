@@ -8,12 +8,11 @@ mod services;
 
 use std::sync::Arc;
 use tauri::Manager;
-use tokio::sync::Mutex;
 use tracing::info;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db: Arc<Mutex<db::Database>>,
+    pub db: Arc<db::Database>,
     pub data_dir: std::path::PathBuf,
 }
 
@@ -77,7 +76,7 @@ async fn main() {
 
     // Create app state
     let state = AppState {
-        db: Arc::new(Mutex::new(database)),
+        db: Arc::new(database),
         data_dir: data_dir.clone(),
     };
 
