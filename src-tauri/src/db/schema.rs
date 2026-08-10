@@ -89,5 +89,6 @@ CREATE INDEX IF NOT EXISTS idx_archives_file_size ON archives(file_size);
 CREATE INDEX IF NOT EXISTS idx_archives_group_id ON archives(group_id);
 CREATE INDEX IF NOT EXISTS idx_history_updated_at ON history(updated_at);
 CREATE INDEX IF NOT EXISTS idx_archive_tags_tag_id ON archive_tags(tag_id);
+CREATE INDEX IF NOT EXISTS idx_archive_categories_category_id ON archive_categories(category_id);
 CREATE INDEX IF NOT EXISTS idx_pages_archive_id ON pages(archive_id);
 "#;

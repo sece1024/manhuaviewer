@@ -193,7 +193,7 @@ pub async fn list_archives(
             limit,
             offset,
         )
-        .map(|(archives, _total)| ListResult::List(archives))
+        .map(ListResult::List)
     })
     .await;
 

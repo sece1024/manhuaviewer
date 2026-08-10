@@ -258,7 +258,7 @@ impl Database {
         order: &str,
         limit: i64,
         offset: i64,
-    ) -> Result<(Vec<ArchiveRow>, i64)> {
+    ) -> Result<Vec<ArchiveRow>> {
         let conn = self.conn()?;
         let mut where_clause = String::from("WHERE 1=1");
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -308,17 +308,6 @@ impl Database {
             }
         }
 
-        // Get total count
-        let count_sql = format!(
-            "SELECT COUNT(*) FROM archives a{} {}",
-            join_clause, where_clause
-        );
-        let total: i64 = conn.query_row(
-            &count_sql,
-            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
-            |row| row.get(0),
-        )?;
-
         // Build main query
         let order_clause = match sort {
             "name" => "a.title",
@@ -360,7 +349,7 @@ impl Database {
             .filter_map(log_and_skip)
             .collect();
 
-        Ok((archives, total))
+        Ok(archives)
     }
 
     pub fn list_archives_by_tag(
@@ -749,11 +738,20 @@ impl Database {
 
     // Category operations
     pub fn list_categories(&self) -> Result<Vec<CategoryRow>> {
+        // Single query with per-row counts instead of N separate COUNT round trips.
+        // Static categories count join rows; dynamic categories (search) count title matches.
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, color, pinned, search, created_at FROM categories ORDER BY name",
+            "SELECT c.id, c.name, c.color, c.pinned, c.search, c.created_at,
+                    CASE WHEN c.search = '' THEN
+                        (SELECT COUNT(*) FROM archive_categories ac WHERE ac.category_id = c.id)
+                    ELSE
+                        (SELECT COUNT(*) FROM archives a WHERE a.title LIKE '%' || c.search || '%')
+                    END AS archive_count
+             FROM categories c
+             ORDER BY c.name",
         )?;
-        let mut categories: Vec<CategoryRow> = stmt
+        let categories = stmt
             .query_map([], |row| {
                 Ok(CategoryRow {
                     id: row.get(0)?,
@@ -762,27 +760,11 @@ impl Database {
                     pinned: row.get::<_, i64>(3)? != 0,
                     search: row.get(4)?,
                     created_at: row.get(5)?,
-                    archive_count: 0,
+                    archive_count: row.get(6)?,
                 })
             })?
             .filter_map(log_and_skip)
             .collect();
-
-        for cat in categories.iter_mut() {
-            cat.archive_count = if cat.search.is_empty() {
-                conn.query_row(
-                    "SELECT COUNT(*) FROM archive_categories WHERE category_id = ?",
-                    [cat.id],
-                    |row| row.get(0),
-                )?
-            } else {
-                conn.query_row(
-                    "SELECT COUNT(*) FROM archives WHERE title LIKE ?",
-                    [format!("%{}%", cat.search)],
-                    |row| row.get(0),
-                )?
-            };
-        }
 
         Ok(categories)
     }
@@ -1296,10 +1278,9 @@ mod tests {
         db.insert_archive("Manga C", "/path/c", "rar", 15, 1500)
             .unwrap();
 
-        let (archives, total) = db
+        let archives = db
             .list_archives(None, None, None, "title", "asc", 10, 0)
             .unwrap();
-        assert_eq!(total, 3);
         assert_eq!(archives.len(), 3);
         assert_eq!(archives[0].title, "Manga A");
         assert_eq!(archives[1].title, "Manga B");
@@ -1317,10 +1298,9 @@ mod tests {
         db.insert_archive("Dragon Ball", "/path/db", "folder", 50, 2500)
             .unwrap();
 
-        let (archives, total) = db
+        let archives = db
             .list_archives(Some("Naruto"), None, None, "title", "asc", 10, 0)
             .unwrap();
-        assert_eq!(total, 1);
         assert_eq!(archives.len(), 1);
         assert_eq!(archives[0].title, "Naruto");
     }
@@ -1470,7 +1450,7 @@ mod tests {
         db2.import_backup(&backup).unwrap();
 
         // Verify data
-        let (archives, _) = db2
+        let archives = db2
             .list_archives(None, None, None, "title", "asc", 10, 0)
             .unwrap();
         assert_eq!(archives.len(), 1);

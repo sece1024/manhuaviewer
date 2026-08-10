@@ -97,7 +97,7 @@ pub async fn catalog(
     })
     .await
     {
-        Ok((archives, _total)) => {
+        Ok(archives) => {
             let mut entries = String::new();
 
             for archive in archives {
