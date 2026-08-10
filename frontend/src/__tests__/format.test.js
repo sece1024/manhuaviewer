@@ -1,4 +1,4 @@
-import { formatSize, formatDate } from '../utils/format';
+import { formatSize, formatDate, splitPathParts } from '../utils/format';
 
 describe('formatSize', () => {
   test('空值返回空字符串', () => {
@@ -39,5 +39,24 @@ describe('formatDate', () => {
 
   test('无效日期返回原值', () => {
     expect(formatDate('not-a-date')).toBe('not-a-date');
+  });
+});
+
+describe('splitPathParts', () => {
+  test('Windows 反斜杠路径', () => {
+    expect(splitPathParts('C:\\Manga\\Title\\Chapter1')).toEqual(['C:', 'Manga', 'Title', 'Chapter1']);
+  });
+
+  test('Unix 正斜杠路径', () => {
+    expect(splitPathParts('/Manga/Title/Chapter1')).toEqual(['Manga', 'Title', 'Chapter1']);
+  });
+
+  test('混合分隔符与尾部斜杠', () => {
+    expect(splitPathParts('Manga\\Title/Chapter1\\')).toEqual(['Manga', 'Title', 'Chapter1']);
+  });
+
+  test('空值', () => {
+    expect(splitPathParts('')).toEqual([]);
+    expect(splitPathParts(null)).toEqual([]);
   });
 });

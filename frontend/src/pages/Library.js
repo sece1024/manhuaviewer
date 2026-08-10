@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
-import { formatSize } from '../utils/format';
+import { formatSize, splitPathParts } from '../utils/format';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
@@ -826,8 +826,8 @@ export default function Library({ mode = 'library' }) {
               {(() => {
                 const a = archives.find(x => x.id === renamingId);
                 if (!a || !a.path) return null;
-                const rel = a.path;
-                const allParts = rel.split('/').filter(Boolean);
+                // Windows 路径为反斜杠，需按两种分隔符拆分
+                const allParts = splitPathParts(a.path);
                 const depth = parseInt(settings.rename_suggest_depth, 10) || 3;
                 const parts = depth > 0 ? allParts.slice(-depth) : allParts;
                 if (parts.length <= 1) return null;
@@ -864,7 +864,7 @@ export default function Library({ mode = 'library' }) {
               </p>
               <input
                 className="modal-input"
-                placeholder="例: /Users/me/manga 或 /Users/me/manga/comic.cbz"
+                placeholder={'例: D:\\Manga\\Title 或 C:\\Manga\\comic.cbz（也支持 macOS/Linux 路径）'}
                 value={openPath}
                 onChange={(e) => setOpenPath(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleOpenFile()}

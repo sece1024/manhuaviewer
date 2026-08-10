@@ -2,6 +2,16 @@
  * format.js — 通用格式化工具函数
  */
 
+/**
+ * 将文件系统路径拆分为各层名称（兼容 Windows 反斜杠与 Unix 正斜杠）。
+ * 例如 "C:\\Manga\\Title\\Chapter1" 与 "/Manga/Title/Chapter1" 都得到
+ * ["C:", "Manga", "Title", "Chapter1"]（空段被过滤）。
+ */
+export function splitPathParts(path) {
+  if (!path) return [];
+  return path.split(/[\\/]/).filter(Boolean);
+}
+
 export function formatSize(bytes) {
   if (!bytes || bytes <= 0) return '';
   if (bytes < 1024) return bytes + ' B';

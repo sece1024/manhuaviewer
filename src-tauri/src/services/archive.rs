@@ -1,6 +1,36 @@
 use anyhow::Result;
+use std::path::PathBuf;
 
 use super::is_image_file;
+
+// Windows 上 unrar/7z 通常不在 PATH 里，需探测常见安装目录。
+const WINDOWS_UNRAR_CANDIDATES: &[&str] = &[
+    r"C:\Program Files\WinRAR\UnRAR.exe",
+    r"C:\Program Files\WinRAR\Rar.exe",
+    r"C:\Program Files (x86)\WinRAR\UnRAR.exe",
+    r"C:\Program Files (x86)\WinRAR\Rar.exe",
+];
+
+const WINDOWS_7Z_CANDIDATES: &[&str] = &[
+    r"C:\Program Files\7-Zip\7z.exe",
+    r"C:\Program Files (x86)\7-Zip\7z.exe",
+];
+
+/// 解析外部工具路径：先查 PATH，再查 Windows 常见安装目录。
+fn resolve_tool(exe: &str, _windows_candidates: &[&str]) -> Option<PathBuf> {
+    if std::process::Command::new(exe).arg("--help").output().is_ok() {
+        return Some(PathBuf::from(exe));
+    }
+    #[cfg(windows)]
+    {
+        for candidate in _windows_candidates {
+            if std::path::Path::new(candidate).exists() {
+                return Some(PathBuf::from(candidate));
+            }
+        }
+    }
+    None
+}
 
 pub trait ArchiveReader {
     fn list_pages(&self) -> Result<Vec<String>>;
@@ -112,19 +142,21 @@ impl ArchiveReader for FolderArchive {
 // RAR Archive (uses system unrar command)
 pub struct RarArchive {
     path: String,
+    unrar: PathBuf,
 }
 
 impl RarArchive {
-    pub fn new(path: &str) -> Result<Self> {
+    pub fn new(path: &str, unrar: PathBuf) -> Result<Self> {
         Ok(Self {
             path: path.to_string(),
+            unrar,
         })
     }
 }
 
 impl ArchiveReader for RarArchive {
     fn list_pages(&self) -> Result<Vec<String>> {
-        let output = std::process::Command::new("unrar")
+        let output = std::process::Command::new(&self.unrar)
             .args(["lb", &self.path])
             .output()?;
 
@@ -149,7 +181,7 @@ impl ArchiveReader for RarArchive {
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>> {
         let temp_dir = tempfile::tempdir()?;
 
-        let output = std::process::Command::new("unrar")
+        let output = std::process::Command::new(&self.unrar)
             .args([
                 "x",
                 &self.path,
@@ -188,19 +220,21 @@ impl ArchiveReader for RarArchive {
 // 7Z Archive (uses system 7z command)
 pub struct SevenZArchive {
     path: String,
+    sevenz: PathBuf,
 }
 
 impl SevenZArchive {
-    pub fn new(path: &str) -> Result<Self> {
+    pub fn new(path: &str, sevenz: PathBuf) -> Result<Self> {
         Ok(Self {
             path: path.to_string(),
+            sevenz,
         })
     }
 }
 
 impl ArchiveReader for SevenZArchive {
     fn list_pages(&self) -> Result<Vec<String>> {
-        let output = std::process::Command::new("7z")
+        let output = std::process::Command::new(&self.sevenz)
             .args(["l", &self.path])
             .output()?;
 
@@ -234,7 +268,7 @@ impl ArchiveReader for SevenZArchive {
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>> {
         let temp_dir = tempfile::tempdir()?;
 
-        let output = std::process::Command::new("7z")
+        let output = std::process::Command::new(&self.sevenz)
             .args([
                 "x",
                 &self.path,
@@ -276,30 +310,24 @@ pub fn create_archive_reader(path: &str, archive_type: &str) -> Result<Box<dyn A
         "folder" => Ok(Box::new(FolderArchive::new(path)?)),
         "rar" | "cbr" => {
             // Check if unrar is available
-            if std::process::Command::new("unrar")
-                .arg("--help")
-                .output()
-                .is_ok()
-            {
-                Ok(Box::new(RarArchive::new(path)?))
-            } else {
-                anyhow::bail!(
-                    "RAR support requires unrar to be installed. Install with: brew install unrar"
-                )
+            match resolve_tool("unrar", WINDOWS_UNRAR_CANDIDATES) {
+                Some(bin) => Ok(Box::new(RarArchive::new(path, bin)?)),
+                None => anyhow::bail!(
+                    "RAR support requires the unrar tool. Install it via Homebrew \
+                     (macOS: brew install unrar), 7-Zip/WinRAR (Windows: put unrar.exe in PATH \
+                     or install WinRAR), or apt (Linux: sudo apt install unrar)"
+                ),
             }
         }
         "7z" => {
             // Check if 7z is available
-            if std::process::Command::new("7z")
-                .arg("--help")
-                .output()
-                .is_ok()
-            {
-                Ok(Box::new(SevenZArchive::new(path)?))
-            } else {
-                anyhow::bail!(
-                    "7Z support requires p7zip to be installed. Install with: brew install p7zip"
-                )
+            match resolve_tool("7z", WINDOWS_7Z_CANDIDATES) {
+                Some(bin) => Ok(Box::new(SevenZArchive::new(path, bin)?)),
+                None => anyhow::bail!(
+                    "7Z support requires the 7z tool. Install 7-Zip (Windows), \
+                     Homebrew p7zip (macOS: brew install p7zip), or apt \
+                     (Linux: sudo apt install p7zip-full), and make sure 7z is in PATH"
+                ),
             }
         }
         _ => anyhow::bail!("Unsupported archive type: {}", archive_type),
