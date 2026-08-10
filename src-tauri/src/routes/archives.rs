@@ -18,6 +18,66 @@ fn archive_mtime(path: &str) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
+fn archive_mtime_secs(path: &str) -> i64 {
+    archive_mtime(path)
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn is_compressed(archive_type: &str) -> bool {
+    matches!(archive_type, "zip" | "rar" | "cbz" | "cbr" | "7z")
+}
+
+fn to_page_rows(archive_id: i64, list: &[String]) -> Vec<crate::db::PageRow> {
+    list.iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let filename = std::path::Path::new(p)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            crate::db::PageRow {
+                id: i as i64,
+                archive_id,
+                filename,
+                filepath: p.clone(),
+                sort_order: i as i64,
+            }
+        })
+        .collect()
+}
+
+/// Resolve the page list for an archive, using the cached `pages` table when it
+/// is still valid (compressed archives whose file mtime is unchanged), falling
+/// back to a full archive scan otherwise. Folder archives always scan live.
+/// Runs on a blocking thread and needs `db` for the cache.
+fn load_page_rows(
+    db: &crate::db::Database,
+    archive_id: i64,
+    archive_path: &str,
+    archive_type: &str,
+    mtime_secs: i64,
+) -> anyhow::Result<Vec<crate::db::PageRow>> {
+    let reader = crate::services::archive::create_archive_reader(archive_path, archive_type)?;
+    if is_compressed(archive_type) {
+        let cached_mtime = db.get_page_list_mtime(archive_id).ok().flatten();
+        if cached_mtime == Some(mtime_secs) {
+            let cached = db.get_pages(archive_id).unwrap_or_default();
+            if !cached.is_empty() {
+                return Ok(cached);
+            }
+        }
+        let list = reader.list_pages()?;
+        let rows = to_page_rows(archive_id, &list);
+        let _ = db.save_pages(archive_id, &rows, mtime_secs);
+        Ok(rows)
+    } else {
+        Ok(to_page_rows(archive_id, &reader.list_pages()?))
+    }
+}
+
 fn etag_for_page(id: i64, page_index: i64, mtime: Option<SystemTime>) -> String {
     let secs = mtime
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -320,10 +380,12 @@ pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>)
 
     let archive_path = archive.path.clone();
     let archive_type = archive.archive_type.clone();
+    let archive_id = archive.id;
+    let mtime_secs = archive_mtime_secs(&archive_path);
+    let db = state.db.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
-        reader.list_pages()
+        load_page_rows(&db, archive_id, &archive_path, &archive_type, mtime_secs)
     })
     .await;
 
@@ -333,16 +395,11 @@ pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>)
                 .iter()
                 .enumerate()
                 .map(|(i, p)| {
-                    let filename = std::path::Path::new(p)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
                     serde_json::json!({
                         "id": i,
                         "archive_id": id,
-                        "filename": filename,
-                        "filepath": p,
+                        "filename": p.filename,
+                        "filepath": p.filepath,
                         "sort_order": i,
                         "url": format!("/api/archives/{}/pages/{}", id, i),
                         "thumb_url": format!("/api/archives/{}/pages/{}/thumb", id, i),
@@ -379,10 +436,12 @@ pub async fn get_page(
         return error_response(StatusCode::BAD_REQUEST, "Page index must be non-negative");
     }
 
-    let (archive_path, archive_type) = match super::run_db(&state, move |db| db.get_archive(id))
-        .await
+    let (archive_id, archive_path, archive_type) = match super::run_db(&state, move |db| {
+        db.get_archive(id)
+    })
+    .await
     {
-        Ok(Some(a)) => (a.path, a.archive_type),
+        Ok(Some(a)) => (a.id, a.path, a.archive_type),
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
@@ -409,16 +468,18 @@ pub async fn get_page(
         }
     }
 
+    let mtime_secs = archive_mtime_secs(&archive_path);
+    let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
-        let pages = reader.list_pages()?;
+        let pages = load_page_rows(&db, archive_id, &archive_path, &archive_type, mtime_secs)?;
         let idx = page_index as usize;
         if idx >= pages.len() {
             anyhow::bail!("Page index {} out of range (total: {})", idx, pages.len());
         }
-        let page_name = pages[idx].clone();
-        let data = reader.extract_page(&page_name)?;
-        let mime = mime_guess::from_path(&page_name)
+        let page_name = &pages[idx].filepath;
+        let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
+        let data = reader.extract_page(page_name)?;
+        let mime = mime_guess::from_path(page_name)
             .first_or_octet_stream()
             .to_string();
         Ok((data, mime))
@@ -514,14 +575,16 @@ pub async fn get_page_thumb(
 
     // 缓存未命中，打开压缩包生成缩略图
     let thumb_dir_clone = thumb_dir.clone();
+    let mtime_secs = archive_mtime_secs(&archive_path);
+    let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
-        let pages = reader.list_pages()?;
+        let pages = load_page_rows(&db, id, &archive_path, &archive_type, mtime_secs)?;
         let idx = page_index as usize;
         if idx >= pages.len() {
             anyhow::bail!("Page index {} out of range (total: {})", idx, pages.len());
         }
-        let page_name = &pages[idx];
+        let page_name = &pages[idx].filepath;
+        let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
         let data = reader.extract_page(page_name)?;
         let thumb_gen = crate::services::thumbnail::ThumbnailGenerator::default();
         // generate_with_cache 使用 thumb_dir 作为缓存目录

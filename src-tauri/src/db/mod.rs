@@ -62,6 +62,16 @@ pub struct HistoryRow {
     pub updated_at: String,
 }
 
+/// A cached page list entry for a compressed archive.
+#[derive(Debug, Clone)]
+pub struct PageRow {
+    pub id: i64,
+    pub archive_id: i64,
+    pub filename: String,
+    pub filepath: String,
+    pub sort_order: i64,
+}
+
 /// (history row, archive title, archive path, archive type)
 pub type HistoryEntry = (HistoryRow, String, String, String);
 
@@ -182,6 +192,60 @@ impl Database {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
         }
+    }
+
+    // Page list cache operations (compressed archives only)
+    pub fn get_page_list_mtime(&self, archive_id: i64) -> Result<Option<i64>> {
+        self.conn()?
+            .query_row(
+                "SELECT page_list_mtime FROM archives WHERE id = ?",
+                [archive_id],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    pub fn get_pages(&self, archive_id: i64) -> Result<Vec<PageRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, archive_id, filename, filepath, sort_order
+             FROM pages WHERE archive_id = ? ORDER BY sort_order",
+        )?;
+        let pages = stmt
+            .query_map([archive_id], |row| {
+                Ok(PageRow {
+                    id: row.get(0)?,
+                    archive_id: row.get(1)?,
+                    filename: row.get(2)?,
+                    filepath: row.get(3)?,
+                    sort_order: row.get(4)?,
+                })
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+        Ok(pages)
+    }
+
+    /// Replace the cached page list for an archive and record the archive file
+    /// mtime used to build it (used to detect staleness on later requests).
+    pub fn save_pages(&self, archive_id: i64, pages: &[PageRow], mtime_secs: i64) -> Result<()> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM pages WHERE archive_id = ?", [archive_id])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO pages (archive_id, filename, filepath, sort_order) VALUES (?, ?, ?, ?)",
+            )?;
+            for p in pages {
+                stmt.execute((archive_id, &p.filename, &p.filepath, p.sort_order))?;
+            }
+        }
+        tx.execute(
+            "UPDATE archives SET page_list_mtime = ? WHERE id = ?",
+            (mtime_secs, archive_id),
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]

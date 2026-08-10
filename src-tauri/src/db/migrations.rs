@@ -32,6 +32,23 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Add page_list_mtime column to archives if missing (page list cache guard)
+    let has_page_list_mtime: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('archives') WHERE name='page_list_mtime'",
+            [],
+            |row| row.get::<_, i64>(0).map(|c| c > 0),
+        )
+        .unwrap_or(false);
+
+    if !has_page_list_mtime {
+        tracing::info!("Adding page_list_mtime column to archives...");
+        conn.execute(
+            "ALTER TABLE archives ADD COLUMN page_list_mtime INTEGER DEFAULT 0",
+            [],
+        )?;
+    }
+
     // Check for legacy 'folders' table and migrate
     let has_folders: bool = conn
         .query_row(
