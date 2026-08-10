@@ -1,13 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import Library from './pages/Library';
-import Reader from './pages/Reader';
-import History from './pages/History';
-import Settings from './pages/Settings';
 import { ToastProvider } from './components/Toast';
 import { SettingsProvider } from './hooks/useSettings';
 import { TagsProvider } from './hooks/useTags';
 import ErrorBoundary from './components/ErrorBoundary';
+
+// 非首屏页面按需加载，减小首屏 bundle
+const Reader = lazy(() => import('./pages/Reader'));
+const History = lazy(() => import('./pages/History'));
+const Settings = lazy(() => import('./pages/Settings'));
+
+const PageFallback = () => (
+  <div className="empty-state">
+    <div className="empty-state-icon">⏳</div>
+    <div className="empty-state-text">加载中...</div>
+  </div>
+);
 
 function AppContent() {
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
@@ -63,13 +72,15 @@ function AppContent() {
       </aside>
 
       <main className="main-content">
-        <Routes>
-          <Route path="/" element={<ErrorBoundary><Library /></ErrorBoundary>} />
-          <Route path="/collection" element={<ErrorBoundary><Library mode="collection" /></ErrorBoundary>} />
-          <Route path="/reader/:archiveId" element={<ErrorBoundary><Reader /></ErrorBoundary>} />
-          <Route path="/history" element={<ErrorBoundary><History /></ErrorBoundary>} />
-          <Route path="/settings" element={<ErrorBoundary><Settings /></ErrorBoundary>} />
-        </Routes>
+        <Suspense fallback={<PageFallback />}>
+          <Routes>
+            <Route path="/" element={<ErrorBoundary><Library /></ErrorBoundary>} />
+            <Route path="/collection" element={<ErrorBoundary><Library mode="collection" /></ErrorBoundary>} />
+            <Route path="/reader/:archiveId" element={<ErrorBoundary><Reader /></ErrorBoundary>} />
+            <Route path="/history" element={<ErrorBoundary><History /></ErrorBoundary>} />
+            <Route path="/settings" element={<ErrorBoundary><Settings /></ErrorBoundary>} />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   );

@@ -13,6 +13,122 @@ import ConfirmDialog from '../components/ConfirmDialog';
 // 检测是否在 Tauri 环境中
 const isTauri = window.__TAURI__ !== undefined;
 
+// 网格卡片：memoized，避免多选切换时整屏重渲染。
+// 所有回调通过 props 传入（父组件 useCallback 稳定引用）。
+const ArchiveCard = React.memo(function ArchiveCard({ a, isSelected, selectMode, onOpen, onToggleSelect, onTag, onCategory, onRename, onRemove }) {
+  return (
+    <div
+      className={`archive-card ${selectMode && isSelected ? 'archive-card-selected' : ''}`}
+      onClick={(e) => {
+        if (selectMode) { onToggleSelect(e, a.id); return; }
+        onOpen(a.id);
+      }}
+      tabIndex={0}
+      role="button"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          if (selectMode) { onToggleSelect(e, a.id); return; }
+          onOpen(a.id);
+        }
+      }}
+    >
+      <div className="archive-card-cover">
+        <LazyImage src={a.cover_url} alt={a.title} />
+        {selectMode && (
+          <div className={`archive-select-check ${isSelected ? 'checked' : ''}`}>
+            {isSelected ? '✓' : ''}
+          </div>
+        )}
+        {!selectMode && (
+          <>
+            <button className="archive-tag-btn" onClick={(e) => onTag(e, a.id)} title="标签">🏷️</button>
+            <button className="archive-tag-btn" onClick={(e) => onCategory(e, a.id)} title="分类">📂</button>
+            <button className="archive-rename-btn" onClick={(e) => onRename(e, a)} title="重命名">✏️</button>
+            <button className="archive-remove-btn" onClick={(e) => onRemove(e, a.id)} title="移除">✕</button>
+          </>
+        )}
+        {a.read_page > 0 && (
+          <div className="archive-card-progress">
+            <div className="archive-card-progress-bar" style={{ width: `${(a.read_page / (a.page_count || 1)) * 100}%` }} />
+          </div>
+        )}
+      </div>
+      <div className="archive-card-info">
+        <div className="archive-card-title" title={a.title}>{a.title}</div>
+        <div className="archive-card-meta">
+          {a._isGroup ? (
+            <span>{a.chapter_count} 话</span>
+          ) : (
+            <span>{a.page_count} 页</span>
+          )}
+          {a.file_size > 0 && <span>· {formatSize(a.file_size)}</span>}
+        </div>
+        {a.tags && a.tags.length > 0 && (
+          <div className="archive-card-tags">
+            {a.tags.slice(0, 3).map(t => (
+              <span key={t.name} className="tag" style={{ background: t.color }}>
+                {t.namespace && <span className="tag-namespace">{t.namespace}:</span>}
+                {t.name}
+              </span>
+            ))}
+            {a.tags.length > 3 && <span className="tag" style={{ background: 'var(--text-tertiary)' }}>+{a.tags.length - 3}</span>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+// 列表行：memoized，同 ArchiveCard
+const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, selectMode, onOpen, onToggleSelect, onTag, onCategory, onRename, onRemove }) {
+  return (
+    <div
+      className={`archive-list-item ${selectMode && isSelected ? 'archive-list-item-selected' : ''}`}
+      onClick={(e) => {
+        if (selectMode) { onToggleSelect(e, a.id); return; }
+        onOpen(a.id);
+      }}
+    >
+      {selectMode && (
+        <div className={`archive-select-check-list ${isSelected ? 'checked' : ''}`}>
+          {isSelected ? '✓' : ''}
+        </div>
+      )}
+      <div className="archive-list-thumb">
+        <LazyImage src={a.cover_url} alt={a.title} />
+      </div>
+      <div className="archive-list-info">
+        <div className="archive-list-title">{a.title}</div>
+        <div className="archive-list-meta">
+          {a._isGroup ? `${a.chapter_count} 话` : `${a.page_count} 页`}
+          {' · '}{a.archive_type === 'folder' ? '文件夹' : '压缩包'}
+          {a.file_size > 0 && ` · ${formatSize(a.file_size)}`}
+          {a.read_page > 0 && ` · 已读 ${a.read_page}/${a.page_count || '?'}`}
+        </div>
+        {a.tags && a.tags.length > 0 && (
+          <div className="archive-list-tags">
+            {a.tags.map(t => (
+              <span key={t.name} className="tag" style={{ background: t.color }}>
+                {t.namespace && <span className="tag-namespace">{t.namespace}:</span>}
+                {t.name}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      {!selectMode && (
+        <>
+          <button className="archive-tag-btn-list" onClick={(e) => onTag(e, a.id)} title="标签">🏷️</button>
+          <button className="archive-tag-btn-list" onClick={(e) => onCategory(e, a.id)} title="分类">📂</button>
+          <button className="archive-rename-btn-list" onClick={(e) => onRename(e, a)} title="重命名">✏️</button>
+          <button className="archive-remove-btn-list" onClick={(e) => onRemove(e, a.id)} title="移除">✕</button>
+        </>
+      )}
+    </div>
+  );
+});
+
 export default function Library({ mode = 'library' }) {
   const { settings, updateSetting } = useSettings();
   const { tags, reload: reloadTags } = useTags();
@@ -214,11 +330,11 @@ export default function Library({ mode = 'library' }) {
     }
   };
 
-  const handleRemoveArchive = (e, id) => {
+  const handleRemoveArchive = useCallback((e, id) => {
     e.stopPropagation();
     setConfirmTarget(id);
     setConfirmOpen(true);
-  };
+  }, []);
 
   const handleConfirmRemove = async () => {
     setConfirmOpen(false);
@@ -235,10 +351,10 @@ export default function Library({ mode = 'library' }) {
 
   // TagPicker 状态
   const [tagPickerArchiveId, setTagPickerArchiveId] = useState(null);
-  const handleOpenTagPicker = (e, id) => {
+  const handleOpenTagPicker = useCallback((e, id) => {
     e.stopPropagation();
     setTagPickerArchiveId(id);
-  };
+  }, []);
   const handleCloseTagPicker = (changed) => {
     setTagPickerArchiveId(null);
     if (changed) {
@@ -249,10 +365,10 @@ export default function Library({ mode = 'library' }) {
 
   // CategoryPicker 状态
   const [categoryPickerArchiveId, setCategoryPickerArchiveId] = useState(null);
-  const handleOpenCategoryPicker = (e, id) => {
+  const handleOpenCategoryPicker = useCallback((e, id) => {
     e.stopPropagation();
     setCategoryPickerArchiveId(id);
-  };
+  }, []);
   const handleCloseCategoryPicker = (changed) => {
     setCategoryPickerArchiveId(null);
     if (changed) {
@@ -262,11 +378,11 @@ export default function Library({ mode = 'library' }) {
   };
 
   // 重命名
-  const handleOpenRename = (e, a) => {
+  const handleOpenRename = useCallback((e, a) => {
     e.stopPropagation();
     setRenamingId(a.id);
     setRenameValue(a.title);
-  };
+  }, []);
   const handleConfirmRename = async () => {
     if (!renameValue.trim() || !renamingId) return;
     try {
@@ -280,7 +396,7 @@ export default function Library({ mode = 'library' }) {
   };
 
   // 多选
-  const handleToggleSelect = (e, id) => {
+  const handleToggleSelect = useCallback((e, id) => {
     e.stopPropagation();
     setSelectedIds(prev => {
       const next = new Set(prev);
@@ -288,7 +404,10 @@ export default function Library({ mode = 'library' }) {
       else next.add(id);
       return next;
     });
-  };
+  }, []);
+
+  // 打开阅读器（稳定引用，供 memoized 卡片使用）
+  const openArchive = useCallback((id) => navigate(`/reader/${id}`), [navigate]);
   const handleExitSelectMode = () => {
     setSelectMode(false);
     setSelectedIds(new Set());
@@ -604,116 +723,35 @@ export default function Library({ mode = 'library' }) {
         ) : viewMode === 'grid' ? (
           <div className="archive-grid">
             {displayArchives.map(a => (
-              <div
+              <ArchiveCard
                 key={a.id}
-                className={`archive-card ${selectMode && selectedIds.has(a.id) ? 'archive-card-selected' : ''}`}
-                onClick={(e) => {
-                  if (selectMode) { handleToggleSelect(e, a.id); return; }
-                  navigate(`/reader/${a.id}`);
-                }}
-                tabIndex={0}
-                role="button"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    if (selectMode) { handleToggleSelect(e, a.id); return; }
-                    navigate(`/reader/${a.id}`);
-                  }
-                }}
-              >
-                <div className="archive-card-cover">
-                  <LazyImage src={a.cover_url} alt={a.title} />
-                  {selectMode && (
-                    <div className={`archive-select-check ${selectedIds.has(a.id) ? 'checked' : ''}`}>
-                      {selectedIds.has(a.id) ? '✓' : ''}
-                    </div>
-                  )}
-                  {!selectMode && (
-                    <>
-                      <button className="archive-tag-btn" onClick={(e) => handleOpenTagPicker(e, a.id)} title="标签">🏷️</button>
-                      <button className="archive-tag-btn" onClick={(e) => handleOpenCategoryPicker(e, a.id)} title="分类">📂</button>
-                      <button className="archive-rename-btn" onClick={(e) => handleOpenRename(e, a)} title="重命名">✏️</button>
-                      <button className="archive-remove-btn" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
-                    </>
-                  )}
-                  {a.read_page > 0 && (
-                    <div className="archive-card-progress">
-                      <div className="archive-card-progress-bar" style={{ width: `${(a.read_page / (a.page_count || 1)) * 100}%` }} />
-                    </div>
-                  )}
-                </div>
-                <div className="archive-card-info">
-                  <div className="archive-card-title" title={a.title}>{a.title}</div>
-                  <div className="archive-card-meta">
-                    {a._isGroup ? (
-                      <span>{a.chapter_count} 话</span>
-                    ) : (
-                      <span>{a.page_count} 页</span>
-                    )}
-                    {a.file_size > 0 && <span>· {formatSize(a.file_size)}</span>}
-                  </div>
-                  {a.tags && a.tags.length > 0 && (
-                    <div className="archive-card-tags">
-                      {a.tags.slice(0, 3).map(t => (
-                        <span key={t.name} className="tag" style={{ background: t.color }}>
-                          {t.namespace && <span className="tag-namespace">{t.namespace}:</span>}
-                          {t.name}
-                        </span>
-                      ))}
-                      {a.tags.length > 3 && <span className="tag" style={{ background: 'var(--text-tertiary)' }}>+{a.tags.length - 3}</span>}
-                    </div>
-                  )}
-                </div>
-              </div>
+                a={a}
+                isSelected={selectedIds.has(a.id)}
+                selectMode={selectMode}
+                onOpen={openArchive}
+                onToggleSelect={handleToggleSelect}
+                onTag={handleOpenTagPicker}
+                onCategory={handleOpenCategoryPicker}
+                onRename={handleOpenRename}
+                onRemove={handleRemoveArchive}
+              />
             ))}
           </div>
         ) : (
           <div className="archive-list">
             {displayArchives.map(a => (
-              <div
+              <ArchiveListItem
                 key={a.id}
-                className={`archive-list-item ${selectMode && selectedIds.has(a.id) ? 'archive-list-item-selected' : ''}`}
-                onClick={(e) => {
-                  if (selectMode) { handleToggleSelect(e, a.id); return; }
-                  navigate(`/reader/${a.id}`);
-                }}
-              >
-                {selectMode && (
-                  <div className={`archive-select-check-list ${selectedIds.has(a.id) ? 'checked' : ''}`}>
-                    {selectedIds.has(a.id) ? '✓' : ''}
-                  </div>
-                )}
-                <div className="archive-list-thumb">
-                  <LazyImage src={a.cover_url} alt={a.title} />
-                </div>
-                <div className="archive-list-info">
-                  <div className="archive-list-title">{a.title}</div>
-                  <div className="archive-list-meta">
-                    {a._isGroup ? `${a.chapter_count} 话` : `${a.page_count} 页`}
-                    {' · '}{a.archive_type === 'folder' ? '文件夹' : '压缩包'}
-                    {a.file_size > 0 && ` · ${formatSize(a.file_size)}`}
-                    {a.read_page > 0 && ` · 已读 ${a.read_page}/${a.page_count || '?'}`}
-                  </div>
-                  {a.tags && a.tags.length > 0 && (
-                    <div className="archive-list-tags">
-                      {a.tags.map(t => (
-                        <span key={t.name} className="tag" style={{ background: t.color }}>
-                          {t.namespace && <span className="tag-namespace">{t.namespace}:</span>}
-                          {t.name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {!selectMode && (
-                  <>
-                    <button className="archive-tag-btn-list" onClick={(e) => handleOpenTagPicker(e, a.id)} title="标签">🏷️</button>
-                    <button className="archive-tag-btn-list" onClick={(e) => handleOpenCategoryPicker(e, a.id)} title="分类">📂</button>
-                    <button className="archive-rename-btn-list" onClick={(e) => handleOpenRename(e, a)} title="重命名">✏️</button>
-                    <button className="archive-remove-btn-list" onClick={(e) => handleRemoveArchive(e, a.id)} title="移除">✕</button>
-                  </>
-                )}
-              </div>
+                a={a}
+                isSelected={selectedIds.has(a.id)}
+                selectMode={selectMode}
+                onOpen={openArchive}
+                onToggleSelect={handleToggleSelect}
+                onTag={handleOpenTagPicker}
+                onCategory={handleOpenCategoryPicker}
+                onRename={handleOpenRename}
+                onRemove={handleRemoveArchive}
+              />
             ))}
           </div>
         )}

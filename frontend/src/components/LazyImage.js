@@ -26,7 +26,7 @@ function getSharedObserver() {
  * LazyImage — 使用共享 IntersectionObserver 的懒加载图片组件
  * 仅当图片进入视口时才开始加载，配合骨架屏占位
  */
-export default function LazyImage({ src, alt, className, style, onClick }) {
+const LazyImage = React.memo(function LazyImage({ src, alt, className, style, onClick }) {
   const [loaded, setLoaded] = useState(false);
   const [inView, setInView] = useState(false);
   const [error, setError] = useState(false);
@@ -95,4 +95,6 @@ export default function LazyImage({ src, alt, className, style, onClick }) {
       )}
     </div>
   );
-}
+});
+
+export default LazyImage;
