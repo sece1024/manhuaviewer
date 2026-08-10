@@ -6,6 +6,36 @@ import useSettings from '../hooks/useSettings';
 import useReaderKeyboard from '../hooks/useReaderKeyboard';
 import TagPicker from '../components/TagPicker';
 
+// 长图模式页面列表：memoized，仅当 pages/visibleRange 变化时重渲染，
+// 配合稳定的 sentinel ref 避免每次滚动触发全量 ref 重挂载。
+const LongImageList = React.memo(function LongImageList({ pages, visibleRange, sentinelRef, imgStyle }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', touchAction: 'pan-y', width: '100%' }}>
+      {pages.map((p, i) => {
+        const inRange = i >= visibleRange.start && i < visibleRange.end;
+        return (
+          <div
+            key={p.id}
+            ref={sentinelRef}
+            data-idx={i}
+            style={{ width: '100%', minHeight: inRange ? undefined : 250 }}
+          >
+            {inRange ? (
+              <img
+                src={p.url}
+                alt={p.filename}
+                loading="lazy"
+                style={imgStyle}
+                onError={(e) => { e.target.style.display = 'none'; }}
+              />
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
 export default function Reader() {
   const { archiveId } = useParams();
   const navigate = useNavigate();
@@ -48,6 +78,53 @@ export default function Reader() {
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 20 });
   const sentinelRefs = useRef({});
   const activeThumbRef = useRef(null);
+
+  // 稳定的 sentinel ref 回调：从 data-idx 读索引，避免每次渲染产生新函数
+  // 导致 React 对所有已挂载元素反复 detach/attach ref。
+  const setSentinelRef = useCallback((el) => {
+    if (el) {
+      const idx = Number(el.dataset.idx);
+      sentinelRefs.current[idx] = el;
+    }
+  }, []);
+
+  // url -> index 映射，用于预加载清理，避免 O(pages × 30) 的 findIndex 扫描
+  const pageIndexByUrl = useMemo(() => {
+    const map = {};
+    for (let i = 0; i < pages.length; i++) map[pages[i].url] = i;
+    return map;
+  }, [pages]);
+
+  // 服务端设置异步到达时同步阅读器偏好（仅当用户尚未操作时）
+  useEffect(() => {
+    if (settings.reader_fit) setFitMode(settings.reader_fit);
+  }, [settings.reader_fit]);
+  useEffect(() => {
+    if (settings.page_direction) setPageDirection(settings.page_direction);
+  }, [settings.page_direction]);
+
+  // 缩略图面板：分批渲染，滚动到末尾时追加，避免一次挂载上千 <img>
+  const [thumbCount, setThumbCount] = useState(0);
+  const thumbLoadMoreRef = useRef(null);
+  const THUMB_BATCH = 100;
+  useEffect(() => {
+    if (showThumbnails) setThumbCount(Math.min(THUMB_BATCH, pages.length));
+  }, [showThumbnails, pages.length]);
+  useEffect(() => {
+    if (!showThumbnails || thumbCount >= pages.length) return;
+    const el = thumbLoadMoreRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setThumbCount(c => Math.min(pages.length, c + THUMB_BATCH));
+        }
+      },
+      { rootMargin: '200px' }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [showThumbnails, thumbCount, pages.length]);
 
   // 显示 overlay 信息
   const showOverlay = useCallback((text) => {
@@ -174,12 +251,12 @@ export default function Reader() {
 
     // 清理远离当前页的缓存（±10 页范围外）
     for (const url of [...cache.order]) {
-      const idx = pages.findIndex(p => p.url === url);
-      if (idx !== -1 && (idx < currentIndex - 10 || idx > currentIndex + 10)) {
+      const idx = pageIndexByUrl[url];
+      if (idx !== undefined && (idx < currentIndex - 10 || idx > currentIndex + 10)) {
         remove(url);
       }
     }
-  }, [currentIndex, pages]);
+  }, [currentIndex, pages, pageIndexByUrl]);
 
   // 监听容器宽度，宽度不足时禁用双页模式
   useEffect(() => {
@@ -593,26 +670,7 @@ export default function Reader() {
         onTouchEnd={handleTouchEnd}
       >
         {longImage ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', touchAction: 'pan-y', width: '100%' }}>
-            {pages.map((p, i) => (
-              <div
-                key={p.id}
-                ref={el => { sentinelRefs.current[i] = el; }}
-                data-idx={i}
-                style={{ width: '100%', minHeight: i >= visibleRange.start && i < visibleRange.end ? undefined : 250 }}
-              >
-                {i >= visibleRange.start && i < visibleRange.end ? (
-                  <img
-                    src={p.url}
-                    alt={p.filename}
-                    loading="lazy"
-                    style={imgStyle}
-                    onError={(e) => { e.target.style.display = 'none'; }}
-                  />
-                ) : null}
-              </div>
-            ))}
-          </div>
+          <LongImageList pages={pages} visibleRange={visibleRange} sentinelRef={setSentinelRef} imgStyle={imgStyle} />
         ) : doublePage && doubleLeft && doubleRight ? (
           <div style={{ display: 'flex', gap: 4, height: '100%', alignItems: 'center' }}>
             {[doubleLeft, doubleRight].map((p) => (
@@ -671,7 +729,7 @@ export default function Reader() {
               <button className="btn btn-secondary btn-sm" onClick={() => setShowThumbnails(false)} aria-label="关闭缩略图面板">关闭</button>
             </div>
             <div className="thumbnail-grid">
-              {pages.map((p, i) => (
+              {pages.slice(0, thumbCount).map((p, i) => (
                 <div
                   key={p.id}
                   ref={i === currentIndex ? activeThumbRef : null}
@@ -682,6 +740,7 @@ export default function Reader() {
                   <div className="page-num">{i + 1}</div>
                 </div>
               ))}
+              {thumbCount < pages.length && <div ref={thumbLoadMoreRef} style={{ height: 1 }} />}
             </div>
           </div>
         </div>
