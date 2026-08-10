@@ -9,6 +9,7 @@ import LazyImage from '../components/LazyImage';
 import TagPicker from '../components/TagPicker';
 import CategoryPicker from '../components/CategoryPicker';
 import ConfirmDialog from '../components/ConfirmDialog';
+import Modal from '../components/Modal';
 
 // 检测是否在 Tauri 环境中
 const isTauri = window.__TAURI__ !== undefined;
@@ -355,12 +356,16 @@ export default function Library({ mode = 'library' }) {
     e.stopPropagation();
     setTagPickerArchiveId(id);
   }, []);
-  const handleCloseTagPicker = (changed) => {
-    setTagPickerArchiveId(null);
+  // 统一的 picker 关闭逻辑：关闭弹层，若有变更则刷新列表 + 对应数据
+  const reloadAfterPick = (changed, refetch) => {
     if (changed) {
       loadArchives({ search, tag: selectedTag });
-      reloadTags();
+      refetch();
     }
+  };
+  const handleCloseTagPicker = (changed) => {
+    setTagPickerArchiveId(null);
+    reloadAfterPick(changed, reloadTags);
   };
 
   // CategoryPicker 状态
@@ -371,10 +376,7 @@ export default function Library({ mode = 'library' }) {
   }, []);
   const handleCloseCategoryPicker = (changed) => {
     setCategoryPickerArchiveId(null);
-    if (changed) {
-      loadArchives({ search, tag: selectedTag });
-      reloadCategories();
-    }
+    reloadAfterPick(changed, reloadCategories);
   };
 
   // 重命名
@@ -430,17 +432,11 @@ export default function Library({ mode = 'library' }) {
   const [batchCategoryPickerOpen, setBatchCategoryPickerOpen] = useState(false);
   const handleCloseBatchTagPicker = (changed) => {
     setBatchTagPickerOpen(false);
-    if (changed) {
-      loadArchives({ search, tag: selectedTag });
-      reloadTags();
-    }
+    reloadAfterPick(changed, reloadTags);
   };
   const handleCloseBatchCategoryPicker = (changed) => {
     setBatchCategoryPickerOpen(false);
-    if (changed) {
-      loadArchives({ search, tag: selectedTag });
-      reloadCategories();
-    }
+    reloadAfterPick(changed, reloadCategories);
   };
 
   // 批量删除
@@ -813,10 +809,9 @@ export default function Library({ mode = 'library' }) {
 
       {/* 重命名弹窗 */}
       {renamingId && (
-        <div className="modal-overlay" onClick={() => setRenamingId(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-title">重命名漫画</div>
-            <div className="modal-body">
+        <Modal onClose={() => setRenamingId(null)} ariaLabel="重命名漫画">
+          <div className="modal-title">重命名漫画</div>
+          <div className="modal-body">
               <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>
                 输入新名称，或点击下方路径中的某一层快速采用
               </p>
@@ -856,16 +851,14 @@ export default function Library({ mode = 'library' }) {
               <button className="btn btn-secondary" onClick={() => setRenamingId(null)}>取消</button>
               <button className="btn" onClick={handleConfirmRename} disabled={!renameValue.trim()}>确认</button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* 打开文件弹窗 */}
       {showOpenModal && (
-        <div className="modal-overlay" onClick={() => setShowOpenModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-title">打开漫画文件</div>
-            <div className="modal-body">
+        <Modal onClose={() => setShowOpenModal(false)} ariaLabel="打开漫画文件">
+          <div className="modal-title">打开漫画文件</div>
+          <div className="modal-body">
               <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>
                 输入文件或文件夹路径，支持图片文件夹和压缩包 (ZIP/CBZ/RAR/CBR/7Z)
               </p>
@@ -885,8 +878,7 @@ export default function Library({ mode = 'library' }) {
                 {opening ? '打开中...' : '打开'}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* CBZ 打包全局遮罩 */}

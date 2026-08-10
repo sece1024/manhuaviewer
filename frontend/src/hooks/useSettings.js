@@ -27,7 +27,6 @@ export function SettingsProvider({ children }) {
     }
     return initial;
   });
-  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     api.getSettings().then(data => {
@@ -36,8 +35,7 @@ export function SettingsProvider({ children }) {
       for (const [serverKey, lsKey] of Object.entries(LS_FALLBACKS)) {
         if (data[serverKey]) localStorage.setItem(lsKey, data[serverKey]);
       }
-      setLoaded(true);
-    }).catch(() => setLoaded(true));
+    }).catch(() => {});
   }, []);
 
   const updateSetting = useCallback(async (key, value) => {
@@ -53,12 +51,8 @@ export function SettingsProvider({ children }) {
     }
   }, []);
 
-  const getSetting = useCallback((key, fallback = '') => {
-    return settings[key] || getFallback(key) || fallback;
-  }, [settings]);
-
   return (
-    <SettingsContext.Provider value={{ settings, loaded, updateSetting, getSetting }}>
+    <SettingsContext.Provider value={{ settings, updateSetting }}>
       {children}
     </SettingsContext.Provider>
   );

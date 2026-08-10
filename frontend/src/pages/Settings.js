@@ -25,18 +25,19 @@ export default function Settings() {
   // 检测 Tauri 环境
   const isTauri = window.__TAURI__ !== undefined;
 
-  const loadCbzFiles = useCallback(() => {
-    if (settings.cbz_export_dir) {
-      api.listCbz().then(setCbzFiles).catch(() => setCbzFiles([]));
-    }
-  }, [settings.cbz_export_dir]);
-
   useEffect(() => {
     api.getStats().then(setStats).catch(() => {});
     reloadTags();
     api.getCategories().then(setCategories).catch(() => {});
-    loadCbzFiles();
-  }, [reloadTags, loadCbzFiles]);
+  }, [reloadTags]);
+
+  // 独立 effect：只有导出目录变化时才重新拉取 CBZ 文件列表，
+  // 避免保存导出目录时连带刷新 stats/tags/categories
+  useEffect(() => {
+    if (settings.cbz_export_dir) {
+      api.listCbz().then(setCbzFiles).catch(() => setCbzFiles([]));
+    }
+  }, [settings.cbz_export_dir]);
 
   useEffect(() => {
     setCbzDirInput(settings.cbz_export_dir || '');

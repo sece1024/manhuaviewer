@@ -5,6 +5,7 @@ import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useReaderKeyboard from '../hooks/useReaderKeyboard';
 import TagPicker from '../components/TagPicker';
+import Modal from '../components/Modal';
 
 // 长图模式页面列表：memoized，仅当 pages/visibleRange 变化时重渲染，
 // 配合稳定的 sentinel ref 避免每次滚动触发全量 ref 重挂载。
@@ -748,28 +749,21 @@ export default function Reader() {
 
       {/* 跳转对话框 */}
       {showJump && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
-          onClick={() => setShowJump(false)} role="dialog" aria-modal="true" aria-label="跳转到页">
-          <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', padding: 24, minWidth: 280 }}
-            onClick={e => e.stopPropagation()}>
-            <h3 style={{ marginBottom: 12 }}>跳转到页 (1-{pages.length})</h3>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input type="number" min={1} max={pages.length} value={jumpPage}
-                onChange={e => setJumpPage(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleJump()}
-                placeholder="页码" autoFocus style={{ flex: 1 }} />
-              <button className="btn" onClick={handleJump}>跳转</button>
-            </div>
+        <Modal onClose={() => setShowJump(false)} ariaLabel="跳转到页" innerStyle={{ minWidth: 280 }}>
+          <h3 style={{ marginBottom: 12 }}>跳转到页 (1-{pages.length})</h3>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input type="number" min={1} max={pages.length} value={jumpPage}
+              onChange={e => setJumpPage(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleJump()}
+              placeholder="页码" autoFocus style={{ flex: 1 }} />
+            <button className="btn" onClick={handleJump}>跳转</button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* 快捷键帮助面板 */}
       {showHelp && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
-          onClick={() => setShowHelp(false)} role="dialog" aria-modal="true" aria-label="快捷键帮助">
-          <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', padding: 24, maxWidth: 480, maxHeight: '80vh', overflow: 'auto' }}
-            onClick={e => e.stopPropagation()}>
+        <Modal onClose={() => setShowHelp(false)} ariaLabel="快捷键帮助" innerStyle={{ maxHeight: '80vh', overflow: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <h3>⌨️ 快捷键</h3>
               <button className="btn btn-secondary btn-sm" onClick={() => setShowHelp(false)} aria-label="关闭帮助面板">关闭</button>
@@ -804,8 +798,7 @@ export default function Reader() {
                 ))}
               </tbody>
             </table>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* 标签选择弹窗 */}
