@@ -16,15 +16,17 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY = 500; // 500ms base delay
 
 // --- GET 请求内存缓存 ---
+// 缓存以 request() 收到的相对路径为 key（如 '/archives?limit=50&page=1'），
+// 失效时必须用同样的相对路径前缀（如 '/archives'）去 _invalidate。
 const _cache = new Map();       // key -> { data, ts }
 const _inflight = new Map();    // key -> Promise (去重同 URL 的并发请求)
 const DEFAULT_TTL = 30_000;     // 默认 30s
+const MAX_CACHE_ENTRIES = 200;  // 防止搜索/翻页等变化 URL 无限累积
 
-// 特定端点的 TTL 配置
+// 特定端点的 TTL 配置（key 与缓存 key 一致：相对路径）
 const _ttlConfig = {
-  '/api/settings': 60_000,
-  '/api/config': 60_000,
-  '/api/tags': 60_000,
+  '/settings': 60_000,
+  '/tags': 60_000,
 };
 
 function _getTtl(url) {
@@ -53,6 +55,13 @@ function _getCached(url) {
 
 function _setCache(url, data) {
   _cache.set(url, { data, ts: Date.now() });
+  // 超出上限时逐出最旧条目（Map 保持插入顺序）
+  if (_cache.size > MAX_CACHE_ENTRIES) {
+    for (const oldest of _cache.keys()) {
+      _cache.delete(oldest);
+      if (_cache.size <= MAX_CACHE_ENTRIES) break;
+    }
+  }
 }
 
 function _invalidate(pattern) {
@@ -124,7 +133,7 @@ async function _doFetch(url, options, maxAttempts) {
 const api = {
   // Direct open
   openFile: (filePath) =>
-    request('/open', { method: 'POST', body: JSON.stringify({ filePath }) }).then(r => { _invalidate('/api/archives'); return r; }),
+    request('/open', { method: 'POST', body: JSON.stringify({ filePath }) }).then(r => { _invalidate('/archives'); return r; }),
 
   // CBZ export
   listCbz: () => request('/cbz/list'),
@@ -141,16 +150,16 @@ const api = {
     pages: data.pages.map(p => ({ ...p, url: fixUrl(p.url), thumb_url: fixUrl(p.thumb_url) })),
   })),
   deleteArchive: (id) =>
-    request(`/archives/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/api/archives'); _invalidate('/api/history'); return r; }),
+    request(`/archives/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/archives'); _invalidate('/history'); return r; }),
   batchDeleteArchives: (ids) =>
     request('/archives/batch-delete', { method: 'POST', body: JSON.stringify({ ids }) })
-      .then(r => { _invalidate('/api/archives'); _invalidate('/api/history'); return r; }),
+      .then(r => { _invalidate('/archives'); _invalidate('/history'); return r; }),
   updateTitle: (id, title) =>
     request(`/archives/${id}/title`, { method: 'PUT', body: JSON.stringify({ title }) })
-      .then(r => { _invalidate('/api/archives'); return r; }),
+      .then(r => { _invalidate('/archives'); return r; }),
   mergeArchives: (archiveIds) =>
     request('/merge', { method: 'POST', body: JSON.stringify({ archive_ids: archiveIds }) })
-      .then(r => { _invalidate('/api/archives'); return r; }),
+      .then(r => { _invalidate('/archives'); return r; }),
   getGroupChapters: (groupId) =>
     request(`/archives?group_id=${groupId}`),
 
@@ -164,11 +173,11 @@ const api = {
   },
   saveHistory: (archive_id, page_index, total_pages) =>
     request('/history', { method: 'POST', body: JSON.stringify({ archive_id, page_index, total_pages }) })
-      .then(r => { _invalidate('/api/history'); return r; }),
+      .then(r => { _invalidate('/history'); return r; }),
   deleteHistory: (archiveId) =>
-    request(`/history/${archiveId}`, { method: 'DELETE' }).then(r => { _invalidate('/api/history'); return r; }),
+    request(`/history/${archiveId}`, { method: 'DELETE' }).then(r => { _invalidate('/history'); return r; }),
   clearHistory: () =>
-    request('/history', { method: 'DELETE' }).then(r => { _invalidate('/api/history'); return r; }),
+    request('/history', { method: 'DELETE' }).then(r => { _invalidate('/history'); return r; }),
 
   // Tags
   getTags: (params = {}) => {
@@ -177,60 +186,60 @@ const api = {
   },
   getArchiveTags: (archiveId) => request(`/archives/${archiveId}/tags`),
   createTag: (data) =>
-    request('/tags', { method: 'POST', body: JSON.stringify(data) }).then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); return r; }),
+    request('/tags', { method: 'POST', body: JSON.stringify(data) }).then(r => { _invalidate('/tags'); _invalidate('/archives'); return r; }),
   updateTag: (id, data) =>
-    request(`/tags/${id}`, { method: 'PUT', body: JSON.stringify(data) }).then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); return r; }),
+    request(`/tags/${id}`, { method: 'PUT', body: JSON.stringify(data) }).then(r => { _invalidate('/tags'); _invalidate('/archives'); return r; }),
   deleteTag: (id) =>
-    request(`/tags/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); return r; }),
+    request(`/tags/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/tags'); _invalidate('/archives'); return r; }),
   assignTag: (archive_id, tag_id) =>
-    request('/tags/assign', { method: 'POST', body: JSON.stringify({ archive_id, tag_id }) }).then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); _invalidate(`/api/archives/${archive_id}/tags`); return r; }),
+    request('/tags/assign', { method: 'POST', body: JSON.stringify({ archive_id, tag_id }) }).then(r => { _invalidate('/tags'); _invalidate('/archives'); _invalidate(`/archives/${archive_id}/tags`); return r; }),
   removeTag: (archiveId, tagId) =>
-    request(`/tags/${archiveId}/${tagId}`, { method: 'DELETE' }).then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); _invalidate(`/api/archives/${archiveId}/tags`); return r; }),
+    request(`/tags/${archiveId}/${tagId}`, { method: 'DELETE' }).then(r => { _invalidate('/tags'); _invalidate('/archives'); _invalidate(`/archives/${archiveId}/tags`); return r; }),
   batchAssignTag: (archiveIds, tagId) =>
     request('/tags/batch-assign', { method: 'POST', body: JSON.stringify({ archive_ids: archiveIds, tag_id: tagId }) })
-      .then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); return r; }),
+      .then(r => { _invalidate('/tags'); _invalidate('/archives'); return r; }),
   batchRemoveTag: (archiveIds, tagId) =>
     request('/tags/batch-remove', { method: 'POST', body: JSON.stringify({ archive_ids: archiveIds, tag_id: tagId }) })
-      .then(r => { _invalidate('/api/tags'); _invalidate('/api/archives'); return r; }),
+      .then(r => { _invalidate('/tags'); _invalidate('/archives'); return r; }),
 
   // Categories
   getCategories: () => request('/categories'),
   getArchiveCategories: (archiveId) => request(`/archives/${archiveId}/categories`),
   createCategory: (data) =>
-    request('/categories', { method: 'POST', body: JSON.stringify(data) }).then(r => { _invalidate('/api/categories'); return r; }),
+    request('/categories', { method: 'POST', body: JSON.stringify(data) }).then(r => { _invalidate('/categories'); return r; }),
   updateCategory: (id, data) =>
-    request(`/categories/${id}`, { method: 'PUT', body: JSON.stringify(data) }).then(r => { _invalidate('/api/categories'); return r; }),
+    request(`/categories/${id}`, { method: 'PUT', body: JSON.stringify(data) }).then(r => { _invalidate('/categories'); return r; }),
   deleteCategory: (id) =>
-    request(`/categories/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/api/categories'); return r; }),
+    request(`/categories/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/categories'); return r; }),
   assignCategory: (archive_id, category_id) =>
-    request('/categories/assign', { method: 'POST', body: JSON.stringify({ archive_id, category_id }) }).then(r => { _invalidate('/api/categories'); _invalidate('/api/archives'); return r; }),
+    request('/categories/assign', { method: 'POST', body: JSON.stringify({ archive_id, category_id }) }).then(r => { _invalidate('/categories'); _invalidate('/archives'); return r; }),
   removeCategory: (archiveId, categoryId) =>
-    request(`/categories/${archiveId}/${categoryId}`, { method: 'DELETE' }).then(r => { _invalidate('/api/categories'); _invalidate('/api/archives'); return r; }),
+    request(`/categories/${archiveId}/${categoryId}`, { method: 'DELETE' }).then(r => { _invalidate('/categories'); _invalidate('/archives'); return r; }),
   batchAssignCategory: (archiveIds, categoryId) =>
     request('/categories/batch-assign', { method: 'POST', body: JSON.stringify({ archive_ids: archiveIds, category_id: categoryId }) })
-      .then(r => { _invalidate('/api/categories'); _invalidate('/api/archives'); return r; }),
+      .then(r => { _invalidate('/categories'); _invalidate('/archives'); return r; }),
   batchRemoveCategory: (archiveIds, categoryId) =>
     request('/categories/batch-remove', { method: 'POST', body: JSON.stringify({ archive_ids: archiveIds, category_id: categoryId }) })
-      .then(r => { _invalidate('/api/categories'); _invalidate('/api/archives'); return r; }),
+      .then(r => { _invalidate('/categories'); _invalidate('/archives'); return r; }),
 
   // Settings
   getSettings: () => request('/settings'),
   updateSettings: (data) =>
-    request('/settings', { method: 'PUT', body: JSON.stringify(data) }).then(r => { _invalidate('/api/settings'); return r; }),
+    request('/settings', { method: 'PUT', body: JSON.stringify(data) }).then(r => { _invalidate('/settings'); return r; }),
   getStats: () => request('/stats'),
 
   // Backup & Restore
   exportBackup: () => `${BASE}/backup`,
   importBackup: (data) =>
     request('/restore', { method: 'POST', body: JSON.stringify(data) }).then(r => {
-      _invalidate('/api/archives'); _invalidate('/api/tags'); _invalidate('/api/categories'); _invalidate('/api/history');
+      _invalidate('/archives'); _invalidate('/tags'); _invalidate('/categories'); _invalidate('/history');
       return r;
     }),
 
   // CBZ 打包归档
   packCbz: (folderPath, outputDir) =>
     request('/archives/pack-cbz', { method: 'POST', body: JSON.stringify({ folderPath, outputDir }) })
-      .then(r => { _invalidate('/api/archives'); return r; }),
+      .then(r => { _invalidate('/archives'); return r; }),
 };
 
 export default api;
