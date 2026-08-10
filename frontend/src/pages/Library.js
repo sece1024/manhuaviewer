@@ -41,9 +41,9 @@ export default function Library({ mode = 'library' }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   // 窄屏：把次要操作收进 ⋯ 菜单
   const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
-  // 分页状态
+  // 分页状态（page 用 ref，避免 loadMore 的 memoized 闭包读到过期值）
   const PAGE_SIZE = 50;
-  const [page, setPage] = useState(1);
+  const pageRef = useRef(1);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const searchDebounceRef = useRef(null);
@@ -87,7 +87,7 @@ export default function Library({ mode = 'library' }) {
       setLoading(true);
     }
     try {
-      const nextPage = append ? page + 1 : 1;
+      const nextPage = append ? pageRef.current + 1 : 1;
       const categoryId = params.category_id !== undefined ? params.category_id : selectedCategoryRef.current;
       const baseParams = {
         sort_by: sortByRef.current,
@@ -101,7 +101,7 @@ export default function Library({ mode = 'library' }) {
       const data = await api.getArchives(baseParams);
       if (id !== requestIdRef.current) return;
       setArchives(prev => append ? [...prev, ...data] : data);
-      setPage(nextPage);
+      pageRef.current = nextPage;
       setHasMore(data.length >= PAGE_SIZE);
     } catch (e) {
       if (id === requestIdRef.current) toast(e.message, 'error');
