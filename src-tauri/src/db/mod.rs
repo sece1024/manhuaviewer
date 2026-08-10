@@ -422,6 +422,38 @@ impl Database {
             .execute("DELETE FROM archives WHERE id = ?", [id])
     }
 
+    /// 批量插入档案，单事务执行。返回 (实际新增数, 错误数)；
+    /// 已存在的路径（path 唯一约束冲突）不计入新增。
+    pub fn insert_archives_many(
+        &self,
+        items: &[(String, String, String, i64, i64)],
+    ) -> Result<(usize, usize)> {
+        if items.is_empty() {
+            return Ok((0, 0));
+        }
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let mut added = 0;
+        let mut errors = 0;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR IGNORE INTO archives (title, path, archive_type, page_count, file_size) VALUES (?, ?, ?, ?, ?)",
+            )?;
+            for (title, path, archive_type, page_count, file_size) in items {
+                match stmt.execute((title, path, archive_type, page_count, file_size)) {
+                    Ok(affected) if affected > 0 => added += 1,
+                    Ok(_) => {} // duplicate path, skipped
+                    Err(e) => {
+                        tracing::warn!("Failed to insert {}: {}", path, e);
+                        errors += 1;
+                    }
+                }
+            }
+        }
+        tx.commit()?;
+        Ok((added, errors))
+    }
+
     /// 批量删除档案，单事务执行
     pub fn batch_delete_archives(&self, ids: &[i64]) -> Result<usize> {
         if ids.is_empty() {

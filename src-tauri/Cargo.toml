@@ -36,6 +36,7 @@ serde_json = "1"
 
 # 异步运行时
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
 
 # 日志
 tracing = "0.1"

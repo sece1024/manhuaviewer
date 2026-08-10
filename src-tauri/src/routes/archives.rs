@@ -477,17 +477,24 @@ pub async fn get_page(
             anyhow::bail!("Page index {} out of range (total: {})", idx, pages.len());
         }
         let page_name = &pages[idx].filepath;
-        let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
-        let data = reader.extract_page(page_name)?;
         let mime = mime_guess::from_path(page_name)
             .first_or_octet_stream()
             .to_string();
-        Ok((data, mime))
+        if is_compressed(&archive_type) {
+            // 压缩包：解压后整体返回（需要解压，无法直接流式）
+            let reader =
+                crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
+            let data = reader.extract_page(page_name)?;
+            Ok::<_, anyhow::Error>((Some(data), mime, None))
+        } else {
+            // 文件夹：直接流式输出文件，避免整页 2-10MB 双份内存缓冲
+            Ok((None, mime, Some(page_name.clone())))
+        }
     })
     .await;
 
     match result {
-        Ok(Ok((data, mime))) => {
+        Ok(Ok((Some(data), mime, _))) => {
             let mut pairs: Vec<(&'static str, String)> = vec![
                 ("Content-Type", mime),
                 ("ETag", etag),
@@ -497,6 +504,29 @@ pub async fn get_page(
                 pairs.push(("Last-Modified", lm));
             }
             build_response(StatusCode::OK, pairs, data)
+        }
+        Ok(Ok((None, mime, Some(stream_path)))) => match tokio::fs::File::open(&stream_path).await
+        {
+            Ok(file) => {
+                let stream = tokio_util::io::ReaderStream::new(file);
+                let mut pairs: Vec<(&'static str, String)> = vec![
+                    ("Content-Type", mime),
+                    ("ETag", etag),
+                    ("Cache-Control", CACHE_CONTROL.to_string()),
+                ];
+                if let Some(lm) = last_modified {
+                    pairs.push(("Last-Modified", lm));
+                }
+                build_response(
+                    StatusCode::OK,
+                    pairs,
+                    axum::body::Body::from_stream(stream),
+                )
+            }
+            Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        },
+        Ok(Ok((None, _, None))) => {
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "No page data")
         }
         Ok(Err(e)) => {
             let msg = e.to_string();
@@ -858,25 +888,12 @@ pub async fn scan(
         Ok(Ok(archive_infos)) => {
             let total = archive_infos.len();
             let infos = archive_infos.clone();
-            let added = super::run_db(&state, move |db| {
-                let mut added = 0;
-                let mut errors = 0;
-                for (title, path, archive_type, page_count, file_size) in &infos {
-                    match db.insert_archive(title, path, archive_type, *page_count, *file_size) {
-                        Ok(_) => added += 1,
-                        Err(e) => {
-                            tracing::warn!("Failed to insert {}: {}", path, e);
-                            errors += 1;
-                        }
-                    }
-                }
-                Ok::<(usize, usize), rusqlite::Error>((added, errors))
-            })
-            .await
-            .unwrap_or_else(|e| {
-                tracing::error!("Failed to insert scanned archives: {}", e);
-                (0, total)
-            });
+            let added = super::run_db(&state, move |db| db.insert_archives_many(&infos))
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::error!("Failed to insert scanned archives: {}", e);
+                    (0, total)
+                });
 
             let (added, errors) = added;
             Json(serde_json::json!({
