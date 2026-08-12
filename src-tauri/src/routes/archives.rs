@@ -718,6 +718,17 @@ pub async fn open_file(
         return error_response(StatusCode::BAD_REQUEST, "Unsupported file type");
     }
 
+    // Read title depth setting (quick DB operation)
+    let title_depth = super::run_db(&state, move |db| {
+        Ok(db
+            .get_setting("title_depth")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1))
+    })
+    .await
+    .unwrap_or(1);
+
     // Do blocking I/O in spawn_blocking
     let archive_type_clone = archive_type.clone();
     let file_path_for_insert = file_path.clone();
@@ -727,11 +738,7 @@ pub async fn open_file(
             anyhow::bail!("File not found");
         }
 
-        let title = path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
+        let title = crate::services::scanner::derive_title(path, title_depth);
 
         let file_size = std::fs::metadata(&file_path)
             .map(|m| m.len() as i64)

@@ -75,3 +75,95 @@ impl Scanner {
         }
     }
 }
+
+/// 根据路径取倒数第 `level` 层组件作为标题。
+/// 层级 1 = 最后一层（文件时用 file_stem 剥扩展名），层级 N = 往前第 N 层目录名。
+/// level 为 0 或超出路径实际层数时，回退到最后一层。
+pub fn derive_title(path: &Path, level: u32) -> String {
+    let components: Vec<String> = path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(name) => Some(name.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect();
+
+    let n = components.len();
+    if n == 0 {
+        return String::new();
+    }
+
+    let idx = if level == 0 || level as usize > n {
+        1
+    } else {
+        level as usize
+    };
+    let name = &components[n - idx];
+
+    if idx == 1 {
+        std::path::Path::new(name)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    } else {
+        name.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derive_title;
+    use std::path::Path;
+
+    #[test]
+    fn test_derive_title_level_1() {
+        assert_eq!(
+            derive_title(Path::new("/path/to/manhua01/第一章"), 1),
+            "第一章"
+        );
+    }
+
+    #[test]
+    fn test_derive_title_level_2() {
+        assert_eq!(
+            derive_title(Path::new("/path/to/manhua01/第一章"), 2),
+            "manhua01"
+        );
+    }
+
+    #[test]
+    fn test_derive_title_level_3() {
+        assert_eq!(derive_title(Path::new("/path/to/manhua01/第一章"), 3), "to");
+    }
+
+    #[test]
+    fn test_derive_title_strips_extension() {
+        assert_eq!(derive_title(Path::new("/path/manhua01.cbz"), 1), "manhua01");
+    }
+
+    #[test]
+    fn test_derive_title_deep_level_keeps_dir_name() {
+        assert_eq!(derive_title(Path::new("/path/manhua01.cbz"), 2), "path");
+    }
+
+    #[test]
+    fn test_derive_title_exceeds_depth_falls_back() {
+        assert_eq!(derive_title(Path::new("/a/第一章"), 3), "第一章");
+    }
+
+    #[test]
+    fn test_derive_title_zero_level_falls_back() {
+        assert_eq!(derive_title(Path::new("/a/第一章"), 0), "第一章");
+    }
+
+    #[test]
+    fn test_derive_title_single_component() {
+        assert_eq!(derive_title(Path::new("/第一章"), 1), "第一章");
+    }
+
+    #[test]
+    fn test_derive_title_empty_path() {
+        assert_eq!(derive_title(Path::new(""), 1), "");
+    }
+}

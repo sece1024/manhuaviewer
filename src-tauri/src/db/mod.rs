@@ -122,6 +122,7 @@ impl Database {
             ("auto_scan_interval", "0"),
             ("scan_depth", "1"),
             ("rename_suggest_depth", "3"),
+            ("title_depth", "1"),
             ("page_direction", "rtl"),
             ("theme", "dark"),
         ];

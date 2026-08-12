@@ -265,6 +265,19 @@ export default function Settings() {
             <option value="5">5 层</option>
           </select>
         </div>
+        <div className="settings-row">
+          <div>
+            <div className="settings-row-label">初始标题层级</div>
+            <div className="settings-row-desc">打开漫画时，取路径倒数第 N 层作为标题（1=文件夹/文件名；例：…/manhua01/第一章，1=第一章，2=manhua01）</div>
+          </div>
+          <select value={settings.title_depth || '1'} onChange={(e) => handleUpdateSetting('title_depth', e.target.value)}>
+            <option value="1">1 层</option>
+            <option value="2">2 层</option>
+            <option value="3">3 层</option>
+            <option value="4">4 层</option>
+            <option value="5">5 层</option>
+          </select>
+        </div>
       </div>
 
       {/* 阅读器设置 */}

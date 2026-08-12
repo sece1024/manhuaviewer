@@ -155,7 +155,7 @@ mod tests {
 
         // 验证 CBZ 内容
         let file = std::fs::File::open(&cbz).unwrap();
-        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let archive = zip::ZipArchive::new(file).unwrap();
         assert_eq!(archive.len(), 2); // 只有 2 张图片，txt 被过滤
     }
 
