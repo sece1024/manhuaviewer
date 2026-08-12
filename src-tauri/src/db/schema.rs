@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS archives (
     thumbnail_path TEXT,        -- 缩略图目录路径（thumbnails/{id}/）
     group_id INTEGER REFERENCES archives(id) ON DELETE SET NULL,  -- 合并组主档案 id
     page_list_mtime INTEGER DEFAULT 0,  -- 缓存页面列表时的档案文件 mtime（秒），用于失效检测
+    title_auto INTEGER NOT NULL DEFAULT 1,  -- 1=按路径自动派生的标题（可批量重生成），0=用户手动改名
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );

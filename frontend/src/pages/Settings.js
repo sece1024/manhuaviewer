@@ -20,6 +20,7 @@ export default function Settings() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState(null);
   const [cbzFiles, setCbzFiles] = useState([]);
+  const [regenerating, setRegenerating] = useState(false);
   const toast = useToast();
 
   // 检测 Tauri 环境
@@ -49,6 +50,20 @@ export default function Settings() {
       toast('已保存', 'success');
     } catch (e) {
       toast(e.message, 'error');
+    }
+  };
+
+  // 按当前层级重生成自动标题
+  const handleRegenerateTitles = async () => {
+    if (regenerating) return;
+    setRegenerating(true);
+    try {
+      const r = await api.regenerateTitles();
+      toast(r.message || `已重新生成 ${r.updated ?? 0} 个标题`, 'success');
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      setRegenerating(false);
     }
   };
 
@@ -268,7 +283,10 @@ export default function Settings() {
         <div className="settings-row">
           <div>
             <div className="settings-row-label">初始标题层级</div>
-            <div className="settings-row-desc">打开漫画时，取路径倒数第 N 层作为标题（1=文件夹/文件名；例：…/manhua01/第一章，1=第一章，2=manhua01）</div>
+            <div className="settings-row-desc">打开漫画时，取路径倒数第 N 层作为标题（1=文件夹/文件名）</div>
+            <div className="settings-row-desc" style={{ marginTop: 4 }}>
+              预览: …/manhua01/第一章 → <strong>{previewTitle(settings.title_depth || '1')}</strong>
+            </div>
           </div>
           <select value={settings.title_depth || '1'} onChange={(e) => handleUpdateSetting('title_depth', e.target.value)}>
             <option value="1">1 层</option>
@@ -277,6 +295,15 @@ export default function Settings() {
             <option value="4">4 层</option>
             <option value="5">5 层</option>
           </select>
+        </div>
+        <div className="settings-row">
+          <div>
+            <div className="settings-row-label">重生成已有标题</div>
+            <div className="settings-row-desc">按当前层级重新生成所有自动标题（手动改名的不会改动）</div>
+          </div>
+          <button className="btn btn-sm" onClick={handleRegenerateTitles} disabled={regenerating}>
+            {regenerating ? '生成中...' : '重新生成'}
+          </button>
         </div>
       </div>
 
@@ -428,6 +455,15 @@ export default function Settings() {
       </div>
     </div>
   );
+}
+
+// 与后端 derive_title 语义一致：取路径倒数第 N 层组件作为标题，超出时回退到最后一层
+function previewTitle(level) {
+  const parts = 'manhua01/第一章'.split('/');
+  const n = parts.length;
+  const l = Math.max(Number(level) || 1, 1);
+  const idx = l > n ? 1 : l;
+  return parts[n - idx];
 }
 
 function StatCard({ label, value, icon }) {

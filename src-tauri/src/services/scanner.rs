@@ -78,7 +78,7 @@ impl Scanner {
 
 /// 根据路径取倒数第 `level` 层组件作为标题。
 /// 层级 1 = 最后一层（文件时用 file_stem 剥扩展名），层级 N = 往前第 N 层目录名。
-/// level 为 0 或超出路径实际层数时，回退到最后一层。
+/// level 超出路径实际层数时，回退到最后一层；调用方需保证 level >= 1。
 pub fn derive_title(path: &Path, level: u32) -> String {
     let components: Vec<String> = path
         .components()
@@ -93,7 +93,7 @@ pub fn derive_title(path: &Path, level: u32) -> String {
         return String::new();
     }
 
-    let idx = if level == 0 || level as usize > n {
+    let idx = if level as usize > n {
         1
     } else {
         level as usize
@@ -150,11 +150,6 @@ mod tests {
     #[test]
     fn test_derive_title_exceeds_depth_falls_back() {
         assert_eq!(derive_title(Path::new("/a/第一章"), 3), "第一章");
-    }
-
-    #[test]
-    fn test_derive_title_zero_level_falls_back() {
-        assert_eq!(derive_title(Path::new("/a/第一章"), 0), "第一章");
     }
 
     #[test]

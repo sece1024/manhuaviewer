@@ -918,6 +918,43 @@ pub async fn scan(
     }
 }
 
+/// 按当前「初始标题层级」设置，批量重生成自动派生标题（跳过已手动改名的档案）
+pub async fn regenerate_titles(State(state): State<Arc<AppState>>) -> Response {
+    let title_depth = super::run_db(&state, move |db| {
+        Ok(db
+            .get_setting("title_depth")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1))
+    })
+    .await
+    .unwrap_or(1);
+
+    let result = super::run_db(&state, move |db| {
+        let rows = db.list_auto_titled()?;
+        let mut changed = 0;
+        for (id, path) in rows {
+            let new_title =
+                crate::services::scanner::derive_title(std::path::Path::new(&path), title_depth);
+            if db.update_title_auto(id, &new_title)? {
+                changed += 1;
+            }
+        }
+        Ok::<usize, rusqlite::Error>(changed)
+    })
+    .await;
+
+    match result {
+        Ok(changed) => Json(serde_json::json!({
+            "success": true,
+            "updated": changed,
+            "message": format!("已按当前层级重新生成 {} 个标题", changed),
+        }))
+        .into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
 /// 将文件夹打包为 CBZ 归档文件
 pub async fn pack_cbz(
     State(state): State<Arc<AppState>>,

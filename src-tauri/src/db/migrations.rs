@@ -49,6 +49,25 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Add title_auto column to archives if missing
+    let has_title_auto: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('archives') WHERE name='title_auto'",
+            [],
+            |row| row.get::<_, i64>(0).map(|c| c > 0),
+        )
+        .unwrap_or(false);
+
+    if !has_title_auto {
+        tracing::info!("Adding title_auto column to archives...");
+        conn.execute(
+            "ALTER TABLE archives ADD COLUMN title_auto INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+        // 已有档案无法区分是否手动改名，保守标记为 0，避免批量重生成覆盖现有标题
+        conn.execute("UPDATE archives SET title_auto = 0", [])?;
+    }
+
     // Check for legacy 'folders' table and migrate
     let has_folders: bool = conn
         .query_row(

@@ -472,9 +472,29 @@ impl Database {
 
     pub fn update_archive_title(&self, id: i64, title: &str) -> Result<usize> {
         self.conn()?.execute(
-            "UPDATE archives SET title = ?, updated_at = datetime('now') WHERE id = ?",
+            "UPDATE archives SET title = ?, title_auto = 0, updated_at = datetime('now') WHERE id = ?",
             (title, id),
         )
+    }
+
+    /// 列出需要按「初始标题层级」重生成的档案（自动派生标题且未被手动改名）
+    pub fn list_auto_titled(&self) -> Result<Vec<(i64, String)>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT id, path FROM archives WHERE title_auto = 1")?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(log_and_skip)
+            .collect();
+        Ok(rows)
+    }
+
+    /// 更新自动派生标题（保持 title_auto = 1）；title 未变化时不更新，返回是否变更。
+    pub fn update_title_auto(&self, id: i64, title: &str) -> Result<bool> {
+        let affected = self.conn()?.execute(
+            "UPDATE archives SET title = ?, updated_at = datetime('now') WHERE id = ? AND title != ?",
+            (title, id, title),
+        )?;
+        Ok(affected > 0)
     }
 
     /// 获取组内所有章节（按路径排序）
@@ -1518,5 +1538,69 @@ mod tests {
             id3, id1,
             "Duplicate insert should return the original archive id, not the last inserted id"
         );
+    }
+
+    #[test]
+    fn test_auto_title_regeneration() {
+        let db = setup_test_db();
+
+        let id = db
+            .insert_archive("auto-title", "/path/to/manhua01/第一章", "folder", 5, 100)
+            .unwrap();
+
+        // 新插入的档案默认标记为自动标题
+        let auto = db.list_auto_titled().unwrap();
+        assert_eq!(auto.len(), 1);
+        assert_eq!(auto[0].0, id);
+        assert_eq!(auto[0].1, "/path/to/manhua01/第一章");
+
+        // 更新为不同标题时返回 true
+        assert!(db.update_title_auto(id, "第一章").unwrap());
+        // 更新为相同标题时返回 false（未变化）
+        assert!(!db.update_title_auto(id, "第一章").unwrap());
+
+        // 手动改名后不再属于自动标题
+        db.update_archive_title(id, "手动改名").unwrap();
+        assert!(db.list_auto_titled().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_migration_marks_existing_archives_as_not_auto() {
+        // 模拟旧版数据库：archives 表没有 title_auto 列且已有数据
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_str().unwrap();
+        {
+            let conn = rusqlite::Connection::open(path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE archives (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    path TEXT NOT NULL UNIQUE,
+                    archive_type TEXT NOT NULL DEFAULT 'folder',
+                    page_count INTEGER DEFAULT 0,
+                    cover_image TEXT,
+                    file_size INTEGER DEFAULT 0,
+                    thumbnail_path TEXT,
+                    group_id INTEGER,
+                    page_list_mtime INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                );
+                INSERT INTO archives (title, path, archive_type) VALUES ('旧标题', '/old/path', 'folder');",
+            )
+            .unwrap();
+        }
+
+        let db = Database::new(path).unwrap();
+        db.init().unwrap();
+
+        // 迁移后列存在，且已有行被保守标记为 0（不参与批量重生成）
+        let conn = db.conn_for_test().unwrap();
+        let auto: i64 = conn
+            .query_row("SELECT title_auto FROM archives WHERE path = '/old/path'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(auto, 0);
     }
 }

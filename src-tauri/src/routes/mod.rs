@@ -62,6 +62,10 @@ pub fn create_router(state: AppState) -> Router {
             "/archives/batch-delete",
             post(archives::batch_delete_archives),
         )
+        .route(
+            "/archives/regenerate-titles",
+            post(archives::regenerate_titles),
+        )
         // Tags
         .route("/tags", get(tags::list_tags))
         .route("/tags", post(tags::create_tag))

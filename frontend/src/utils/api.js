@@ -157,6 +157,9 @@ const api = {
   updateTitle: (id, title) =>
     request(`/archives/${id}/title`, { method: 'PUT', body: JSON.stringify({ title }) })
       .then(r => { _invalidate('/archives'); return r; }),
+  regenerateTitles: () =>
+    request('/archives/regenerate-titles', { method: 'POST' })
+      .then(r => { _invalidate('/archives'); _invalidate('/history'); return r; }),
   mergeArchives: (archiveIds) =>
     request('/merge', { method: 'POST', body: JSON.stringify({ archive_ids: archiveIds }) })
       .then(r => { _invalidate('/archives'); return r; }),
