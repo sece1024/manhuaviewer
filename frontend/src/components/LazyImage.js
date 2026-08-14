@@ -59,7 +59,7 @@ const LazyImage = React.memo(function LazyImage({ src, alt, className, style, on
     <div
       ref={ref}
       className={showPlaceholder ? 'no-cover' : className}
-      style={{ position: 'relative', ...style }}
+      style={{ position: 'relative', width: '100%', height: '100%', ...style }}
       onClick={onClick}
     >
       {showPlaceholder ? (

@@ -127,6 +127,42 @@ fn not_modified(etag: String, last_modified: Option<String>) -> Response {
     build_response(StatusCode::NOT_MODIFIED, pairs, "")
 }
 
+/// 生成缩略图后登记 thumbnail_path 并按需触发 LRU 淘汰（每分钟最多一次）。
+async fn register_thumbnail(state: &Arc<AppState>, id: i64, thumb_dir_str: String, already_set: bool) {
+    let mut do_evict = false;
+    {
+        let mut last = state.last_thumb_eviction.lock().unwrap();
+        let elapsed = last
+            .as_ref()
+            .map(|t| t.elapsed().as_secs() >= 60)
+            .unwrap_or(true);
+        if elapsed {
+            *last = Some(std::time::Instant::now());
+            do_evict = true;
+        }
+    }
+
+    let evicted = if do_evict {
+        let dir = thumb_dir_str.clone();
+        super::run_db(state, move |db| {
+            db.set_thumbnail_path(id, &dir)?;
+            db.evict_old_thumbnails()
+        })
+        .await
+        .unwrap_or_default()
+    } else {
+        if !already_set {
+            let dir = thumb_dir_str.clone();
+            let _ = super::run_db(state, move |db| db.set_thumbnail_path(id, &dir)).await;
+        }
+        vec![]
+    };
+
+    for (_evicted_id, evicted_path) in evicted {
+        let _ = tokio::fs::remove_dir_all(&evicted_path).await;
+    }
+}
+
 #[derive(Deserialize)]
 pub struct ArchiveQuery {
     #[serde(alias = "sort_by")]
@@ -306,10 +342,12 @@ pub async fn get_cover(
     Path(id): Path<i64>,
     headers: HeaderMap,
 ) -> Response {
-    let (archive_path, archive_type) = match super::run_db(&state, move |db| db.get_archive(id))
-        .await
+    let (archive_path, archive_type, thumb_already_set) = match super::run_db(&state, move |db| {
+        db.get_archive(id)
+    })
+    .await
     {
-        Ok(Some(a)) => (a.path, a.archive_type),
+        Ok(Some(a)) => (a.path, a.archive_type, a.thumbnail_path.is_some()),
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
@@ -336,14 +374,37 @@ pub async fn get_cover(
         }
     }
 
+    // 封面走缩略图缓存：生成 2:3 的等比缩略图，避免每屏都解压原始首页大图。
+    let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
+    let thumb_dir_str = thumb_dir.to_string_lossy().to_string();
     let result = tokio::task::spawn_blocking(move || {
+        let cache_path = thumb_dir.join("cover.jpg");
+
+        // 缓存有效性：缓存文件 mtime 不早于档案 mtime，否则视为过期需重生成
+        let cache_valid = std::fs::metadata(&cache_path)
+            .and_then(|m| m.modified())
+            .map(|cache_mt| mtime.map(|am| cache_mt >= am).unwrap_or(false))
+            .unwrap_or(false);
+        if cache_valid {
+            if let Ok(data) = std::fs::read(&cache_path) {
+                return Ok::<_, anyhow::Error>((data, false));
+            }
+        }
+
         let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
-        reader.get_cover()
+        let cover = reader.get_cover()?;
+        let thumb = crate::services::thumbnail::ThumbnailGenerator::default().generate(&cover)?;
+        std::fs::create_dir_all(&thumb_dir)?;
+        std::fs::write(&cache_path, &thumb)?;
+        Ok((thumb, true))
     })
     .await;
 
     match result {
-        Ok(Ok(cover_data)) => {
+        Ok(Ok((cover_data, fresh))) => {
+            if fresh {
+                register_thumbnail(&state, id, thumb_dir_str, thumb_already_set).await;
+            }
             let mut pairs: Vec<(&'static str, String)> = vec![
                 ("Content-Type", "image/jpeg".to_string()),
                 ("ETag", etag),
@@ -631,40 +692,7 @@ pub async fn get_page_thumb(
         Ok(Ok(thumb_data)) => {
             // 首次生成成功，更新数据库记录；LRU 淘汰最多每分钟跑一次
             let thumb_dir_str = thumb_dir.to_string_lossy().to_string();
-            let mut do_evict = false;
-            {
-                let mut last = state.last_thumb_eviction.lock().unwrap();
-                let elapsed = last
-                    .as_ref()
-                    .map(|t| t.elapsed().as_secs() >= 60)
-                    .unwrap_or(true);
-                if elapsed {
-                    *last = Some(std::time::Instant::now());
-                    do_evict = true;
-                }
-            }
-
-            let evicted = if do_evict {
-                super::run_db(&state, move |db| {
-                    db.set_thumbnail_path(id, &thumb_dir_str)?;
-                    db.evict_old_thumbnails()
-                })
-                .await
-                .unwrap_or_default()
-            } else {
-                if !thumb_already_set {
-                    let _ = super::run_db(&state, move |db| {
-                        db.set_thumbnail_path(id, &thumb_dir_str)
-                    })
-                    .await;
-                }
-                vec![]
-            };
-
-            // 删除被淘汰漫画的缩略图目录
-            for (_evicted_id, evicted_path) in evicted {
-                let _ = tokio::fs::remove_dir_all(&evicted_path).await;
-            }
+            register_thumbnail(&state, id, thumb_dir_str, thumb_already_set).await;
 
             build_response(
                 StatusCode::OK,

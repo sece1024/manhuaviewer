@@ -22,8 +22,16 @@ impl ThumbnailGenerator {
             .with_guessed_format()?
             .decode()?;
 
-        let height = self.height.unwrap_or(self.width);
-        let thumbnail = img.resize(self.width, height, image::imageops::FilterType::Lanczos3);
+        // 保持宽高比缩放到目标包围盒内（不变形）；裁切交给前端 CSS object-fit。
+        let target_w = self.width;
+        let target_h = self.height.unwrap_or((self.width as f64 * 1.5) as u32);
+        let (src_w, src_h) = (img.width(), img.height());
+        let scale = (target_w as f64 / src_w as f64)
+            .min(target_h as f64 / src_h as f64)
+            .min(1.0);
+        let new_w = ((src_w as f64) * scale).max(1.0) as u32;
+        let new_h = ((src_h as f64) * scale).max(1.0) as u32;
+        let thumbnail = img.resize(new_w, new_h, image::imageops::FilterType::Lanczos3);
 
         let mut output = Vec::new();
         thumbnail.write_to(
@@ -60,6 +68,6 @@ impl ThumbnailGenerator {
 
 impl Default for ThumbnailGenerator {
     fn default() -> Self {
-        Self::new(300, 85)
+        Self::new(300, 88)
     }
 }
