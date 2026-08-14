@@ -128,7 +128,12 @@ fn not_modified(etag: String, last_modified: Option<String>) -> Response {
 }
 
 /// 生成缩略图后登记 thumbnail_path 并按需触发 LRU 淘汰（每分钟最多一次）。
-async fn register_thumbnail(state: &Arc<AppState>, id: i64, thumb_dir_str: String, already_set: bool) {
+async fn register_thumbnail(
+    state: &Arc<AppState>,
+    id: i64,
+    thumb_dir_str: String,
+    already_set: bool,
+) {
     let mut do_evict = false;
     {
         let mut last = state.last_thumb_eviction.lock().unwrap();
@@ -342,15 +347,12 @@ pub async fn get_cover(
     Path(id): Path<i64>,
     headers: HeaderMap,
 ) -> Response {
-    let (archive_path, archive_type, thumb_already_set) = match super::run_db(&state, move |db| {
-        db.get_archive(id)
-    })
-    .await
-    {
-        Ok(Some(a)) => (a.path, a.archive_type, a.thumbnail_path.is_some()),
-        Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
-        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+    let (archive_path, archive_type, thumb_already_set) =
+        match super::run_db(&state, move |db| db.get_archive(id)).await {
+            Ok(Some(a)) => (a.path, a.archive_type, a.thumbnail_path.is_some()),
+            Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
+            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        };
 
     let mtime = archive_mtime(&archive_path);
     let etag = etag_for_cover(id, mtime);
