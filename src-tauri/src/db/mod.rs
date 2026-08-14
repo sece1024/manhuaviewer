@@ -893,11 +893,7 @@ impl Database {
     }
 
     /// 批量为多个档案分配分类，单事务执行
-    pub fn batch_assign_category(
-        &self,
-        archive_ids: &[i64],
-        category_id: i64,
-    ) -> Result<usize> {
+    pub fn batch_assign_category(&self, archive_ids: &[i64], category_id: i64) -> Result<usize> {
         if archive_ids.is_empty() {
             return Ok(0);
         }
@@ -915,11 +911,7 @@ impl Database {
     }
 
     /// 批量移除多个档案的分类，单事务执行
-    pub fn batch_remove_category(
-        &self,
-        archive_ids: &[i64],
-        category_id: i64,
-    ) -> Result<usize> {
+    pub fn batch_remove_category(&self, archive_ids: &[i64], category_id: i64) -> Result<usize> {
         if archive_ids.is_empty() {
             return Ok(0);
         }
@@ -1120,7 +1112,8 @@ impl Database {
     // Backup
     pub fn export_backup(&self) -> Result<serde_json::Value> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare("SELECT title, path, archive_type, page_count FROM archives")?;
+        let mut stmt =
+            conn.prepare("SELECT title, path, archive_type, page_count FROM archives")?;
         let archives: Vec<serde_json::Value> = stmt
             .query_map([], |row| {
                 Ok(serde_json::json!({
@@ -1597,9 +1590,11 @@ mod tests {
         // 迁移后列存在，且已有行被保守标记为 0（不参与批量重生成）
         let conn = db.conn_for_test().unwrap();
         let auto: i64 = conn
-            .query_row("SELECT title_auto FROM archives WHERE path = '/old/path'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT title_auto FROM archives WHERE path = '/old/path'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(auto, 0);
     }

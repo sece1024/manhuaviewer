@@ -36,7 +36,10 @@ pub async fn create_category(
     let color_db = color.clone();
     let search_db = search.clone();
 
-    match run_db(&state, move |db| db.create_category(&name, &color_db, pinned, &search_db)).await
+    match run_db(&state, move |db| {
+        db.create_category(&name, &color_db, pinned, &search_db)
+    })
+    .await
     {
         Ok(id) => Json(serde_json::json!({
             "data": {
@@ -103,7 +106,11 @@ pub async fn assign_category(
         _ => return error_response(StatusCode::BAD_REQUEST, "Invalid category_id"),
     };
 
-    match run_db(&state, move |db| db.assign_category(archive_id, category_id)).await {
+    match run_db(&state, move |db| {
+        db.assign_category(archive_id, category_id)
+    })
+    .await
+    {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -113,7 +120,11 @@ pub async fn remove_category(
     State(state): State<Arc<AppState>>,
     Path((archive_id, category_id)): Path<(i64, i64)>,
 ) -> Response {
-    match run_db(&state, move |db| db.remove_category(archive_id, category_id)).await {
+    match run_db(&state, move |db| {
+        db.remove_category(archive_id, category_id)
+    })
+    .await
+    {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }

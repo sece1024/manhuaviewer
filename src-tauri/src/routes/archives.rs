@@ -499,15 +499,12 @@ pub async fn get_page(
         return error_response(StatusCode::BAD_REQUEST, "Page index must be non-negative");
     }
 
-    let (archive_id, archive_path, archive_type) = match super::run_db(&state, move |db| {
-        db.get_archive(id)
-    })
-    .await
-    {
-        Ok(Some(a)) => (a.id, a.path, a.archive_type),
-        Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
-        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+    let (archive_id, archive_path, archive_type) =
+        match super::run_db(&state, move |db| db.get_archive(id)).await {
+            Ok(Some(a)) => (a.id, a.path, a.archive_type),
+            Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
+            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        };
 
     let mtime = archive_mtime(&archive_path);
     let etag = etag_for_page(id, page_index, mtime);
@@ -568,26 +565,23 @@ pub async fn get_page(
             }
             build_response(StatusCode::OK, pairs, data)
         }
-        Ok(Ok((None, mime, Some(stream_path)))) => match tokio::fs::File::open(&stream_path).await
-        {
-            Ok(file) => {
-                let stream = tokio_util::io::ReaderStream::new(file);
-                let mut pairs: Vec<(&'static str, String)> = vec![
-                    ("Content-Type", mime),
-                    ("ETag", etag),
-                    ("Cache-Control", CACHE_CONTROL.to_string()),
-                ];
-                if let Some(lm) = last_modified {
-                    pairs.push(("Last-Modified", lm));
+        Ok(Ok((None, mime, Some(stream_path)))) => {
+            match tokio::fs::File::open(&stream_path).await {
+                Ok(file) => {
+                    let stream = tokio_util::io::ReaderStream::new(file);
+                    let mut pairs: Vec<(&'static str, String)> = vec![
+                        ("Content-Type", mime),
+                        ("ETag", etag),
+                        ("Cache-Control", CACHE_CONTROL.to_string()),
+                    ];
+                    if let Some(lm) = last_modified {
+                        pairs.push(("Last-Modified", lm));
+                    }
+                    build_response(StatusCode::OK, pairs, axum::body::Body::from_stream(stream))
                 }
-                build_response(
-                    StatusCode::OK,
-                    pairs,
-                    axum::body::Body::from_stream(stream),
-                )
+                Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
             }
-            Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        },
+        }
         Ok(Ok((None, _, None))) => {
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "No page data")
         }
@@ -619,12 +613,7 @@ pub async fn get_page_thumb(
         match super::run_db(&state, move |db| db.get_archive(id)).await {
             Ok(Some(a)) => {
                 let dir = state.data_dir.join("thumbnails").join(id.to_string());
-                (
-                    a.path,
-                    a.archive_type,
-                    dir,
-                    a.thumbnail_path.is_some(),
-                )
+                (a.path, a.archive_type, dir, a.thumbnail_path.is_some())
             }
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
             Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -1007,7 +996,9 @@ pub async fn pack_cbz(
     .await
     {
         Ok(Some(dir)) => dir,
-        Ok(None) => return error_response(StatusCode::BAD_REQUEST, "请先在设置中配置 CBZ 归档目录"),
+        Ok(None) => {
+            return error_response(StatusCode::BAD_REQUEST, "请先在设置中配置 CBZ 归档目录")
+        }
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 

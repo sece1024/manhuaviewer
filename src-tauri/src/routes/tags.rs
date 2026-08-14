@@ -47,7 +47,11 @@ pub async fn create_tag(
     let namespace_db = namespace.clone();
     let color_db = color.clone();
 
-    match run_db(&state, move |db| db.create_tag(&namespace_db, &name, &color_db)).await {
+    match run_db(&state, move |db| {
+        db.create_tag(&namespace_db, &name, &color_db)
+    })
+    .await
+    {
         Ok(id) => Json(serde_json::json!({
             "data": {
                 "id": id,
@@ -72,7 +76,11 @@ pub async fn update_tag(
     let namespace_db = namespace.clone();
     let color_db = color.clone();
 
-    match run_db(&state, move |db| db.update_tag(id, &namespace_db, &name, &color_db)).await {
+    match run_db(&state, move |db| {
+        db.update_tag(id, &namespace_db, &name, &color_db)
+    })
+    .await
+    {
         Ok(_) => Json(serde_json::json!({
             "data": {
                 "id": id,
@@ -97,7 +105,11 @@ pub async fn assign_tag(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<AssignTagRequest>,
 ) -> Response {
-    match run_db(&state, move |db| db.assign_tag(payload.archive_id, payload.tag_id)).await {
+    match run_db(&state, move |db| {
+        db.assign_tag(payload.archive_id, payload.tag_id)
+    })
+    .await
+    {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -127,7 +139,10 @@ pub async fn batch_assign_tag(
         return error_response(StatusCode::BAD_REQUEST, "archive_ids 不能为空");
     }
 
-    match run_db(&state, move |db| db.batch_assign_tag(&payload.archive_ids, payload.tag_id)).await
+    match run_db(&state, move |db| {
+        db.batch_assign_tag(&payload.archive_ids, payload.tag_id)
+    })
+    .await
     {
         Ok(affected) => {
             Json(serde_json::json!({ "success": true, "affected": affected })).into_response()
@@ -144,7 +159,10 @@ pub async fn batch_remove_tag(
         return error_response(StatusCode::BAD_REQUEST, "archive_ids 不能为空");
     }
 
-    match run_db(&state, move |db| db.batch_remove_tag(&payload.archive_ids, payload.tag_id)).await
+    match run_db(&state, move |db| {
+        db.batch_remove_tag(&payload.archive_ids, payload.tag_id)
+    })
+    .await
     {
         Ok(affected) => {
             Json(serde_json::json!({ "success": true, "affected": affected })).into_response()

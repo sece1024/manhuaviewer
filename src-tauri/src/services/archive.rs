@@ -18,7 +18,11 @@ const WINDOWS_7Z_CANDIDATES: &[&str] = &[
 
 /// 解析外部工具路径：先查 PATH，再查 Windows 常见安装目录。
 fn resolve_tool(exe: &str, _windows_candidates: &[&str]) -> Option<PathBuf> {
-    if std::process::Command::new(exe).arg("--help").output().is_ok() {
+    if std::process::Command::new(exe)
+        .arg("--help")
+        .output()
+        .is_ok()
+    {
         return Some(PathBuf::from(exe));
     }
     #[cfg(windows)]
