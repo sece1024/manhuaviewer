@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
-import { formatSize, splitPathParts } from '../utils/format';
+import { formatSize, splitPathParts, pathDirname, lastPathPart } from '../utils/format';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
@@ -16,12 +16,13 @@ const isTauri = window.__TAURI__ !== undefined;
 
 // 网格卡片：memoized，避免多选切换时整屏重渲染。
 // 所有回调通过 props 传入（父组件 useCallback 稳定引用）。
-const ArchiveCard = React.memo(function ArchiveCard({ a, isSelected, selectMode, onOpen, onToggleSelect, onTag, onCategory, onRename, onRemove }) {
+const ArchiveCard = React.memo(function ArchiveCard({ a, isSelected, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove }) {
   return (
     <div
       className={`archive-card ${selectMode && isSelected ? 'archive-card-selected' : ''}`}
       onClick={(e) => {
         if (selectMode) { onToggleSelect(e, a.id); return; }
+        if (a._isGroup) { onToggleGroup(a); return; }
         onOpen(a.id);
       }}
       tabIndex={0}
@@ -30,6 +31,7 @@ const ArchiveCard = React.memo(function ArchiveCard({ a, isSelected, selectMode,
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           if (selectMode) { onToggleSelect(e, a.id); return; }
+          if (a._isGroup) { onToggleGroup(a); return; }
           onOpen(a.id);
         }
       }}
@@ -56,7 +58,10 @@ const ArchiveCard = React.memo(function ArchiveCard({ a, isSelected, selectMode,
         )}
       </div>
       <div className="archive-card-info">
-        <div className="archive-card-title" title={a.title}>{a.title}</div>
+        <div className="archive-card-title" title={a.title}>
+          {a.title}
+          {a._isGroup && <span className="archive-group-chevron" aria-hidden="true">{isExpanded ? '▾' : '▸'}</span>}
+        </div>
         <div className="archive-card-meta">
           {a._isGroup ? (
             <span>{a.chapter_count} 话</span>
@@ -82,12 +87,13 @@ const ArchiveCard = React.memo(function ArchiveCard({ a, isSelected, selectMode,
 });
 
 // 列表行：memoized，同 ArchiveCard
-const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, selectMode, onOpen, onToggleSelect, onTag, onCategory, onRename, onRemove }) {
+const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove }) {
   return (
     <div
       className={`archive-list-item ${selectMode && isSelected ? 'archive-list-item-selected' : ''}`}
       onClick={(e) => {
         if (selectMode) { onToggleSelect(e, a.id); return; }
+        if (a._isGroup) { onToggleGroup(a); return; }
         onOpen(a.id);
       }}
     >
@@ -100,7 +106,10 @@ const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, sel
         <LazyImage src={a.cover_url} alt={a.title} />
       </div>
       <div className="archive-list-info">
-        <div className="archive-list-title">{a.title}</div>
+        <div className="archive-list-title">
+          {a.title}
+          {a._isGroup && <span className="archive-group-chevron" aria-hidden="true">{isExpanded ? '▾' : '▸'}</span>}
+        </div>
         <div className="archive-list-meta">
           {a._isGroup ? `${a.chapter_count} 话` : `${a.page_count} 页`}
           {' · '}{a.archive_type === 'folder' ? '文件夹' : '压缩包'}
@@ -125,6 +134,41 @@ const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, sel
           <button className="archive-rename-btn-list" onClick={(e) => onRename(e, a)} title="重命名">✏️</button>
           <button className="archive-remove-btn-list" onClick={(e) => onRemove(e, a.id)} title="移除">✕</button>
         </>
+      )}
+    </div>
+  );
+});
+
+// 展开后的章节面板（同标题自动组 / 永久合并组共用）
+const GroupChapterPanel = React.memo(function GroupChapterPanel({ loading, members, onOpenChapter }) {
+  return (
+    <div className="archive-group-expanded">
+      {loading ? (
+        <div className="archive-group-loading">加载章节中...</div>
+      ) : (
+        <div className="archive-group-chapters">
+          {members.map(ch => (
+            <div
+              key={ch.id}
+              className="archive-group-chapter"
+              onClick={() => onOpenChapter(ch.id)}
+              tabIndex={0}
+              role="button"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onOpenChapter(ch.id);
+                }
+              }}
+            >
+              <div className="archive-group-chapter-cover">
+                <LazyImage src={ch.cover_url} alt={lastPathPart(ch.path) || ch.title} />
+              </div>
+              <span className="archive-group-chapter-name">{lastPathPart(ch.path) || ch.title}</span>
+              <span className="archive-group-chapter-meta">{ch.page_count} 页</span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -156,6 +200,11 @@ export default function Library({ mode = 'library' }) {
   // 多选模式
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
+  // 组展开状态（点击合并后的漫画卡片，就地展开子目录）
+  const [expandedGroup, setExpandedGroup] = useState(null);
+  const [groupMembers, setGroupMembers] = useState(null);
+  const [groupLoading, setGroupLoading] = useState(false);
+  const activeGroupRef = useRef(null); // 防止过期请求覆盖新展开组的数据
   // 窄屏：把次要操作收进 ⋯ 菜单
   const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
   // 分页状态（page 用 ref，避免 loadMore 的 memoized 闭包读到过期值）
@@ -410,6 +459,37 @@ export default function Library({ mode = 'library' }) {
 
   // 打开阅读器（稳定引用，供 memoized 卡片使用）
   const openArchive = useCallback((id) => navigate(`/reader/${id}`), [navigate]);
+
+  // 组展开/收起：永久合并组走 getGroupChapters，同标题自动组走 getArchivesByTitle
+  const toggleGroup = useCallback(async (a) => {
+    const key = a._autoGroup ? a._autoKey : `g:${a.id}`;
+    if (expandedGroup === key) {
+      setExpandedGroup(null);
+      setGroupMembers(null);
+      return;
+    }
+    setExpandedGroup(key);
+    setGroupMembers(null);
+    setGroupLoading(true);
+    activeGroupRef.current = key;
+    try {
+      let members;
+      if (a._autoGroup) {
+        members = (await api.getArchivesByTitle(a.title, a._parentDir)).filter(m => !m.group_id);
+      } else {
+        members = await api.getGroupChapters(a.id);
+      }
+      if (activeGroupRef.current === key) setGroupMembers(members);
+    } catch (e) {
+      if (activeGroupRef.current === key) {
+        toast(e.message, 'error');
+        setExpandedGroup(null);
+      }
+    } finally {
+      if (activeGroupRef.current === key) setGroupLoading(false);
+    }
+  }, [expandedGroup, toast]);
+
   const handleExitSelectMode = () => {
     setSelectMode(false);
     setSelectedIds(new Set());
@@ -456,33 +536,52 @@ export default function Library({ mode = 'library' }) {
   };
 
   // 将档案按 group_id 聚合：同一组显示为一个卡片
+  // 同时把「标题相同 + 父目录相同」且未手动合并的档案自动归为一组（仅显示层，不写库）
   const groupedArchives = useMemo(() => {
     const groups = new Map(); // group_id -> [archives]
-    const singles = [];
+    const autoCandidates = [];
 
     for (const a of archives) {
       const gid = a.group_id;
-      if (gid && gid === a.id) {
-        // 主档案：以其为组的代表
-        if (!groups.has(gid)) groups.set(gid, []);
-        groups.get(gid).push(a);
-      } else if (gid) {
-        // 子档案：加入组
+      if (gid) {
+        // 主档案（group_id == id）或子档案都归入永久组
         if (!groups.has(gid)) groups.set(gid, []);
         groups.get(gid).push(a);
       } else {
-        singles.push(a);
+        autoCandidates.push(a);
       }
     }
 
-    // 每组只显示主档案卡片，附加 chapter_count
+    // 自动分组：父目录相同 + 标题相同（忽略大小写）
+    const autoGroups = new Map(); // `${parentDir}\u0000${titleLower}` -> [archives]
+    for (const a of autoCandidates) {
+      const key = `${pathDirname(a.path)}\u0000${a.title.toLowerCase()}`;
+      if (!autoGroups.has(key)) autoGroups.set(key, []);
+      autoGroups.get(key).push(a);
+    }
+
     const result = [];
+    // 永久合并组：每组只显示主档案卡片，附加 chapter_count
     for (const [gid, members] of groups) {
       const primary = members.find(a => a.id === gid) || members[0];
       result.push({ ...primary, chapter_count: members.length, _isGroup: true });
     }
-    for (const a of singles) {
-      result.push(a);
+    // 自动组：>= 2 个成员才折叠为一张卡，否则按普通档案展示
+    for (const [key, members] of autoGroups) {
+      if (members.length < 2) {
+        result.push(members[0]);
+        continue;
+      }
+      members.sort((a, b) => a.path.localeCompare(b.path));
+      const primary = members[0];
+      result.push({
+        ...primary,
+        chapter_count: members.length,
+        _isGroup: true,
+        _autoGroup: true,
+        _autoKey: key,
+        _parentDir: pathDirname(primary.path),
+      });
     }
     return result;
   }, [archives]);
@@ -719,35 +818,55 @@ export default function Library({ mode = 'library' }) {
         ) : viewMode === 'grid' ? (
           <div className="archive-grid">
             {displayArchives.map(a => (
-              <ArchiveCard
-                key={a.id}
-                a={a}
-                isSelected={selectedIds.has(a.id)}
-                selectMode={selectMode}
-                onOpen={openArchive}
-                onToggleSelect={handleToggleSelect}
-                onTag={handleOpenTagPicker}
-                onCategory={handleOpenCategoryPicker}
-                onRename={handleOpenRename}
-                onRemove={handleRemoveArchive}
-              />
+              <Fragment key={a.id}>
+                <ArchiveCard
+                  a={a}
+                  isSelected={selectedIds.has(a.id)}
+                  selectMode={selectMode}
+                  isExpanded={a._isGroup && expandedGroup === (a._autoGroup ? a._autoKey : `g:${a.id}`)}
+                  onOpen={openArchive}
+                  onToggleGroup={toggleGroup}
+                  onToggleSelect={handleToggleSelect}
+                  onTag={handleOpenTagPicker}
+                  onCategory={handleOpenCategoryPicker}
+                  onRename={handleOpenRename}
+                  onRemove={handleRemoveArchive}
+                />
+                {a._isGroup && expandedGroup === (a._autoGroup ? a._autoKey : `g:${a.id}`) && (
+                  <GroupChapterPanel
+                    loading={groupLoading}
+                    members={groupMembers}
+                    onOpenChapter={openArchive}
+                  />
+                )}
+              </Fragment>
             ))}
           </div>
         ) : (
           <div className="archive-list">
             {displayArchives.map(a => (
-              <ArchiveListItem
-                key={a.id}
-                a={a}
-                isSelected={selectedIds.has(a.id)}
-                selectMode={selectMode}
-                onOpen={openArchive}
-                onToggleSelect={handleToggleSelect}
-                onTag={handleOpenTagPicker}
-                onCategory={handleOpenCategoryPicker}
-                onRename={handleOpenRename}
-                onRemove={handleRemoveArchive}
-              />
+              <Fragment key={a.id}>
+                <ArchiveListItem
+                  a={a}
+                  isSelected={selectedIds.has(a.id)}
+                  selectMode={selectMode}
+                  isExpanded={a._isGroup && expandedGroup === (a._autoGroup ? a._autoKey : `g:${a.id}`)}
+                  onOpen={openArchive}
+                  onToggleGroup={toggleGroup}
+                  onToggleSelect={handleToggleSelect}
+                  onTag={handleOpenTagPicker}
+                  onCategory={handleOpenCategoryPicker}
+                  onRename={handleOpenRename}
+                  onRemove={handleRemoveArchive}
+                />
+                {a._isGroup && expandedGroup === (a._autoGroup ? a._autoKey : `g:${a.id}`) && (
+                  <GroupChapterPanel
+                    loading={groupLoading}
+                    members={groupMembers}
+                    onOpenChapter={openArchive}
+                  />
+                )}
+              </Fragment>
             ))}
           </div>
         )}

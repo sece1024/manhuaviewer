@@ -527,6 +527,36 @@ impl Database {
         Ok(archives)
     }
 
+    /// 按精确标题查询所有档案（供自动分组展开时拉取完整成员列表）
+    pub fn get_archives_by_title(&self, title: &str) -> Result<Vec<ArchiveRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at
+             FROM archives WHERE title = ? ORDER BY path",
+        )?;
+
+        let archives = stmt
+            .query_map([title], |row| {
+                Ok(ArchiveRow {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    path: row.get(2)?,
+                    archive_type: row.get(3)?,
+                    page_count: row.get(4)?,
+                    cover_image: row.get(5)?,
+                    file_size: row.get(6)?,
+                    thumbnail_path: row.get(7)?,
+                    group_id: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                })
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+
+        Ok(archives)
+    }
+
     /// 合并多个档案：第一个为主档案，其余 group_id 设为主档案 id
     pub fn merge_archives(&self, archive_ids: &[i64]) -> Result<i64> {
         let primary_id = archive_ids[0];
@@ -1531,6 +1561,25 @@ mod tests {
             id3, id1,
             "Duplicate insert should return the original archive id, not the last inserted id"
         );
+    }
+
+    #[test]
+    fn test_get_archives_by_title() {
+        let db = setup_test_db();
+
+        db.insert_archive("海贼王", "/manhua/海贼王/01", "folder", 10, 100)
+            .unwrap();
+        db.insert_archive("海贼王", "/manhua/海贼王/02", "folder", 12, 120)
+            .unwrap();
+        db.insert_archive("火影忍者", "/manhua/火影忍者/01", "folder", 8, 80)
+            .unwrap();
+
+        let matches = db.get_archives_by_title("海贼王").unwrap();
+        assert_eq!(matches.len(), 2);
+        assert!(matches.iter().all(|a| a.title == "海贼王"));
+
+        let none = db.get_archives_by_title("不存在").unwrap();
+        assert!(none.is_empty());
     }
 
     #[test]

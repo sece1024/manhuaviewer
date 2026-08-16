@@ -12,6 +12,36 @@ export function splitPathParts(path) {
   return path.split(/[\\/]/).filter(Boolean);
 }
 
+/**
+ * 返回路径的父目录（完整目录路径，兼容 Windows/Unix）。
+ * 例如 "/manhua/01" -> "/manhua"；"C:\\Manga\\Title" -> "C:\\Manga"。
+ */
+export function pathDirname(path) {
+  if (!path) return '';
+  const parts = splitPathParts(path);
+  parts.pop();
+  if (parts.length === 0) return '';
+  const sep = path.includes('\\') ? '\\' : '/';
+  const prefix = parts.length > 1 && /^[A-Za-z]:$/.test(parts[0]) ? '' : sep;
+  return prefix + parts.join(sep);
+}
+
+/**
+ * 返回路径最后一段（子目录名 / 文件名，文件时剥掉扩展名）。
+ * 例如 "/manhua/01" -> "01"；"C:\\Manga\\01.cbz" -> "01"。
+ */
+export function lastPathPart(path) {
+  if (!path) return '';
+  const parts = splitPathParts(path);
+  const last = parts[parts.length - 1];
+  if (!last) return '';
+  if (path[path.length - 1] !== '/' && path[path.length - 1] !== '\\') {
+    const dot = last.lastIndexOf('.');
+    if (dot > 0) return last.slice(0, dot);
+  }
+  return last;
+}
+
 export function formatSize(bytes) {
   if (!bytes || bytes <= 0) return '';
   if (bytes < 1024) return bytes + ' B';

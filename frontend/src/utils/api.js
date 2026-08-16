@@ -164,7 +164,13 @@ const api = {
     request('/merge', { method: 'POST', body: JSON.stringify({ archive_ids: archiveIds }) })
       .then(r => { _invalidate('/archives'); return r; }),
   getGroupChapters: (groupId) =>
-    request(`/archives?group_id=${groupId}`),
+    request(`/archives?group_id=${groupId}`).then(archives =>
+      archives.map(a => ({ ...a, cover_url: a.cover_url ? fixUrl(a.cover_url) : `${BASE}/archives/${a.id}/cover` }))
+    ),
+  getArchivesByTitle: (title, parent) =>
+    request(`/archives?title=${encodeURIComponent(title)}&parent=${encodeURIComponent(parent || '')}`).then(archives =>
+      archives.map(a => ({ ...a, cover_url: a.cover_url ? fixUrl(a.cover_url) : `${BASE}/archives/${a.id}/cover` }))
+    ),
 
   // History
   getHistory: (params = {}) => {

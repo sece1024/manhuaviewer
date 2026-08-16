@@ -180,6 +180,10 @@ pub struct ArchiveQuery {
     pub tag: Option<String>,
     pub category_id: Option<i64>,
     pub group_id: Option<i64>,
+    /// 精确标题过滤（配合 parent 用于拉取自动分组完整成员列表）
+    pub title: Option<String>,
+    /// 父目录路径（精确标题过滤时按此筛选同目录成员）
+    pub parent: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -214,6 +218,25 @@ pub async fn list_archives(
     }
 
     let result = super::run_db(&state, move |db| {
+        // 精确标题 + 父目录：拉取自动分组完整成员列表（不做分页/搜索）
+        if let Some(title) = query.title.as_deref().filter(|t| !t.is_empty()) {
+            let mut rows = db.get_archives_by_title(title)?;
+            if let Some(parent) = query.parent.as_deref().filter(|p| !p.is_empty()) {
+                let normalized = parent.trim_end_matches(|c| c == '/' || c == '\\');
+                rows.retain(|a| {
+                    let parent_dir = std::path::Path::new(&a.path)
+                        .parent()
+                        .map(|p| {
+                            p.to_string_lossy()
+                                .trim_end_matches(|c| c == '/' || c == '\\')
+                                .to_string()
+                        });
+                    parent_dir.as_deref() == Some(normalized)
+                });
+            }
+            return Ok(ListResult::List(rows));
+        }
+
         // 如果指定了 group_id，返回组内所有章节
         if let Some(group_id) = query.group_id {
             return db.get_group_chapters(group_id).map(ListResult::Group);
