@@ -1,4 +1,4 @@
-import { formatSize, formatDate, splitPathParts, pathDirname, lastPathPart } from '../utils/format';
+import { formatSize, formatDate, splitPathParts, lastPathPart } from '../utils/format';
 
 describe('formatSize', () => {
   test('空值返回空字符串', () => {
@@ -61,23 +61,6 @@ describe('splitPathParts', () => {
   });
 });
 
-describe('pathDirname', () => {
-  test('Unix 路径', () => {
-    expect(pathDirname('/manhua/海贼王/01')).toBe('/manhua/海贼王');
-    expect(pathDirname('/manhua/01.cbz')).toBe('/manhua');
-  });
-
-  test('Windows 路径', () => {
-    expect(pathDirname('C:\\Manga\\Title\\Chapter1')).toBe('C:\\Manga\\Title');
-    expect(pathDirname('C:\\Manga\\01.cbz')).toBe('C:\\Manga');
-  });
-
-  test('空值', () => {
-    expect(pathDirname('')).toBe('');
-    expect(pathDirname(null)).toBe('');
-  });
-});
-
 describe('lastPathPart', () => {
   test('目录名（子目录）', () => {
     expect(lastPathPart('/manhua/海贼王/01')).toBe('01');
@@ -86,6 +69,11 @@ describe('lastPathPart', () => {
   test('压缩包剥扩展名', () => {
     expect(lastPathPart('C:\\Manga\\01.cbz')).toBe('01');
     expect(lastPathPart('/manhua/chapter02.zip')).toBe('chapter02');
+  });
+
+  test('文件夹名保留点号（stripExtension=false）', () => {
+    expect(lastPathPart('/manhua/海贼王/01.5', false)).toBe('01.5');
+    expect(lastPathPart('/manhua/海贼王/01')).toBe('01');
   });
 
   test('空值', () => {

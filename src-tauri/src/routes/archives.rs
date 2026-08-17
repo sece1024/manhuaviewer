@@ -6,7 +6,8 @@ use axum::{
     Json,
 };
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -27,6 +28,113 @@ fn archive_mtime_secs(path: &str) -> i64 {
 
 fn is_compressed(archive_type: &str) -> bool {
     matches!(archive_type, "zip" | "rar" | "cbz" | "cbr" | "7z")
+}
+
+/// 返回路径的父目录（去除末尾分隔符），与 `title`+`parent` 过滤的分组键保持一致。
+fn parent_dir_of(path: &str) -> String {
+    std::path::Path::new(path)
+        .parent()
+        .map(|p| {
+            p.to_string_lossy()
+                .trim_end_matches(['/', '\\'])
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+/// 列表接口返回项：普通档案或合并后的组卡片。
+#[derive(Serialize)]
+pub struct ListItem {
+    #[serde(flatten)]
+    pub archive: crate::db::ArchiveRow,
+    #[serde(rename = "_isGroup")]
+    pub is_group: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapter_count: Option<i64>,
+    #[serde(rename = "_autoGroup", skip_serializing_if = "Option::is_none")]
+    pub auto_group: Option<bool>,
+    #[serde(rename = "_autoKey", skip_serializing_if = "Option::is_none")]
+    pub auto_key: Option<String>,
+    #[serde(rename = "_parentDir", skip_serializing_if = "Option::is_none")]
+    pub parent_dir: Option<String>,
+}
+
+enum GroupKey {
+    Permanent(i64),
+    Auto(String),
+}
+
+/// 将档案按 group_id（永久合并）与「同标题 + 同父目录」（自动合并）聚合为组卡片，
+/// 保持首条成员在原排序中的位置。
+fn group_archives(rows: Vec<crate::db::ArchiveRow>) -> Vec<ListItem> {
+    let mut order: Vec<GroupKey> = Vec::new();
+    let mut permanent: HashMap<i64, Vec<crate::db::ArchiveRow>> = HashMap::new();
+    let mut auto: HashMap<String, Vec<crate::db::ArchiveRow>> = HashMap::new();
+    let mut seen_perm: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let mut seen_auto: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for a in rows {
+        if let Some(gid) = a.group_id {
+            if seen_perm.insert(gid) {
+                order.push(GroupKey::Permanent(gid));
+            }
+            permanent.entry(gid).or_default().push(a);
+        } else {
+            let parent = parent_dir_of(&a.path);
+            let key = format!("{}\u{0}{}", parent, a.title.to_lowercase());
+            if seen_auto.insert(key.clone()) {
+                order.push(GroupKey::Auto(key.clone()));
+            }
+            auto.entry(key).or_default().push(a);
+        }
+    }
+
+    order
+        .into_iter()
+        .map(|key| match key {
+            GroupKey::Permanent(gid) => {
+                let members = permanent.remove(&gid).unwrap_or_default();
+                let primary = members
+                    .iter()
+                    .find(|m| m.id == gid)
+                    .cloned()
+                    .unwrap_or_else(|| members[0].clone());
+                ListItem {
+                    archive: primary,
+                    is_group: true,
+                    chapter_count: Some(members.len() as i64),
+                    auto_group: None,
+                    auto_key: None,
+                    parent_dir: None,
+                }
+            }
+            GroupKey::Auto(key) => {
+                let members = auto.remove(&key).unwrap_or_default();
+                if members.len() < 2 {
+                    let archive = members.into_iter().next().unwrap();
+                    ListItem {
+                        archive,
+                        is_group: false,
+                        chapter_count: None,
+                        auto_group: None,
+                        auto_key: None,
+                        parent_dir: None,
+                    }
+                } else {
+                    let primary = members[0].clone();
+                    let parent = parent_dir_of(&primary.path);
+                    ListItem {
+                        archive: primary,
+                        is_group: true,
+                        chapter_count: Some(members.len() as i64),
+                        auto_group: Some(true),
+                        auto_key: Some(key),
+                        parent_dir: Some(parent),
+                    }
+                }
+            }
+        })
+        .collect()
 }
 
 fn to_page_rows(archive_id: i64, list: &[String]) -> Vec<crate::db::PageRow> {
@@ -213,8 +321,8 @@ pub async fn list_archives(
     Query(query): Query<ArchiveQuery>,
 ) -> Response {
     enum ListResult {
-        Group(Vec<crate::db::ArchiveRow>),
-        List(Vec<crate::db::ArchiveRow>),
+        Raw(Vec<crate::db::ArchiveRow>),
+        Grouped(Vec<ListItem>),
     }
 
     let result = super::run_db(&state, move |db| {
@@ -222,24 +330,22 @@ pub async fn list_archives(
         if let Some(title) = query.title.as_deref().filter(|t| !t.is_empty()) {
             let mut rows = db.get_archives_by_title(title)?;
             if let Some(parent) = query.parent.as_deref().filter(|p| !p.is_empty()) {
-                let normalized = parent.trim_end_matches(|c| c == '/' || c == '\\');
+                let normalized = parent.trim_end_matches(['/', '\\']);
                 rows.retain(|a| {
-                    let parent_dir = std::path::Path::new(&a.path)
-                        .parent()
-                        .map(|p| {
-                            p.to_string_lossy()
-                                .trim_end_matches(|c| c == '/' || c == '\\')
-                                .to_string()
-                        });
+                    let parent_dir = std::path::Path::new(&a.path).parent().map(|p| {
+                        p.to_string_lossy()
+                            .trim_end_matches(['/', '\\'])
+                            .to_string()
+                    });
                     parent_dir.as_deref() == Some(normalized)
                 });
             }
-            return Ok(ListResult::List(rows));
+            return Ok(ListResult::Raw(rows));
         }
 
         // 如果指定了 group_id，返回组内所有章节
         if let Some(group_id) = query.group_id {
-            return db.get_group_chapters(group_id).map(ListResult::Group);
+            return db.get_group_chapters(group_id).map(ListResult::Raw);
         }
 
         let page = query.page.unwrap_or(1);
@@ -248,22 +354,25 @@ pub async fn list_archives(
         let sort = query.sort.as_deref().unwrap_or("updated");
         let order = query.order.as_deref().unwrap_or("desc");
 
-        db.list_archives(
+        let rows = db.list_archives_all(
             query.search.as_deref(),
             query.tag.as_deref(),
             query.category_id,
             sort,
             order,
-            limit,
-            offset,
-        )
-        .map(ListResult::List)
+        )?;
+        let grouped = group_archives(rows)
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .collect();
+        Ok(ListResult::Grouped(grouped))
     })
     .await;
 
     match result {
-        Ok(ListResult::Group(chapters)) => Json(chapters).into_response(),
-        Ok(ListResult::List(archives)) => Json(archives).into_response(),
+        Ok(ListResult::Raw(archives)) => Json(archives).into_response(),
+        Ok(ListResult::Grouped(items)) => Json(items).into_response(),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -1093,4 +1202,80 @@ pub async fn list_cbz_files(State(state): State<Arc<AppState>>) -> Response {
     });
 
     Json(files).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::ArchiveRow;
+
+    fn row(id: i64, title: &str, path: &str, group_id: Option<i64>) -> ArchiveRow {
+        ArchiveRow {
+            id,
+            title: title.to_string(),
+            path: path.to_string(),
+            archive_type: "folder".to_string(),
+            page_count: 10,
+            cover_image: None,
+            file_size: 0,
+            thumbnail_path: None,
+            group_id,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn group_archives_merges_same_title_and_parent() {
+        let items = group_archives(vec![
+            row(1, "海贼王", "/manhua/海贼王/01", None),
+            row(2, "海贼王", "/manhua/海贼王/02", None),
+        ]);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].is_group);
+        assert_eq!(items[0].chapter_count, Some(2));
+        assert_eq!(items[0].auto_group, Some(true));
+        assert_eq!(items[0].parent_dir.as_deref(), Some("/manhua/海贼王"));
+    }
+
+    #[test]
+    fn group_archives_keeps_single_archive_as_plain() {
+        let items = group_archives(vec![row(1, "海贼王", "/manhua/海贼王/01", None)]);
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].is_group);
+    }
+
+    #[test]
+    fn group_archives_does_not_merge_different_parents() {
+        let items = group_archives(vec![
+            row(1, "海贼王", "/manhua/海贼王/01", None),
+            row(2, "海贼王", "/other/海贼王/02", None),
+        ]);
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|i| !i.is_group));
+    }
+
+    #[test]
+    fn group_archives_merges_case_insensitive_titles() {
+        let items = group_archives(vec![
+            row(1, "One Piece", "/manhua/one-piece/01", None),
+            row(2, "one piece", "/manhua/one-piece/02", None),
+        ]);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].is_group);
+        assert_eq!(items[0].chapter_count, Some(2));
+    }
+
+    #[test]
+    fn group_archives_merges_permanent_group() {
+        let items = group_archives(vec![
+            row(1, "海贼王", "/manhua/海贼王/01", Some(1)),
+            row(2, "海贼王", "/manhua/海贼王/02", Some(1)),
+        ]);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].is_group);
+        assert_eq!(items[0].chapter_count, Some(2));
+        assert_eq!(items[0].auto_group, None);
+        assert_eq!(items[0].archive.id, 1);
+    }
 }

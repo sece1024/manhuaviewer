@@ -65,10 +65,18 @@ describe('Library 页面', () => {
 });
 
 describe('Library 同标题自动合并', () => {
-  const groupArchives = [
+  const groupMembers = [
     { id: 1, title: '海贼王', path: '/manhua/海贼王/01', archive_type: 'folder', page_count: 10, cover_url: '/api/archives/1/cover', tags: [] },
     { id: 2, title: '海贼王', path: '/manhua/海贼王/02', archive_type: 'folder', page_count: 12, cover_url: '/api/archives/2/cover', tags: [] },
   ];
+  const groupItem = {
+    ...groupMembers[0],
+    _isGroup: true,
+    chapter_count: 2,
+    _autoGroup: true,
+    _autoKey: 'KEY',
+    _parentDir: '/manhua/海贼王',
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -78,7 +86,7 @@ describe('Library 同标题自动合并', () => {
   });
 
   test('同标题且同父目录时只渲染一张组卡片', async () => {
-    api.getArchives.mockResolvedValue(groupArchives);
+    api.getArchives.mockResolvedValue([groupItem]);
     renderLibrary();
     await waitFor(() => {
       expect(screen.getByText(/海贼王/)).toBeInTheDocument();
@@ -89,8 +97,8 @@ describe('Library 同标题自动合并', () => {
 
   test('标题相同但父目录不同时不合并', async () => {
     api.getArchives.mockResolvedValue([
-      { ...groupArchives[0] },
-      { ...groupArchives[1], path: '/other/海贼王/02' },
+      { ...groupMembers[0] },
+      { ...groupMembers[1], path: '/other/海贼王/02' },
     ]);
     renderLibrary();
     await waitFor(() => {
@@ -100,8 +108,8 @@ describe('Library 同标题自动合并', () => {
 
   test('标题不同时不合并', async () => {
     api.getArchives.mockResolvedValue([
-      { ...groupArchives[0] },
-      { ...groupArchives[1], title: '火影忍者', path: '/manhua/火影忍者/01' },
+      { ...groupMembers[0] },
+      { ...groupMembers[1], title: '火影忍者', path: '/manhua/火影忍者/01' },
     ]);
     renderLibrary();
     await waitFor(() => {
@@ -111,8 +119,8 @@ describe('Library 同标题自动合并', () => {
   });
 
   test('点击组卡片就地展开子目录名称', async () => {
-    api.getArchives.mockResolvedValue(groupArchives);
-    api.getArchivesByTitle.mockResolvedValue(groupArchives);
+    api.getArchives.mockResolvedValue([groupItem]);
+    api.getArchivesByTitle.mockResolvedValue(groupMembers);
     renderLibrary();
     await waitFor(() => {
       expect(screen.getByText(/海贼王/)).toBeInTheDocument();
@@ -128,8 +136,8 @@ describe('Library 同标题自动合并', () => {
   });
 
   test('点击展开后的章节进入阅读器', async () => {
-    api.getArchives.mockResolvedValue(groupArchives);
-    api.getArchivesByTitle.mockResolvedValue(groupArchives);
+    api.getArchives.mockResolvedValue([groupItem]);
+    api.getArchivesByTitle.mockResolvedValue(groupMembers);
     renderLibrary();
     await waitFor(() => {
       expect(screen.getByText(/海贼王/)).toBeInTheDocument();

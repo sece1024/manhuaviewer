@@ -13,29 +13,16 @@ export function splitPathParts(path) {
 }
 
 /**
- * 返回路径的父目录（完整目录路径，兼容 Windows/Unix）。
- * 例如 "/manhua/01" -> "/manhua"；"C:\\Manga\\Title" -> "C:\\Manga"。
- */
-export function pathDirname(path) {
-  if (!path) return '';
-  const parts = splitPathParts(path);
-  parts.pop();
-  if (parts.length === 0) return '';
-  const sep = path.includes('\\') ? '\\' : '/';
-  const prefix = parts.length > 1 && /^[A-Za-z]:$/.test(parts[0]) ? '' : sep;
-  return prefix + parts.join(sep);
-}
-
-/**
- * 返回路径最后一段（子目录名 / 文件名，文件时剥掉扩展名）。
+ * 返回路径最后一段（子目录名 / 文件名）。
+ * 当 stripExtension 为 true 时剥掉文件扩展名（用于压缩包）。
  * 例如 "/manhua/01" -> "01"；"C:\\Manga\\01.cbz" -> "01"。
  */
-export function lastPathPart(path) {
+export function lastPathPart(path, stripExtension = true) {
   if (!path) return '';
   const parts = splitPathParts(path);
   const last = parts[parts.length - 1];
   if (!last) return '';
-  if (path[path.length - 1] !== '/' && path[path.length - 1] !== '\\') {
+  if (stripExtension) {
     const dot = last.lastIndexOf('.');
     if (dot > 0) return last.slice(0, dot);
   }

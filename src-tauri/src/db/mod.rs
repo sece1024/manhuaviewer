@@ -17,6 +17,29 @@ fn log_and_skip<T>(row_result: std::result::Result<T, rusqlite::Error>) -> Optio
     }
 }
 
+/// 统一的档案查询列（带 `a.` 前缀，用于 JOIN 场景）。
+const ARCHIVE_COLUMNS: &str = "a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.thumbnail_path, a.group_id, a.created_at, a.updated_at";
+
+/// 档案列表过滤条件：(JOIN 片段, WHERE 片段, 参数)。
+type ArchiveFilters = (String, String, Vec<Box<dyn rusqlite::types::ToSql>>);
+
+/// 将一行查询结果映射为 `ArchiveRow`（列序必须与 `ARCHIVE_COLUMNS` 一致）。
+fn archive_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArchiveRow> {
+    Ok(ArchiveRow {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        path: row.get(2)?,
+        archive_type: row.get(3)?,
+        page_count: row.get(4)?,
+        cover_image: row.get(5)?,
+        file_size: row.get(6)?,
+        thumbnail_path: row.get(7)?,
+        group_id: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveRow {
     pub id: i64,
@@ -261,7 +284,86 @@ impl Database {
         offset: i64,
     ) -> Result<Vec<ArchiveRow>> {
         let conn = self.conn()?;
+        let (join_clause, where_clause, mut params) =
+            Self::build_archive_filters(&conn, search, tag, category_id)?;
+
+        let order_clause = match sort {
+            "name" => "a.title",
+            "created" => "a.created_at",
+            "pages" => "a.page_count",
+            "size" => "a.file_size",
+            _ => "a.updated_at",
+        };
+        let direction = if order == "asc" { "ASC" } else { "DESC" };
+
+        let sql = format!(
+            "SELECT {} FROM archives a{} {} ORDER BY {} {} LIMIT ? OFFSET ?",
+            ARCHIVE_COLUMNS, join_clause, where_clause, order_clause, direction
+        );
+
+        params.push(Box::new(limit));
+        params.push(Box::new(offset));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let archives = stmt
+            .query_map(
+                rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                archive_row,
+            )?
+            .filter_map(log_and_skip)
+            .collect();
+
+        Ok(archives)
+    }
+
+    /// 拉取所有符合过滤条件的档案（不分页），供服务端分组后统一分页。
+    pub fn list_archives_all(
+        &self,
+        search: Option<&str>,
+        tag: Option<&str>,
+        category_id: Option<i64>,
+        sort: &str,
+        order: &str,
+    ) -> Result<Vec<ArchiveRow>> {
+        let conn = self.conn()?;
+        let (join_clause, where_clause, params) =
+            Self::build_archive_filters(&conn, search, tag, category_id)?;
+
+        let order_clause = match sort {
+            "name" => "a.title",
+            "created" => "a.created_at",
+            "pages" => "a.page_count",
+            "size" => "a.file_size",
+            _ => "a.updated_at",
+        };
+        let direction = if order == "asc" { "ASC" } else { "DESC" };
+
+        let sql = format!(
+            "SELECT {} FROM archives a{} {} ORDER BY {} {}",
+            ARCHIVE_COLUMNS, join_clause, where_clause, order_clause, direction
+        );
+
+        let mut stmt = conn.prepare(&sql)?;
+        let archives = stmt
+            .query_map(
+                rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                archive_row,
+            )?
+            .filter_map(log_and_skip)
+            .collect();
+
+        Ok(archives)
+    }
+
+    /// 构造档案列表查询的 JOIN / WHERE 片段与参数（供 list_archives 与 list_archives_all 共用）。
+    fn build_archive_filters(
+        conn: &rusqlite::Connection,
+        search: Option<&str>,
+        tag: Option<&str>,
+        category_id: Option<i64>,
+    ) -> Result<ArchiveFilters> {
         let mut where_clause = String::from("WHERE 1=1");
+        let mut join_clause = String::new();
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
         if let Some(s) = search {
@@ -272,7 +374,6 @@ impl Database {
         }
 
         // 按标签过滤：支持 "namespace:name" 或 "name" 格式
-        let mut join_clause = String::new();
         if let Some(t) = tag {
             if !t.is_empty() {
                 join_clause.push_str(
@@ -309,48 +410,7 @@ impl Database {
             }
         }
 
-        // Build main query
-        let order_clause = match sort {
-            "name" => "a.title",
-            "created" => "a.created_at",
-            "pages" => "a.page_count",
-            "size" => "a.file_size",
-            _ => "a.updated_at",
-        };
-        let direction = if order == "asc" { "ASC" } else { "DESC" };
-
-        let sql = format!(
-            "SELECT a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.thumbnail_path, a.group_id, a.created_at, a.updated_at FROM archives a{} {} ORDER BY {} {} LIMIT ? OFFSET ?",
-            join_clause, where_clause, order_clause, direction
-        );
-
-        params.push(Box::new(limit));
-        params.push(Box::new(offset));
-
-        let mut stmt = conn.prepare(&sql)?;
-        let archives = stmt
-            .query_map(
-                rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
-                |row| {
-                    Ok(ArchiveRow {
-                        id: row.get(0)?,
-                        title: row.get(1)?,
-                        path: row.get(2)?,
-                        archive_type: row.get(3)?,
-                        page_count: row.get(4)?,
-                        cover_image: row.get(5)?,
-                        file_size: row.get(6)?,
-                        thumbnail_path: row.get(7)?,
-                        group_id: row.get(8)?,
-                        created_at: row.get(9)?,
-                        updated_at: row.get(10)?,
-                    })
-                },
-            )?
-            .filter_map(log_and_skip)
-            .collect();
-
-        Ok(archives)
+        Ok((join_clause, where_clause, params))
     }
 
     pub fn list_archives_by_tag(
@@ -532,7 +592,7 @@ impl Database {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at
-             FROM archives WHERE title = ? ORDER BY path",
+             FROM archives WHERE title = ? COLLATE NOCASE ORDER BY path",
         )?;
 
         let archives = stmt
@@ -1580,6 +1640,24 @@ mod tests {
 
         let none = db.get_archives_by_title("不存在").unwrap();
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn test_get_archives_by_title_case_insensitive() {
+        let db = setup_test_db();
+
+        db.insert_archive("One Piece", "/manhua/one-piece/01", "folder", 10, 100)
+            .unwrap();
+        db.insert_archive("one piece", "/manhua/one-piece/02", "folder", 12, 120)
+            .unwrap();
+        db.insert_archive("One Punch", "/manhua/one-punch/01", "folder", 8, 80)
+            .unwrap();
+
+        let matches = db.get_archives_by_title("ONE PIECE").unwrap();
+        assert_eq!(matches.len(), 2);
+        assert!(matches
+            .iter()
+            .all(|a| a.title.to_lowercase() == "one piece"));
     }
 
     #[test]

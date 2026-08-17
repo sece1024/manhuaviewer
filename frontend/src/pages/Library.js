@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
-import { formatSize, splitPathParts, pathDirname, lastPathPart } from '../utils/format';
+import { formatSize, splitPathParts, lastPathPart } from '../utils/format';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
@@ -140,7 +140,7 @@ const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, sel
 });
 
 // 展开后的章节面板（同标题自动组 / 永久合并组共用）
-const GroupChapterPanel = React.memo(function GroupChapterPanel({ loading, members, onOpenChapter }) {
+const GroupChapterPanel = React.memo(function GroupChapterPanel({ loading, members, onOpenChapter, onTag, onCategory, onRename, onRemove }) {
   return (
     <div className="archive-group-expanded">
       {loading ? (
@@ -162,10 +162,16 @@ const GroupChapterPanel = React.memo(function GroupChapterPanel({ loading, membe
               }}
             >
               <div className="archive-group-chapter-cover">
-                <LazyImage src={ch.cover_url} alt={lastPathPart(ch.path) || ch.title} />
+                <LazyImage src={ch.cover_url} alt={lastPathPart(ch.path, ch.archive_type !== 'folder') || ch.title} />
               </div>
-              <span className="archive-group-chapter-name">{lastPathPart(ch.path) || ch.title}</span>
+              <span className="archive-group-chapter-name">{lastPathPart(ch.path, ch.archive_type !== 'folder') || ch.title}</span>
               <span className="archive-group-chapter-meta">{ch.page_count} 页</span>
+              <div className="archive-group-chapter-actions">
+                <button className="archive-group-chapter-action" onClick={(e) => onTag(e, ch.id)} title="标签">🏷️</button>
+                <button className="archive-group-chapter-action" onClick={(e) => onCategory(e, ch.id)} title="分类">📂</button>
+                <button className="archive-group-chapter-action" onClick={(e) => onRename(e, ch)} title="重命名">✏️</button>
+                <button className="archive-group-chapter-action danger" onClick={(e) => onRemove(e, ch.id)} title="移除">✕</button>
+              </div>
             </div>
           ))}
         </div>
@@ -251,6 +257,9 @@ export default function Library({ mode = 'library' }) {
       setLoadingMore(true);
     } else {
       setLoading(true);
+      // 列表整体刷新（排序/过滤/增删改）后，分组结构可能变化，收起已展开的组
+      setExpandedGroup(null);
+      setGroupMembers(null);
     }
     try {
       const nextPage = append ? pageRef.current + 1 : 1;
@@ -535,56 +544,8 @@ export default function Library({ mode = 'library' }) {
     }
   };
 
-  // 将档案按 group_id 聚合：同一组显示为一个卡片
-  // 同时把「标题相同 + 父目录相同」且未手动合并的档案自动归为一组（仅显示层，不写库）
-  const groupedArchives = useMemo(() => {
-    const groups = new Map(); // group_id -> [archives]
-    const autoCandidates = [];
-
-    for (const a of archives) {
-      const gid = a.group_id;
-      if (gid) {
-        // 主档案（group_id == id）或子档案都归入永久组
-        if (!groups.has(gid)) groups.set(gid, []);
-        groups.get(gid).push(a);
-      } else {
-        autoCandidates.push(a);
-      }
-    }
-
-    // 自动分组：父目录相同 + 标题相同（忽略大小写）
-    const autoGroups = new Map(); // `${parentDir}\u0000${titleLower}` -> [archives]
-    for (const a of autoCandidates) {
-      const key = `${pathDirname(a.path)}\u0000${a.title.toLowerCase()}`;
-      if (!autoGroups.has(key)) autoGroups.set(key, []);
-      autoGroups.get(key).push(a);
-    }
-
-    const result = [];
-    // 永久合并组：每组只显示主档案卡片，附加 chapter_count
-    for (const [gid, members] of groups) {
-      const primary = members.find(a => a.id === gid) || members[0];
-      result.push({ ...primary, chapter_count: members.length, _isGroup: true });
-    }
-    // 自动组：>= 2 个成员才折叠为一张卡，否则按普通档案展示
-    for (const [key, members] of autoGroups) {
-      if (members.length < 2) {
-        result.push(members[0]);
-        continue;
-      }
-      members.sort((a, b) => a.path.localeCompare(b.path));
-      const primary = members[0];
-      result.push({
-        ...primary,
-        chapter_count: members.length,
-        _isGroup: true,
-        _autoGroup: true,
-        _autoKey: key,
-        _parentDir: pathDirname(primary.path),
-      });
-    }
-    return result;
-  }, [archives]);
+  // 分组已在服务端完成：`archives` 里的每一项要么是普通档案，要么是带 _isGroup 的组卡片。
+  const groupedArchives = archives;
 
   // 将档案按类型分成收藏（压缩包）和文件夹两组
   const compressedArchives = useMemo(() => groupedArchives.filter(a => a.archive_type !== 'folder'), [groupedArchives]);
@@ -837,6 +798,10 @@ export default function Library({ mode = 'library' }) {
                     loading={groupLoading}
                     members={groupMembers}
                     onOpenChapter={openArchive}
+                    onTag={handleOpenTagPicker}
+                    onCategory={handleOpenCategoryPicker}
+                    onRename={handleOpenRename}
+                    onRemove={handleRemoveArchive}
                   />
                 )}
               </Fragment>
@@ -864,6 +829,10 @@ export default function Library({ mode = 'library' }) {
                     loading={groupLoading}
                     members={groupMembers}
                     onOpenChapter={openArchive}
+                    onTag={handleOpenTagPicker}
+                    onCategory={handleOpenCategoryPicker}
+                    onRename={handleOpenRename}
+                    onRemove={handleRemoveArchive}
                   />
                 )}
               </Fragment>
