@@ -46,7 +46,7 @@ describe('Settings 页面', () => {
   test('显示设置区域标题', async () => {
     renderSettings();
     await waitFor(() => {
-      expect(screen.getByText('📂 目录')).toBeInTheDocument();
+      expect(screen.getByText('📂 分类管理')).toBeInTheDocument();
     });
   });
 

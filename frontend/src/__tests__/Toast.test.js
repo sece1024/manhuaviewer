@@ -44,8 +44,11 @@ describe('Toast 组件', () => {
     act(() => {
       screen.getByText('成功').click();
     });
-    const toasts = screen.getAllByText('成功');
-    const toastEl = toasts.find(el => el.classList.contains('toast'));
+    // 触发按钮与 toast 消息都包含 "成功"；取消息外层 .toast 容器验证类型 class
+    const msgEl = [...screen.getAllByText('成功')].find(el => el.classList.contains('toast-message'));
+    expect(msgEl).toBeTruthy();
+    const toastEl = msgEl.closest('.toast');
+    expect(toastEl).not.toBeNull();
     expect(toastEl).toHaveClass('toast-success');
   });
 
