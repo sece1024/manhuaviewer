@@ -368,8 +368,45 @@ impl Database {
 
         if let Some(s) = search {
             if !s.is_empty() {
-                where_clause.push_str(" AND a.title LIKE ?");
-                params.push(Box::new(format!("%{}%", s)));
+                // 解析搜索语法：tag:xxx（标签名或 ns:name）、-xxx（排除）、普通关键词（标题或标签名）
+                for token in s.split_whitespace() {
+                    if token.is_empty() {
+                        continue;
+                    }
+                    if let Some(spec) = token.strip_prefix("tag:") {
+                        let (ns, name) = match spec.split_once(':') {
+                            Some((ns, name)) => (Some(ns), name),
+                            None => (None, spec),
+                        };
+                        let mut cond = String::from(
+                            "EXISTS (SELECT 1 FROM archive_tags atx JOIN tags tx ON tx.id = atx.tag_id WHERE atx.archive_id = a.id",
+                        );
+                        if let Some(ns) = ns {
+                            cond.push_str(" AND tx.namespace = ?");
+                            params.push(Box::new(ns.to_string()));
+                        }
+                        cond.push_str(" AND tx.name = ?)");
+                        params.push(Box::new(name.to_string()));
+                        where_clause.push_str(" AND ");
+                        where_clause.push_str(&cond);
+                    } else if let Some(ex) = token.strip_prefix('-') {
+                        if !ex.is_empty() {
+                            let pattern = format!("%{}%", ex);
+                            where_clause.push_str(
+                                " AND a.title NOT LIKE ? AND NOT EXISTS (SELECT 1 FROM archive_tags atx JOIN tags tx ON tx.id = atx.tag_id WHERE atx.archive_id = a.id AND tx.name LIKE ?)",
+                            );
+                            params.push(Box::new(pattern.clone()));
+                            params.push(Box::new(pattern));
+                        }
+                    } else {
+                        let pattern = format!("%{}%", token);
+                        where_clause.push_str(
+                            " AND (a.title LIKE ? OR EXISTS (SELECT 1 FROM archive_tags atx JOIN tags tx ON tx.id = atx.tag_id WHERE atx.archive_id = a.id AND tx.name LIKE ?))",
+                        );
+                        params.push(Box::new(pattern.clone()));
+                        params.push(Box::new(pattern));
+                    }
+                }
             }
         }
 
@@ -1439,6 +1476,66 @@ mod tests {
             .unwrap();
         assert_eq!(archives.len(), 1);
         assert_eq!(archives[0].title, "Naruto");
+    }
+
+    #[test]
+    fn test_list_archives_search_syntax() {
+        let db = setup_test_db();
+
+        let naruto = db
+            .insert_archive("Naruto", "/path/naruto", "zip", 100, 5000)
+            .unwrap();
+        let naruto_2 = db
+            .insert_archive("Naruto Shippuden", "/path/naruto2", "zip", 120, 6000)
+            .unwrap();
+        let one_piece = db
+            .insert_archive("One Piece", "/path/onepiece", "zip", 200, 10000)
+            .unwrap();
+
+        let shonen = db.create_tag("genre", "shonen", "#ff0000").unwrap();
+        let adventure = db.create_tag("", "adventure", "#00ff00").unwrap();
+        db.assign_tag(naruto, shonen).unwrap();
+        db.assign_tag(naruto_2, shonen).unwrap();
+        db.assign_tag(one_piece, adventure).unwrap();
+
+        // 普通关键词：匹配标题或标签名
+        let r = db
+            .list_archives(Some("shonen"), None, None, "title", "asc", 10, 0)
+            .unwrap();
+        assert_eq!(r.len(), 2);
+
+        // tag:name —— 匹配特定标签
+        let r = db
+            .list_archives(Some("tag:adventure"), None, None, "title", "asc", 10, 0)
+            .unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].title, "One Piece");
+
+        // tag:ns:name —— 带命名空间
+        let r = db
+            .list_archives(Some("tag:genre:shonen"), None, None, "title", "asc", 10, 0)
+            .unwrap();
+        assert_eq!(r.len(), 2);
+
+        // -排除 —— 从标题和标签中排除
+        let r = db
+            .list_archives(Some("-Shippuden"), None, None, "title", "asc", 10, 0)
+            .unwrap();
+        assert!(r.iter().all(|a| a.title != "Naruto Shippuden"));
+
+        // 多关键词 AND
+        let r = db
+            .list_archives(
+                Some("Naruto tag:genre:shonen"),
+                None,
+                None,
+                "title",
+                "asc",
+                10,
+                0,
+            )
+            .unwrap();
+        assert_eq!(r.len(), 2);
     }
 
     #[test]
