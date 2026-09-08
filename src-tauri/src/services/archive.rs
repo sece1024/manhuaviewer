@@ -1,5 +1,7 @@
 use anyhow::Result;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use super::is_image_file;
 
@@ -34,6 +36,25 @@ fn resolve_tool(exe: &str, _windows_candidates: &[&str]) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// 进程级工具路径缓存：探测要 spawn 一次 `--help` 子进程，而运行期内工具是否可用不会变；
+/// 否则 RAR/7z 每读一页都会重复 spawn 一次探测进程（外加一次解压进程）。
+fn tool_cache() -> &'static Mutex<HashMap<&'static str, Option<PathBuf>>> {
+    static CACHE: OnceLock<Mutex<HashMap<&'static str, Option<PathBuf>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn resolve_tool_cached(name: &'static str, candidates: &[&str]) -> Option<PathBuf> {
+    {
+        let cache = tool_cache().lock().unwrap();
+        if let Some(hit) = cache.get(name) {
+            return hit.clone();
+        }
+    }
+    let resolved = resolve_tool(name, candidates);
+    tool_cache().lock().unwrap().insert(name, resolved.clone());
+    resolved
 }
 
 pub trait ArchiveReader {
@@ -313,8 +334,8 @@ pub fn create_archive_reader(path: &str, archive_type: &str) -> Result<Box<dyn A
         "zip" | "cbz" => Ok(Box::new(ZipArchive::new(path)?)),
         "folder" => Ok(Box::new(FolderArchive::new(path)?)),
         "rar" | "cbr" => {
-            // Check if unrar is available
-            match resolve_tool("unrar", WINDOWS_UNRAR_CANDIDATES) {
+            // Check if unrar is available（结果进程级缓存，避免每页重复探测）
+            match resolve_tool_cached("unrar", WINDOWS_UNRAR_CANDIDATES) {
                 Some(bin) => Ok(Box::new(RarArchive::new(path, bin)?)),
                 None => anyhow::bail!(
                     "RAR support requires the unrar tool. Install it via Homebrew \
@@ -324,8 +345,8 @@ pub fn create_archive_reader(path: &str, archive_type: &str) -> Result<Box<dyn A
             }
         }
         "7z" => {
-            // Check if 7z is available
-            match resolve_tool("7z", WINDOWS_7Z_CANDIDATES) {
+            // Check if 7z is available（结果进程级缓存，避免每页重复探测）
+            match resolve_tool_cached("7z", WINDOWS_7Z_CANDIDATES) {
                 Some(bin) => Ok(Box::new(SevenZArchive::new(path, bin)?)),
                 None => anyhow::bail!(
                     "7Z support requires the 7z tool. Install 7-Zip (Windows), \
@@ -335,5 +356,28 @@ pub fn create_archive_reader(path: &str, archive_type: &str) -> Result<Box<dyn A
             }
         }
         _ => anyhow::bail!("Unsupported archive type: {}", archive_type),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_tool_cached_is_deterministic_for_missing_tool() {
+        // 未知工具应稳定返回 None（缓存命中后不再重复探测）
+        let name = "manga-viewer-no-such-tool-xyz";
+        assert!(resolve_tool_cached(name, &[]).is_none());
+        assert!(resolve_tool_cached(name, &[]).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_tool_cached_finds_real_tool_on_path() {
+        // 用 /bin/true 这类接受 --help 的真实命令验证正路径缓存
+        let a = resolve_tool_cached("true", &[]);
+        let b = resolve_tool_cached("true", &[]);
+        assert_eq!(a, b);
+        assert!(a.is_some());
     }
 }
