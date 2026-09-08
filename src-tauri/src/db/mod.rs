@@ -1270,8 +1270,10 @@ impl Database {
     // Backup
     pub fn export_backup(&self) -> Result<serde_json::Value> {
         let conn = self.conn()?;
-        let mut stmt =
-            conn.prepare("SELECT title, path, archive_type, page_count FROM archives")?;
+
+        let mut stmt = conn.prepare(
+            "SELECT title, path, archive_type, page_count, file_size, cover_image FROM archives",
+        )?;
         let archives: Vec<serde_json::Value> = stmt
             .query_map([], |row| {
                 Ok(serde_json::json!({
@@ -1279,6 +1281,8 @@ impl Database {
                     "path": row.get::<_, String>(1)?,
                     "archive_type": row.get::<_, String>(2)?,
                     "page_count": row.get::<_, i64>(3)?,
+                    "file_size": row.get::<_, i64>(4)?,
+                    "cover_image": row.get::<_, Option<String>>(5)?,
                 }))
             })?
             .filter_map(log_and_skip)
@@ -1296,13 +1300,68 @@ impl Database {
             .filter_map(log_and_skip)
             .collect();
 
-        let mut stmt = conn.prepare("SELECT name, color, search FROM categories")?;
+        let mut stmt = conn.prepare("SELECT name, color, search, pinned FROM categories")?;
         let categories: Vec<serde_json::Value> = stmt
             .query_map([], |row| {
                 Ok(serde_json::json!({
                     "name": row.get::<_, String>(0)?,
                     "color": row.get::<_, String>(1)?,
                     "search": row.get::<_, String>(2)?,
+                    "pinned": row.get::<_, bool>(3)?,
+                }))
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+
+        // 关联关系与阅读历史以 path / namespace:name 为键导出，
+        // 这样导入到新机器（id 不同）也能正确重建。
+        let mut stmt = conn.prepare(
+            "SELECT a.path, t.namespace, t.name
+             FROM archive_tags at
+             JOIN archives a ON a.id = at.archive_id
+             JOIN tags t ON t.id = at.tag_id
+             ORDER BY a.path, t.namespace, t.name",
+        )?;
+        let archive_tags: Vec<serde_json::Value> = stmt
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "path": row.get::<_, String>(0)?,
+                    "namespace": row.get::<_, String>(1)?,
+                    "name": row.get::<_, String>(2)?,
+                }))
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+
+        let mut stmt = conn.prepare(
+            "SELECT a.path, c.name
+             FROM archive_categories ac
+             JOIN archives a ON a.id = ac.archive_id
+             JOIN categories c ON c.id = ac.category_id
+             ORDER BY a.path, c.name",
+        )?;
+        let archive_categories: Vec<serde_json::Value> = stmt
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "path": row.get::<_, String>(0)?,
+                    "name": row.get::<_, String>(1)?,
+                }))
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+
+        let mut stmt = conn.prepare(
+            "SELECT a.path, h.page_index, h.total_pages, h.updated_at
+             FROM history h
+             JOIN archives a ON a.id = h.archive_id",
+        )?;
+        let history: Vec<serde_json::Value> = stmt
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "path": row.get::<_, String>(0)?,
+                    "page_index": row.get::<_, i64>(1)?,
+                    "total_pages": row.get::<_, i64>(2)?,
+                    "updated_at": row.get::<_, String>(3)?,
                 }))
             })?
             .filter_map(log_and_skip)
@@ -1316,6 +1375,9 @@ impl Database {
             "archives": archives,
             "tags": tags,
             "categories": categories,
+            "archive_tags": archive_tags,
+            "archive_categories": archive_categories,
+            "history": history,
             "settings": settings,
         }))
     }
@@ -1324,7 +1386,8 @@ impl Database {
         let conn = self.conn()?;
         let tx = conn.unchecked_transaction()?;
 
-        // Import archives
+        // 导入档案：以 path 为键 upsert，绝不用 INSERT OR REPLACE——
+        // REPLACE 会先 DELETE 再 INSERT，级联删掉该档案已有的 history/标签/分类关联。
         if let Some(archives) = backup["archives"].as_array() {
             for archive in archives {
                 if let (Some(title), Some(path), Some(archive_type), Some(page_count)) = (
@@ -1334,14 +1397,26 @@ impl Database {
                     archive["page_count"].as_i64(),
                 ) {
                     tx.execute(
-                        "INSERT OR REPLACE INTO archives (title, path, archive_type, page_count) VALUES (?, ?, ?, ?)",
-                        (title, path, archive_type, page_count),
+                        "INSERT INTO archives (title, path, archive_type, page_count, file_size)
+                         VALUES (?, ?, ?, ?, ?)
+                         ON CONFLICT(path) DO UPDATE SET
+                            title = excluded.title,
+                            archive_type = excluded.archive_type,
+                            page_count = excluded.page_count,
+                            file_size = excluded.file_size",
+                        (
+                            title,
+                            path,
+                            archive_type,
+                            page_count,
+                            archive["file_size"].as_i64().unwrap_or(0),
+                        ),
                     )?;
                 }
             }
         }
 
-        // Import tags
+        // 导入标签（ns+name 唯一键）
         if let Some(tags) = backup["tags"].as_array() {
             for tag in tags {
                 if let (Some(namespace), Some(name), Some(color)) = (
@@ -1350,14 +1425,15 @@ impl Database {
                     tag["color"].as_str(),
                 ) {
                     tx.execute(
-                        "INSERT OR IGNORE INTO tags (namespace, name, color) VALUES (?, ?, ?)",
+                        "INSERT INTO tags (namespace, name, color) VALUES (?, ?, ?)
+                         ON CONFLICT(namespace, name) DO UPDATE SET color = excluded.color",
                         (namespace, name, color),
                     )?;
                 }
             }
         }
 
-        // Import categories
+        // 导入分类（name 唯一键）
         if let Some(categories) = backup["categories"].as_array() {
             for category in categories {
                 if let (Some(name), Some(color), Some(search)) = (
@@ -1366,8 +1442,71 @@ impl Database {
                     category["search"].as_str(),
                 ) {
                     tx.execute(
-                        "INSERT OR IGNORE INTO categories (name, color, search) VALUES (?, ?, ?)",
-                        (name, color, search),
+                        "INSERT INTO categories (name, color, search, pinned) VALUES (?, ?, ?, ?)
+                         ON CONFLICT(name) DO UPDATE SET
+                            color = excluded.color,
+                            search = excluded.search,
+                            pinned = excluded.pinned",
+                        (
+                            name,
+                            color,
+                            search,
+                            category["pinned"].as_bool().unwrap_or(false),
+                        ),
+                    )?;
+                }
+            }
+        }
+
+        // 重建档案-标签关联（按 path + ns:name 解析 id，存在性缺失的行自然忽略）
+        if let Some(archive_tags) = backup["archive_tags"].as_array() {
+            for at in archive_tags {
+                if let (Some(path), Some(namespace), Some(name)) = (
+                    at["path"].as_str(),
+                    at["namespace"].as_str(),
+                    at["name"].as_str(),
+                ) {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO archive_tags (archive_id, tag_id)
+                         SELECT a.id, t.id FROM archives a, tags t
+                         WHERE a.path = ? AND t.namespace = ? AND t.name = ?",
+                        (path, namespace, name),
+                    )?;
+                }
+            }
+        }
+
+        // 重建档案-分类关联
+        if let Some(archive_categories) = backup["archive_categories"].as_array() {
+            for ac in archive_categories {
+                if let (Some(path), Some(name)) = (ac["path"].as_str(), ac["name"].as_str()) {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO archive_categories (archive_id, category_id)
+                         SELECT a.id, c.id FROM archives a, categories c
+                         WHERE a.path = ? AND c.name = ?",
+                        (path, name),
+                    )?;
+                }
+            }
+        }
+
+        // 导入阅读历史（按 path 解析档案 id，恢复断点续读位置）
+        if let Some(history) = backup["history"].as_array() {
+            for h in history {
+                if let (Some(path), Some(page_index), Some(total_pages)) = (
+                    h["path"].as_str(),
+                    h["page_index"].as_i64(),
+                    h["total_pages"].as_i64(),
+                ) {
+                    let updated_at = h["updated_at"].as_str().unwrap_or_default();
+                    tx.execute(
+                        "INSERT INTO history (archive_id, page_index, total_pages, updated_at)
+                         SELECT a.id, ?1, ?2, ?3 FROM archives a WHERE a.path = ?4
+                         ON CONFLICT(archive_id) DO UPDATE SET
+                            page_index = excluded.page_index,
+                            total_pages = excluded.total_pages,
+                            updated_at = excluded.updated_at",
+                        (page_index, total_pages, updated_at, path),
                     )?;
                 }
             }
@@ -1761,20 +1900,27 @@ mod tests {
     fn test_backup_and_restore() {
         let db1 = setup_test_db();
 
-        // Add some data
-        db1.insert_archive("Manga A", "/path/a", "zip", 10, 500)
+        // Add some data：档案 + 标签/分类绑定 + 阅读历史
+        let a_id = db1
+            .insert_archive("Manga A", "/path/a", "zip", 10, 500)
             .unwrap();
-        db1.create_tag("", "favorite", "#ff0000").unwrap();
-        db1.create_category("Action", "#00ff00", false, "").unwrap();
+        let tag_id = db1.create_tag("", "favorite", "#ff0000").unwrap();
+        let cat_id = db1.create_category("Action", "#00ff00", false, "").unwrap();
+        db1.assign_tag(a_id, tag_id).unwrap();
+        db1.assign_category(a_id, cat_id).unwrap();
+        db1.save_history(a_id, 6, 10).unwrap();
 
         // Export backup
         let backup = db1.export_backup().unwrap();
+        assert!(backup["archive_tags"].is_array());
+        assert!(backup["archive_categories"].is_array());
+        assert_eq!(backup["history"].as_array().unwrap().len(), 1);
 
         // Create new database and restore
         let db2 = setup_test_db();
         db2.import_backup(&backup).unwrap();
 
-        // Verify data
+        // Verify archives / tags / categories
         let archives = db2
             .list_archives(None, None, None, "title", "asc", 10, 0)
             .unwrap();
@@ -1788,6 +1934,61 @@ mod tests {
         let categories = db2.list_categories().unwrap();
         assert_eq!(categories.len(), 1);
         assert_eq!(categories[0].name, "Action");
+
+        // Verify history and associations survived（id 跨库不同，按 path/ns:name 重建）
+        let restored_a = db2.get_archive_by_path("/path/a").unwrap().unwrap();
+        let history = db2.get_history_for_archive(restored_a.id).unwrap().unwrap();
+        assert_eq!(history.page_index, 6);
+        assert_eq!(history.total_pages, 10);
+        let restored_tags = db2.get_archive_tags(restored_a.id).unwrap();
+        assert_eq!(restored_tags.len(), 1);
+        assert_eq!(restored_tags[0].name, "favorite");
+        let restored_cats = db2.get_archive_categories(restored_a.id).unwrap();
+        assert_eq!(restored_cats.len(), 1);
+        assert_eq!(restored_cats[0].name, "Action");
+    }
+
+    #[test]
+    fn test_restore_never_replaces_existing_archive() {
+        // 回归：旧实现用 INSERT OR REPLACE 导入，先 DELETE 再 INSERT 会通过
+        // ON DELETE CASCADE 删掉该 path 已有的 history/标签/分类。导入必须保留档案 id 与关联。
+        let source = setup_test_db();
+        let a_id = source
+            .insert_archive("Manga A", "/path/a", "zip", 10, 500)
+            .unwrap();
+        let src_tag = source.create_tag("", "src", "#ff0000").unwrap();
+        source.assign_tag(a_id, src_tag).unwrap();
+        source.save_history(a_id, 8, 10).unwrap();
+        let backup = source.export_backup().unwrap();
+
+        // 目标库中同 path 档案已存在，且有自己的历史与标签
+        let target = setup_test_db();
+        let existing_id = target
+            .insert_archive("Manga A", "/path/a", "folder", 20, 999)
+            .unwrap();
+        let keep_tag = target.create_tag("", "keep", "#00ff00").unwrap();
+        target.assign_tag(existing_id, keep_tag).unwrap();
+        target.save_history(existing_id, 2, 20).unwrap();
+
+        target.import_backup(&backup).unwrap();
+
+        // id 不变（未 DELETE），已有历史被备份值覆盖，已有标签被保留
+        let after = target.get_archive_by_path("/path/a").unwrap().unwrap();
+        assert_eq!(after.id, existing_id, "导入不应替换已存在档案");
+        let history = target
+            .get_history_for_archive(existing_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(history.page_index, 8);
+        assert_eq!(history.total_pages, 10);
+        let tag_names: Vec<String> = target
+            .get_archive_tags(existing_id)
+            .unwrap()
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert!(tag_names.contains(&"keep".to_string()), "已有标签不应丢失");
+        assert!(tag_names.contains(&"src".to_string()), "备份标签应被导入");
     }
 
     #[test]
