@@ -97,6 +97,16 @@ async fn main() {
         last_thumb_eviction: Arc::new(Mutex::new(None)),
     };
 
+    // 定时备份后台任务（每小时检查一次设置，默认关闭）
+    {
+        let backup_db = state.db.clone();
+        let backup_data_dir = data_dir.clone();
+        tokio::spawn(crate::services::backup::backup_loop(
+            backup_db,
+            backup_data_dir,
+        ));
+    }
+
     // Build Axum router for API
     let api_router = routes::create_router(state.clone());
 

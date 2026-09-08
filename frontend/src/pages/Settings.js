@@ -550,6 +550,35 @@ export default function Settings() {
           </label>
           {importing && <span style={{ fontSize: 13, color: 'var(--text-secondary)', alignSelf: 'center' }}>导入中...</span>}
         </div>
+        <div className="settings-row" style={{ marginTop: 14 }}>
+          <div>
+            <div className="settings-row-label">定时自动备份</div>
+            <div className="settings-row-desc">
+              按间隔自动把完整数据备份到应用数据目录 backups/ 下并保留最近 N 份；0=关闭
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <select
+              value={settings.backup_interval_hours || '0'}
+              onChange={(e) => handleUpdateSetting('backup_interval_hours', e.target.value)}
+              aria-label="自动备份间隔"
+            >
+              <option value="0">关闭</option>
+              <option value="1">每小时</option>
+              <option value="6">每 6 小时</option>
+              <option value="12">每 12 小时</option>
+              <option value="24">每天</option>
+              <option value="168">每周</option>
+            </select>
+            <select
+              value={settings.backup_keep || '10'}
+              onChange={(e) => handleUpdateSetting('backup_keep', e.target.value)}
+              aria-label="保留份数"
+            >
+              {[3, 5, 10, 20].map(n => <option key={n} value={n}>{n} 份</option>)}
+            </select>
+          </div>
+        </div>
       </div>
         </div>
       </div>
