@@ -8,45 +8,66 @@ import useGamepad from '../hooks/useGamepad';
 import TagPicker from '../components/TagPicker';
 import Modal from '../components/Modal';
 
-// 长图模式页面列表：memoized，仅当 pages/visibleRange/pageHeights 变化时重渲染，
-// 配合稳定的 sentinel ref 避免每次滚动触发全量 ref 重挂载。
-// pageHeights：已加载过页面按真实显示高度占位，消除“250px 占位 vs 真实高度”造成的
-// 滚动↔页码错位（远距离跳页/回滚时尤为明显）。
+// —— 长图模式虚拟滚动 ——
+// 只渲染可视窗口 ± OVERSCAN 页的 DOM 节点；窗口外用上下 spacer 撑出总高度维持滚动条。
+// 未测量页面按 EST_PAGE_HEIGHT 估算，已在 pageHeights 中的页面按真实显示高度累加，
+// 因此滚动↔页码定位与“全量挂载占位”时精度一致，但 DOM 节点从上千降到几十个。
+const OVERSCAN = 10; // 窗口上下各多渲染的页数，保证快速滚动时 sentinel 已就位
+const EST_PAGE_HEIGHT = 250; // 未测量页面的估算显示高度（与旧版占位一致）
+
+// 累加 [start, end) 区间页面的预计高度（已测量的用真实值，否则用估算值）
+function sumHeights(start, end, pageHeights) {
+  let total = 0;
+  for (let i = start; i < end; i++) total += pageHeights[i] || EST_PAGE_HEIGHT;
+  return total;
+}
+
 const LongImageList = React.memo(function LongImageList({ pages, visibleRange, sentinelRef, imgStyle, pageHeights, onImageLoad }) {
+  const start = Math.max(0, visibleRange.start - OVERSCAN);
+  const end = Math.min(pages.length, visibleRange.end + OVERSCAN);
+
+  const topSpacer = sumHeights(0, start, pageHeights);
+  const bottomSpacer = sumHeights(end, pages.length, pageHeights);
+
+  const windowed = [];
+  for (let i = start; i < end; i++) {
+    const p = pages[i];
+    const inRange = i >= visibleRange.start && i < visibleRange.end;
+    windowed.push(
+      <div
+        key={p.id}
+        ref={sentinelRef}
+        data-idx={i}
+        style={{ width: '100%', minHeight: inRange ? undefined : (pageHeights[i] || EST_PAGE_HEIGHT) }}
+      >
+        {inRange ? (
+          <img
+            src={p.url}
+            alt={p.filename}
+            loading="lazy"
+            decoding="async"
+            style={imgStyle}
+            onError={(e) => { e.target.style.display = 'none'; }}
+            onLoad={(e) => {
+              // 记录真实渲染高度（宽 100%，高度=容器宽×原始高宽比），供占位与跳页定位使用
+              const img = e.currentTarget;
+              const container = img.parentElement;
+              const cw = container ? container.clientWidth : 0;
+              const nh = img.naturalHeight || 0;
+              const nw = img.naturalWidth || 1;
+              if (cw > 0 && nh > 0) onImageLoad(i, Math.round((cw * nh) / nw));
+            }}
+          />
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', touchAction: 'pan-y', width: '100%' }}>
-      {pages.map((p, i) => {
-        const inRange = i >= visibleRange.start && i < visibleRange.end;
-        const measured = pageHeights[i];
-        return (
-          <div
-            key={p.id}
-            ref={sentinelRef}
-            data-idx={i}
-            style={{ width: '100%', minHeight: inRange ? undefined : (measured || 250) }}
-          >
-            {inRange ? (
-              <img
-                src={p.url}
-                alt={p.filename}
-                loading="lazy"
-                decoding="async"
-                style={imgStyle}
-                onError={(e) => { e.target.style.display = 'none'; }}
-                onLoad={(e) => {
-                  // 记录真实渲染高度（宽 100%，高度=容器宽×原始高宽比），供占位与跳页定位使用
-                  const img = e.currentTarget;
-                  const container = img.parentElement;
-                  const cw = container ? container.clientWidth : 0;
-                  const nh = img.naturalHeight || 0;
-                  const nw = img.naturalWidth || 1;
-                  if (cw > 0 && nh > 0) onImageLoad(i, Math.round((cw * nh) / nw));
-                }}
-              />
-            ) : null}
-          </div>
-        );
-      })}
+      {topSpacer > 0 && <div aria-hidden="true" style={{ height: topSpacer, flexShrink: 0 }} />}
+      {windowed}
+      {bottomSpacer > 0 && <div aria-hidden="true" style={{ height: bottomSpacer, flexShrink: 0 }} />}
     </div>
   );
 });
@@ -111,11 +132,16 @@ export default function Reader() {
 
   // 稳定的 sentinel ref 回调：从 data-idx 读索引，避免每次渲染产生新函数
   // 导致 React 对所有已挂载元素反复 detach/attach ref。
+  // 返回清理函数（React 19 ref cleanup）：节点卸载时移除映射，避免窗口滑动累积旧节点引用。
   const setSentinelRef = useCallback((el) => {
     if (el) {
       const idx = Number(el.dataset.idx);
       sentinelRefs.current[idx] = el;
+      return () => {
+        if (sentinelRefs.current[idx] === el) delete sentinelRefs.current[idx];
+      };
     }
+    return undefined;
   }, []);
 
   // 长图模式已加载页的真实高度缓存（idx -> px），用于占位与跳页定位
@@ -418,8 +444,10 @@ export default function Reader() {
       }
     }, { root: containerRef.current, rootMargin: '1500px 0px' });
 
-    // 观察全部页面哨兵（单 observer + 批量 target，代价可控；相比抽样能精确定位当前页）
-    for (let i = 0; i < pages.length; i++) {
+    // 只观察当前渲染窗口内的哨兵（窗口化虚拟滚动后其余页无 DOM 节点可观察）
+    const winStart = Math.max(0, visibleRange.start - OVERSCAN);
+    const winEnd = Math.min(pages.length, visibleRange.end + OVERSCAN);
+    for (let i = winStart; i < winEnd; i++) {
       const el = sentinelRefs.current[i];
       if (el) observer.observe(el);
     }
@@ -427,7 +455,7 @@ export default function Reader() {
     return () => {
       observer.disconnect();
     };
-  }, [longImage, pages]);
+  }, [longImage, pages, visibleRange]);
 
   // 进入长图模式：从当前页继续（含恢复进度后的位置）
   useEffect(() => {
