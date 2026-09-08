@@ -172,9 +172,11 @@ const api = {
   getBookmarks: (archiveId) =>
     request(`/archives/${archiveId}/bookmarks`).then(r => (r && Array.isArray(r.pages) ? r.pages : [])),
   addBookmark: (archiveId, pageIndex) =>
-    request(`/archives/${archiveId}/bookmarks`, { method: 'POST', body: JSON.stringify({ page_index: pageIndex }) }),
+    request(`/archives/${archiveId}/bookmarks`, { method: 'POST', body: JSON.stringify({ page_index: pageIndex }) })
+      .then(r => { _invalidate(`/archives/${archiveId}/bookmarks`); return r; }),
   removeBookmark: (archiveId, pageIndex) =>
-    request(`/archives/${archiveId}/bookmarks/${pageIndex}`, { method: 'DELETE' }),
+    request(`/archives/${archiveId}/bookmarks/${pageIndex}`, { method: 'DELETE' })
+      .then(r => { _invalidate(`/archives/${archiveId}/bookmarks`); return r; }),
   deleteArchive: (id) =>
     request(`/archives/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/archives'); _invalidate('/history'); return r; }),
   batchDeleteArchives: (ids) =>
