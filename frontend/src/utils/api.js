@@ -183,6 +183,10 @@ const api = {
   updateTitle: (id, title) =>
     request(`/archives/${id}/title`, { method: 'PUT', body: JSON.stringify({ title }) })
       .then(r => { _invalidate('/archives'); return r; }),
+  // 手动封面：pageIndex=null 恢复默认（首页）
+  setArchiveCover: (id, pageIndex) =>
+    request(`/archives/${id}/cover`, { method: 'PUT', body: JSON.stringify({ page_index: pageIndex }) })
+      .then(r => { _invalidate('/archives'); return r; }),
   regenerateTitles: () =>
     request('/archives/regenerate-titles', { method: 'POST' })
       .then(r => { _invalidate('/archives'); _invalidate('/history'); return r; }),

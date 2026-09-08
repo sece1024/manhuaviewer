@@ -861,6 +861,18 @@ impl Database {
         Ok(evicted)
     }
 
+    /// 设置/清除手动封面页（cover_image 存档案内页面名；None 恢复默认首页）。
+    pub fn set_archive_cover(&self, id: i64, cover: Option<&str>) -> Result<usize> {
+        let conn = self.conn()?;
+        match cover {
+            Some(c) => conn.execute(
+                "UPDATE archives SET cover_image = ?1 WHERE id = ?2",
+                (c, id),
+            ),
+            None => conn.execute("UPDATE archives SET cover_image = NULL WHERE id = ?", [id]),
+        }
+    }
+
     // Tag operations
     pub fn list_tags(&self) -> Result<Vec<TagRow>> {
         let conn = self.conn()?;
@@ -2165,6 +2177,24 @@ mod tests {
             .insert_archive("Manga B", "/path/b", "zip", 5, 100)
             .unwrap();
         assert!(db.list_bookmarks(b).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_set_archive_cover() {
+        let db = setup_test_db();
+        let a = db
+            .insert_archive("Manga A", "/path/a", "zip", 10, 100)
+            .unwrap();
+
+        db.set_archive_cover(a, Some("page02.jpg")).unwrap();
+        assert_eq!(
+            db.get_archive(a).unwrap().unwrap().cover_image.as_deref(),
+            Some("page02.jpg")
+        );
+
+        // 恢复默认
+        db.set_archive_cover(a, None).unwrap();
+        assert!(db.get_archive(a).unwrap().unwrap().cover_image.is_none());
     }
 
     #[test]

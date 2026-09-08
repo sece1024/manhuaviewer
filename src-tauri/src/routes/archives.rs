@@ -205,12 +205,12 @@ fn etag_for_page(id: i64, page_index: i64, mtime: Option<SystemTime>) -> String 
     format!("\"p-{}-{}-{}\"", id, page_index, secs)
 }
 
-fn etag_for_cover(id: i64, mtime: Option<SystemTime>) -> String {
+fn etag_for_cover(id: i64, mtime: Option<SystemTime>, override_key: Option<&str>) -> String {
     let secs = mtime
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    format!("\"c-{}-{}\"", id, secs)
+    format!("\"c-{}-{}-{}\"", id, secs, override_key.unwrap_or(""))
 }
 
 fn http_date(t: SystemTime) -> Option<String> {
@@ -559,15 +559,20 @@ pub async fn get_cover(
     Path(id): Path<i64>,
     headers: HeaderMap,
 ) -> Response {
-    let (archive_path, archive_type, thumb_already_set) =
+    let (archive_path, archive_type, thumb_already_set, cover_override) =
         match super::run_db(&state, move |db| db.get_archive(id)).await {
-            Ok(Some(a)) => (a.path, a.archive_type, a.thumbnail_path.is_some()),
+            Ok(Some(a)) => (
+                a.path,
+                a.archive_type,
+                a.thumbnail_path.is_some(),
+                a.cover_image,
+            ),
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
             Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         };
 
     let mtime = archive_mtime(&archive_path);
-    let etag = etag_for_cover(id, mtime);
+    let etag = etag_for_cover(id, mtime, cover_override.as_deref());
     let last_modified = mtime.and_then(http_date);
 
     if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
@@ -612,7 +617,11 @@ pub async fn get_cover(
             &archive_type,
             Some(extract_dir),
         )?;
-        let cover = reader.get_cover()?;
+        // 用户手动指定过封面页时优先用该页，否则取首页
+        let cover = match &cover_override {
+            Some(name) if !name.is_empty() => reader.extract_page(name)?,
+            _ => reader.get_cover()?,
+        };
         match crate::services::thumbnail::ThumbnailGenerator::default().generate(&cover) {
             Ok(thumb) => {
                 std::fs::create_dir_all(&thumb_dir)?;
@@ -1442,6 +1451,73 @@ pub async fn remove_bookmark(
 ) -> Response {
     match super::run_db(&state, move |db| db.remove_bookmark(id, page_index)).await {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SetCoverRequest {
+    pub page_index: Option<i64>,
+}
+
+/// 设置/清除手动封面：page_index=Some(i) 用第 i 页作封面，None 恢复默认（首页）。
+pub async fn set_archive_cover(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(payload): Json<SetCoverRequest>,
+) -> Response {
+    let archive_row = match super::run_db(&state, move |db| db.get_archive(id)).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+
+    let page_name = if let Some(idx) = payload.page_index {
+        if idx < 0 {
+            return error_response(StatusCode::BAD_REQUEST, "page_index 不能为负");
+        }
+        let path = archive_row.path.clone();
+        let atype = archive_row.archive_type.clone();
+        let db = state.db.clone();
+        let mtime_secs = archive_mtime_secs(&path);
+        let name = tokio::task::spawn_blocking(move || {
+            let pages = load_page_rows(&db, id, &path, &atype, mtime_secs)?;
+            let i = idx as usize;
+            if i >= pages.len() {
+                anyhow::bail!("Page index {} out of range (total: {})", i, pages.len());
+            }
+            Ok::<String, anyhow::Error>(pages[i].filepath.clone())
+        })
+        .await
+        .map_err(|e| format!("task error: {}", e));
+        match name {
+            Ok(Ok(n)) => Some(n),
+            Ok(Err(e)) => {
+                let msg = e.to_string();
+                return if msg.contains("out of range") {
+                    error_response(StatusCode::BAD_REQUEST, &msg)
+                } else {
+                    error_response(StatusCode::INTERNAL_SERVER_ERROR, &msg)
+                };
+            }
+            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e),
+        }
+    } else {
+        None
+    };
+
+    let cover_for_db = page_name.clone();
+    let upd = super::run_db(&state, move |db| {
+        db.set_archive_cover(id, cover_for_db.as_deref())
+    })
+    .await;
+    match upd {
+        Ok(_) => {
+            // 清掉旧封面缩略图，强制下次按新封面重新生成（浏览器的 ETag 也随覆写变化）
+            let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
+            let _ = tokio::fs::remove_file(thumb_dir.join("cover.jpg")).await;
+            Json(serde_json::json!({ "success": true, "cover_image": page_name })).into_response()
+        }
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }

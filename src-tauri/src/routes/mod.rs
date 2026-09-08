@@ -68,7 +68,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/archives/:id", get(archives::get_archive))
         .route("/archives/:id", delete(archives::delete_archive))
         .route("/archives/:id/title", put(archives::update_archive_title))
-        .route("/archives/:id/cover", get(archives::get_cover))
+        .route(
+            "/archives/:id/cover",
+            get(archives::get_cover).put(archives::set_archive_cover),
+        )
         .route("/archives/:id/pages", get(archives::list_pages))
         .route("/archives/:id/pages/:page", get(archives::get_page))
         .route(

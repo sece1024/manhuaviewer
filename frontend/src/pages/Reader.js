@@ -563,6 +563,26 @@ export default function Reader() {
     }
   }, [archiveId, bookmarks, showOverlay, toast]);
 
+  const handleSetCover = useCallback(async () => {
+    const id = parseInt(archiveId);
+    try {
+      await api.setArchiveCover(id, currentIndexRef.current);
+      toast('已把当前页设为封面', 'success');
+    } catch (e) {
+      toast(e.message || '设置封面失败', 'error');
+    }
+  }, [archiveId, toast]);
+
+  const handleResetCover = useCallback(async () => {
+    const id = parseInt(archiveId);
+    try {
+      await api.setArchiveCover(id, null);
+      toast('已恢复默认封面（首页）', 'success');
+    } catch (e) {
+      toast(e.message || '恢复封面失败', 'error');
+    }
+  }, [archiveId, toast]);
+
   // 触摸手势
   const getTouchDist = (touches) => {
     const dx = touches[0].clientX - touches[1].clientX;
@@ -853,6 +873,8 @@ export default function Reader() {
           <button className="btn btn-secondary btn-sm" onClick={handleToggleBookmark}>
             {bookmarks.has(currentIndex) ? '🔖 移除书签' : '🔖 添加书签'}
           </button>
+          <button className="btn btn-secondary btn-sm" onClick={handleSetCover}>🖼 设当前页为封面</button>
+          <button className="btn btn-secondary btn-sm" onClick={handleResetCover}>默认封面</button>
           <button className="btn btn-secondary btn-sm" onClick={() => { setShowTagPicker(true); setShowMenu(false); }}>🏷️ 标签</button>
           {archive && archive.archive_type === 'folder' && (
             <button className="btn btn-secondary btn-sm" onClick={() => { handlePackCbz(); setShowMenu(false); }} disabled={packing}>
