@@ -13,7 +13,8 @@ use axum::{
     Json, Router,
 };
 use std::sync::Arc;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
 
 pub fn error_response(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
@@ -36,9 +37,30 @@ where
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
 }
 
+/// 局域网模式的可选前端：若构建产物 frontend/build 存在，则用 HTTP 提供 SPA
+/// （浏览器直接访问 http://<host>:<port>/）。未构建/打包安装时优雅返回 404，桌面端不受影响。
+fn static_fallback() -> ServeDir {
+    let dist = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../frontend/build");
+    ServeDir::new(dist)
+}
+
 pub fn create_router(state: AppState) -> Router {
-    // 生产模式下前端从 tauri://localhost 加载，需要 CORS
-    let cors = CorsLayer::permissive();
+    // CORS 只放行自己的前端来源（Tauri 生产 origin + 本机开发端口）。
+    // 局域网模式下 UI 与 API 同源，不需要通配；通配会让任意网页跨站调用本地库。
+    let origins: Vec<axum::http::HeaderValue> = [
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "http://localhost:1420",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+    .iter()
+    .map(|s| s.parse().expect("static origin header"))
+    .collect();
+    let cors = CorsLayer::new()
+        .allow_origin(tower_http::cors::AllowOrigin::list(origins))
+        .allow_methods(Any)
+        .allow_headers(Any);
 
     let api_routes = Router::new()
         // Archives
@@ -129,5 +151,6 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api", api_routes)
         .nest("/opds", opds_routes)
         .layer(cors)
+        .fallback_service(static_fallback())
         .with_state(Arc::new(state))
 }

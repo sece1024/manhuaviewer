@@ -77,6 +77,19 @@ async fn main() {
 
     info!("Database initialized at {:?}", db_path);
 
+    // 监听地址：环境变量 BIND_ADDR > 设置 server_bind（默认仅本机 127.0.0.1）。
+    // 改为 0.0.0.0 后在局域网其它设备可通过 http://<本机IP>:<端口>/ 访问（需重启应用生效）。
+    let bind_addr = std::env::var("BIND_ADDR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            database
+                .get_setting("server_bind")
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+
     // Create app state
     let state = AppState {
         db: Arc::new(database),
@@ -109,7 +122,7 @@ async fn main() {
                     .unwrap_or(5002);
 
                 let listener =
-                    match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
+                    match tokio::net::TcpListener::bind(format!("{}:{}", bind_addr, port)).await {
                         Ok(l) => l,
                         Err(e) => fatal_error(
                             &format!(

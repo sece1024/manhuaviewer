@@ -392,6 +392,19 @@ export default function Settings() {
             </button>
           </div>
         </div>
+        <div className="settings-row">
+          <div>
+            <div className="settings-row-label">局域网访问</div>
+            <div className="settings-row-desc">
+              设为「仅本机」时服务只监听 127.0.0.1；设为「局域网」后在手机/平板浏览器访问 http://本机IP:5002/ 或任意 OPDS 阅读器。
+              <strong> 重启应用后生效</strong>
+            </div>
+          </div>
+          <select value={settings.server_bind || '127.0.0.1'} onChange={(e) => handleUpdateSetting('server_bind', e.target.value)} aria-label="局域网访问">
+            <option value="127.0.0.1">仅本机</option>
+            <option value="0.0.0.0">局域网（重启生效）</option>
+          </select>
+        </div>
       </div>
 
       {/* 阅读器设置 */}
