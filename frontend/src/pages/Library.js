@@ -226,6 +226,7 @@ export default function Library({ mode = 'library' }) {
   const [groupMembers, setGroupMembers] = useState(null);
   const [groupLoading, setGroupLoading] = useState(false);
   const activeGroupRef = useRef(null); // 防止过期请求覆盖新展开组的数据
+  const expandedGroupRef = useRef(null); // 镜像 expandedGroup，供稳定的 toggleGroup 引用读取
   // 窄屏：把次要操作收进 ⋯ 菜单
   const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
   // 分页状态（page 用 ref，避免 loadMore 的 memoized 闭包读到过期值）
@@ -256,6 +257,7 @@ export default function Library({ mode = 'library' }) {
   useEffect(() => { readFilterRef.current = readFilter; }, [readFilter]);
   useEffect(() => { selectedCategoryRef.current = selectedCategory; }, [selectedCategory]);
   useEffect(() => { searchRef.current = search; }, [search]);
+  useEffect(() => { expandedGroupRef.current = expandedGroup; }, [expandedGroup]);
 
   const reloadCategories = useCallback(() => {
     return api.getCategories().then(data => { setCategories(data); return data; }).catch(() => []);
@@ -613,11 +615,13 @@ export default function Library({ mode = 'library' }) {
   // 组展开/收起：永久合并组走 getGroupChapters，同标题自动组走 getArchivesByTitle
   const toggleGroup = useCallback(async (a) => {
     const key = a._autoGroup ? a._autoKey : `g:${a.id}`;
-    if (expandedGroup === key) {
+    if (expandedGroupRef.current === key) {
+      expandedGroupRef.current = null;
       setExpandedGroup(null);
       setGroupMembers(null);
       return;
     }
+    expandedGroupRef.current = key;
     setExpandedGroup(key);
     setGroupMembers(null);
     setGroupLoading(true);
@@ -633,12 +637,13 @@ export default function Library({ mode = 'library' }) {
     } catch (e) {
       if (activeGroupRef.current === key) {
         toast(e.message, 'error');
+        expandedGroupRef.current = null;
         setExpandedGroup(null);
       }
     } finally {
       if (activeGroupRef.current === key) setGroupLoading(false);
     }
-  }, [expandedGroup, toast]);
+  }, [toast]);
 
   const handleExitSelectMode = () => {
     setSelectMode(false);
