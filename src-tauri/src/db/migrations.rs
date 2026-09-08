@@ -49,6 +49,23 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Add file_mtime column to archives if missing (incremental scan skip / orphan cleanup)
+    let has_file_mtime: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('archives') WHERE name='file_mtime'",
+            [],
+            |row| row.get::<_, i64>(0).map(|c| c > 0),
+        )
+        .unwrap_or(false);
+
+    if !has_file_mtime {
+        tracing::info!("Adding file_mtime column to archives...");
+        conn.execute(
+            "ALTER TABLE archives ADD COLUMN file_mtime INTEGER DEFAULT 0",
+            [],
+        )?;
+    }
+
     // Add title_auto column to archives if missing
     let has_title_auto: bool = conn
         .query_row(

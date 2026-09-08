@@ -967,6 +967,7 @@ pub async fn open_file(
         let file_size = std::fs::metadata(&file_path)
             .map(|m| m.len() as i64)
             .unwrap_or(0);
+        let file_mtime = archive_mtime_secs(&file_path);
 
         let page_count = match crate::services::archive::create_archive_reader(
             &file_path,
@@ -976,12 +977,12 @@ pub async fn open_file(
             Err(_) => 0,
         };
 
-        Ok((title, file_size, page_count))
+        Ok((title, file_size, page_count, file_mtime))
     })
     .await;
 
     match result {
-        Ok(Ok((title, file_size, page_count))) => {
+        Ok(Ok((title, file_size, page_count, file_mtime))) => {
             if page_count == 0 {
                 let msg = if archive_type == "folder" {
                     "文件夹中没有找到图片文件"
@@ -996,7 +997,14 @@ pub async fn open_file(
                 let title = title.clone();
                 let archive_type = archive_type.clone();
                 move |db| {
-                    db.insert_archive(&title, &file_path, &archive_type, page_count, file_size)
+                    db.upsert_scanned_archive(
+                        &title,
+                        &file_path,
+                        &archive_type,
+                        page_count,
+                        file_size,
+                        file_mtime,
+                    )
                 }
             })
             .await;
@@ -1057,16 +1065,54 @@ pub async fn scan(
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
-    // Scan directory and count pages in blocking thread
-    let result = tokio::task::spawn_blocking(move || {
+    // 增量扫描 + 孤儿清理，全部在阻塞线程执行
+    let db = state.db.clone();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
         let scanner = crate::services::scanner::Scanner::new();
-        let archives = scanner.scan_directory(&root_dir, depth)?;
+        let discovered = scanner.scan_directory(&root_dir, depth)?;
+        let present: std::collections::HashSet<String> = discovered.iter().cloned().collect();
 
-        let mut archive_infos = Vec::new();
-        for archive_path in &archives {
+        // 快照：本 root 下已入库档案的 (page_count, file_size, file_mtime)
+        let meta = db.scan_meta_for_root(&root_dir)?;
+        let meta_by_path: std::collections::HashMap<&str, (i64, i64, i64)> = meta
+            .iter()
+            .map(|(p, pc, fs, fm)| (p.as_str(), (*pc, *fs, *fm)))
+            .collect();
+
+        let mut added = 0usize;
+        let mut updated = 0usize;
+
+        for archive_path in &discovered {
             let archive_type = scanner.detect_archive_type(archive_path);
+            let path = std::path::Path::new(archive_path);
+
+            let file_size = std::fs::metadata(archive_path)
+                .map(|m| m.len() as i64)
+                .unwrap_or(0);
+            let file_mtime = archive_mtime_secs(archive_path);
+            let existing = meta_by_path.get(archive_path.as_str()).copied();
+
+            // 文件签名（mtime+size）与已入库一致且已有页数 → 完全跳过，不再开包数页
+            if let Some((pc, fs, fm)) = existing {
+                if fm == file_mtime && fs == file_size && pc > 0 {
+                    continue;
+                }
+                updated += 1;
+            } else {
+                added += 1;
+            }
+
+            // 仅在需要时重新数页（签名变化 / 新增 / 此前未数到页数）
+            let page_count = match existing {
+                Some((pc, fs, fm)) if fm == file_mtime && fs == file_size && pc > 0 => pc,
+                _ => crate::services::archive::create_archive_reader(archive_path, &archive_type)
+                    .ok()
+                    .and_then(|r| r.list_pages().ok())
+                    .map(|p| p.len() as i64)
+                    .unwrap_or(0),
+            };
+
             let title = {
-                let path = std::path::Path::new(archive_path);
                 let relative = path.strip_prefix(&root_dir).unwrap_or(path);
                 let first = relative.components().next();
                 match first {
@@ -1090,50 +1136,44 @@ pub async fn scan(
                 }
             };
 
-            let file_size = std::fs::metadata(archive_path)
-                .map(|m| m.len() as i64)
-                .unwrap_or(0);
-
-            let page_count = match crate::services::archive::create_archive_reader(
+            db.upsert_scanned_archive(
+                &title,
                 archive_path,
                 &archive_type,
-            ) {
-                Ok(reader) => reader.list_pages().map(|p| p.len() as i64).unwrap_or(0),
-                Err(_) => 0,
-            };
-
-            archive_infos.push((
-                title,
-                archive_path.clone(),
-                archive_type,
                 page_count,
                 file_size,
-            ));
+                file_mtime,
+            )?;
         }
 
-        Ok::<_, anyhow::Error>(archive_infos)
+        // 清理孤儿档案：本 root 下磁盘已消失的路径（只清本 root，不影响其它根）
+        let mut removed = 0usize;
+        for (row_path, _pc, _fs, _fm) in meta {
+            if !present.contains(&row_path) {
+                tracing::info!("Scan cleanup: removing orphan archive {}", row_path);
+                db.delete_archive_by_path(&row_path)?;
+                removed += 1;
+            }
+        }
+
+        Ok(serde_json::json!({
+            "scanned": discovered.len(),
+            "added": added,
+            "updated": updated,
+            "removed": removed,
+            "message": format!(
+                "扫描完成：共 {} 个档案，新增 {}，更新 {}，清理 {} 个已删除档案",
+                discovered.len(),
+                added,
+                updated,
+                removed
+            )
+        }))
     })
     .await;
 
     match result {
-        Ok(Ok(archive_infos)) => {
-            let total = archive_infos.len();
-            let infos = archive_infos.clone();
-            let added = super::run_db(&state, move |db| db.insert_archives_many(&infos))
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::error!("Failed to insert scanned archives: {}", e);
-                    (0, total)
-                });
-
-            let (added, errors) = added;
-            Json(serde_json::json!({
-                "scanned": total,
-                "added": added,
-                "errors": errors,
-                "message": format!("扫描完成：{} 个档案，{} 个新增，{} 个错误", total, added, errors)
-            })).into_response()
-        }
+        Ok(Ok(body)) => Json(body).into_response(),
         Ok(Err(e)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,

@@ -565,36 +565,63 @@ impl Database {
             .execute("DELETE FROM archives WHERE id = ?", [id])
     }
 
-    /// 批量插入档案，单事务执行。返回 (实际新增数, 错误数)；
-    /// 已存在的路径（path 唯一约束冲突）不计入新增。
-    pub fn insert_archives_many(
+    /// 增量扫描入库：按 path upsert（更新标题/类型/页数/大小/file_mtime），
+    /// 不使用 INSERT OR REPLACE，避免级联删除 history 与标签/分类关联。返回该档案 id。
+    pub fn upsert_scanned_archive(
         &self,
-        items: &[(String, String, String, i64, i64)],
-    ) -> Result<(usize, usize)> {
-        if items.is_empty() {
-            return Ok((0, 0));
-        }
-        let mut conn = self.conn()?;
-        let tx = conn.transaction()?;
-        let mut added = 0;
-        let mut errors = 0;
-        {
-            let mut stmt = tx.prepare(
-                "INSERT OR IGNORE INTO archives (title, path, archive_type, page_count, file_size) VALUES (?, ?, ?, ?, ?)",
-            )?;
-            for (title, path, archive_type, page_count, file_size) in items {
-                match stmt.execute((title, path, archive_type, page_count, file_size)) {
-                    Ok(affected) if affected > 0 => added += 1,
-                    Ok(_) => {} // duplicate path, skipped
-                    Err(e) => {
-                        tracing::warn!("Failed to insert {}: {}", path, e);
-                        errors += 1;
-                    }
-                }
-            }
-        }
-        tx.commit()?;
-        Ok((added, errors))
+        title: &str,
+        path: &str,
+        archive_type: &str,
+        page_count: i64,
+        file_size: i64,
+        file_mtime: i64,
+    ) -> Result<i64> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO archives (title, path, archive_type, page_count, file_size, file_mtime, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+             ON CONFLICT(path) DO UPDATE SET
+                title = excluded.title,
+                archive_type = excluded.archive_type,
+                page_count = excluded.page_count,
+                file_size = excluded.file_size,
+                file_mtime = excluded.file_mtime,
+                updated_at = excluded.updated_at",
+            (title, path, archive_type, page_count, file_size, file_mtime),
+        )?;
+        let id = conn.query_row("SELECT id FROM archives WHERE path = ?", [path], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        Ok(id)
+    }
+
+    /// 读取某根目录下所有档案的扫描元数据快照：(path, page_count, file_size, file_mtime)。
+    pub fn scan_meta_for_root(&self, root: &str) -> Result<Vec<(String, i64, i64, i64)>> {
+        let conn = self.conn()?;
+        let root_path = std::path::Path::new(root);
+        let mut stmt =
+            conn.prepare("SELECT path, page_count, file_size, file_mtime FROM archives")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?;
+        Ok(rows
+            .filter_map(log_and_skip)
+            .filter(|(path, _, _, _)| {
+                let p = std::path::Path::new(path);
+                p == root_path || p.starts_with(root_path)
+            })
+            .collect())
+    }
+
+    /// 按 path 删除档案（供扫描清理孤儿档案；级联删除 pages/history/标签分类关联）。
+    pub fn delete_archive_by_path(&self, path: &str) -> Result<usize> {
+        self.conn()?
+            .execute("DELETE FROM archives WHERE path = ?", [path])
     }
 
     /// 批量删除档案，单事务执行
@@ -2186,5 +2213,51 @@ mod tests {
             non_busy,
             Err(rusqlite::Error::QueryReturnedNoRows)
         ));
+    }
+
+    #[test]
+    fn test_upsert_scanned_archive_inserts_then_updates_in_place() {
+        let db = setup_test_db();
+        let id1 = db
+            .upsert_scanned_archive("Title", "/root/a.cbz", "cbz", 10, 100, 1111)
+            .unwrap();
+
+        // 已绑定的历史必须在再次 upsert（内容更新）后保留——不允许 REPLACE 级联删除
+        db.save_history(id1, 3, 10).unwrap();
+
+        let id2 = db
+            .upsert_scanned_archive("Title2", "/root/a.cbz", "cbz", 12, 120, 2222)
+            .unwrap();
+        assert_eq!(id1, id2, "upsert 必须保持同一行/同一 id");
+
+        let a = db.get_archive(id1).unwrap().unwrap();
+        assert_eq!(a.title, "Title2");
+        assert_eq!(a.page_count, 12);
+        assert_eq!(a.file_size, 120);
+
+        let h = db.get_history_for_archive(id1).unwrap().unwrap();
+        assert_eq!(h.page_index, 3, "upsert 不应清掉阅读历史");
+    }
+
+    #[test]
+    fn test_scan_meta_root_filter_and_delete_orphan_by_path() {
+        let db = setup_test_db();
+        db.upsert_scanned_archive("In", "/root/a", "folder", 5, 1, 111)
+            .unwrap();
+        db.upsert_scanned_archive("Out", "/other/b", "folder", 5, 1, 222)
+            .unwrap();
+        // 前缀安全：/root-x 不应被算进 /root
+        db.upsert_scanned_archive("Trap", "/root-x/c", "folder", 5, 1, 333)
+            .unwrap();
+
+        let meta = db.scan_meta_for_root("/root").unwrap();
+        assert_eq!(meta.len(), 1);
+        assert_eq!(meta[0].0, "/root/a");
+        assert_eq!(meta[0].3, 111);
+
+        db.delete_archive_by_path("/root/a").unwrap();
+        assert!(db.get_archive_by_path("/root/a").unwrap().is_none());
+        assert!(db.get_archive_by_path("/other/b").unwrap().is_some());
+        assert!(db.get_archive_by_path("/root-x/c").unwrap().is_some());
     }
 }
