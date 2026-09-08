@@ -30,3 +30,6 @@ Thumbs.db
 *.db-wal
 *.db-shm
 thumbnails/
+
+# pnpm local store
+.pnpm-store/
