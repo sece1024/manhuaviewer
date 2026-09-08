@@ -94,6 +94,9 @@ export default function Reader() {
   const activeThumbRef = useRef(null);
   // 需要程序化滚动到的目标页（跳页/缩略图/进入长图/恢复进度）；消费一次后置 null
   const [scrollTarget, setScrollTarget] = useState(null);
+  // 组内有序章节序列（含当前档案）与“已触发末页续章”标记
+  const chapterListRef = useRef(null);
+  const chapterEndFiredRef = useRef(false);
 
   // 稳定的 sentinel ref 回调：从 data-idx 读索引，避免每次渲染产生新函数
   // 导致 React 对所有已挂载元素反复 detach/attach ref。
@@ -168,20 +171,31 @@ export default function Reader() {
     setChapters(null);
     setCurrentIndex(0);
     currentIndexRef.current = 0;
+    chapterListRef.current = null; // 换档时清掉旧的组章节序列
+    chapterEndFiredRef.current = false;
     async function load() {
       try {
         const data = await api.getPages(archiveId);
         if (cancelled) return;
         setArchive(data.archive);
 
-        // 检测是否为组的主档案（group_id 等于自身 id）
+        // 组的主档案：显示组内章节列表（可由此进入任一章）
         if (data.archive.group_id && data.archive.group_id === data.archive.id) {
           const chapterList = await api.getGroupChapters(data.archive.group_id);
-          if (!cancelled) setChapters(chapterList);
+          if (!cancelled) {
+            chapterListRef.current = chapterList;
+            setChapters(chapterList);
+          }
           return;
         }
 
         setPages(data.pages);
+        // 非主档案但属于某组合并：记住有序章节序列，供末页自动续下一话
+        if (data.archive.group_id && data.archive.group_id !== data.archive.id) {
+          api.getGroupChapters(data.archive.group_id)
+            .then(list => { if (!cancelled && list && list.length) chapterListRef.current = list; })
+            .catch(() => {});
+        }
         if (data.read_page > 0 && data.read_page < data.pages.length) {
           currentIndexRef.current = data.read_page;
           setCurrentIndex(data.read_page);
@@ -403,6 +417,44 @@ export default function Reader() {
     return () => clearTimeout(finalTimer);
   }, [scrollTarget, longImage, pages.length]);
 
+  // 跳转到组内相邻章节（offset=±1）；无下一话时返回 false
+  const jumpToSiblingChapter = useCallback((offset) => {
+    const list = chapterListRef.current;
+    if (!list || list.length < 2) return false;
+    const idx = list.findIndex(c => c.id === parseInt(archiveId));
+    const target = idx >= 0 ? list[idx + offset] : null;
+    if (target) {
+      navigate(`/reader/${target.id}`);
+      return true;
+    }
+    return false;
+  }, [archiveId, navigate]);
+
+  // 长图模式：滚动到整本书末尾时自动续下一话（每次到达末尾只触发一次）
+  useEffect(() => {
+    if (!longImage || !containerRef.current) return;
+    const el = containerRef.current;
+    let ticking = false;
+    const check = () => {
+      ticking = false;
+      const container = containerRef.current;
+      if (!container) return;
+      const scrollable = container.scrollHeight - container.clientHeight;
+      // 内容本身可滚动且已滚到底（防打开即跳下一话）
+      const nearBottom = scrollable > 40 && container.scrollTop + container.clientHeight >= container.scrollHeight - 80;
+      if (nearBottom && currentIndexRef.current >= pages.length - 1) {
+        if (chapterEndFiredRef.current) return;
+        chapterEndFiredRef.current = true;
+        if (!jumpToSiblingChapter(1)) showOverlay('已经是最后一话');
+      } else if (!nearBottom || currentIndexRef.current < pages.length - 1) {
+        chapterEndFiredRef.current = false;
+      }
+    };
+    const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(check); } };
+    el.addEventListener('scroll', onScroll);
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [longImage, pages.length, jumpToSiblingChapter, showOverlay]);
+
   // 翻页
   const goPage = useCallback((newIndex) => {
     if (newIndex < 0 || newIndex >= pages.length) return;
@@ -419,14 +471,26 @@ export default function Reader() {
   const goPrev = useCallback(() => {
     const step = doublePage ? 2 : 1;
     const dir = pageDirection === 'rtl' ? 1 : -1;
-    goPage(currentIndexRef.current - step * dir);
-  }, [doublePage, pageDirection, goPage]);
+    const target = currentIndexRef.current - step * dir;
+    if (target < 0) {
+      // 第一页继续往前 → 尝试回到上一话
+      if (!jumpToSiblingChapter(-1)) showOverlay('已经是第一话');
+      return;
+    }
+    goPage(target);
+  }, [doublePage, pageDirection, goPage, jumpToSiblingChapter, showOverlay]);
 
   const goNext = useCallback(() => {
     const step = doublePage ? 2 : 1;
     const dir = pageDirection === 'rtl' ? 1 : -1;
-    goPage(currentIndexRef.current + step * dir);
-  }, [doublePage, pageDirection, goPage]);
+    const target = currentIndexRef.current + step * dir;
+    if (target >= pages.length) {
+      // 末页继续 → 尝试进入下一话
+      if (!jumpToSiblingChapter(1)) showOverlay('已经是最后一话');
+      return;
+    }
+    goPage(target);
+  }, [doublePage, pageDirection, goPage, pages.length, jumpToSiblingChapter, showOverlay]);
 
   // 快捷键（通过自定义 hook 管理，减少组件依赖数量）
   useReaderKeyboard({
@@ -622,7 +686,11 @@ export default function Reader() {
             >
               <span style={{ color: 'var(--text-tertiary)', fontSize: 13, minWidth: 24 }}>{i + 1}</span>
               <span style={{ flex: 1 }}>{ch.title}</span>
-              <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>{ch.page_count} 页</span>
+              <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>
+                {ch.read_page > 0
+                  ? `已读 ${Math.min(ch.read_page, ch.page_count || 0)}/${ch.page_count || '?'}`
+                  : `${ch.page_count} 页`}
+              </span>
             </div>
           ))}
         </div>

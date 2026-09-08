@@ -165,7 +165,11 @@ const GroupChapterPanel = React.memo(function GroupChapterPanel({ loading, membe
                 <LazyImage src={ch.cover_url} alt={lastPathPart(ch.path, ch.archive_type !== 'folder') || ch.title} />
               </div>
               <span className="archive-group-chapter-name">{lastPathPart(ch.path, ch.archive_type !== 'folder') || ch.title}</span>
-              <span className="archive-group-chapter-meta">{ch.page_count} 页</span>
+              <span className="archive-group-chapter-meta">
+                {ch.read_page > 0
+                  ? `已读 ${Math.min(ch.read_page, ch.page_count || 0)}/${ch.page_count || '?'}`
+                  : `${ch.page_count} 页`}
+              </span>
               <div className="archive-group-chapter-actions">
                 <button className="archive-group-chapter-action" onClick={(e) => onTag(e, ch.id)} title="标签">🏷️</button>
                 <button className="archive-group-chapter-action" onClick={(e) => onCategory(e, ch.id)} title="分类">📂</button>

@@ -322,12 +322,38 @@ pub struct PackCbzRequest {
     pub output_dir: Option<String>,
 }
 
+/// 把「原始档案行」转成不带组信息的 ListItem，并批量附上阅读进度。
+/// 供标题精确查询与 group 章节列表使用（章节行可显示已读进度）。
+fn plain_list_items(
+    db: &crate::db::Database,
+    rows: Vec<crate::db::ArchiveRow>,
+) -> rusqlite::Result<Vec<ListItem>> {
+    let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+    let progress = db.get_history_for_archives(&ids)?;
+    let map: std::collections::HashMap<i64, i64> = progress.into_iter().collect();
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let read_page = map.get(&row.id).copied();
+            ListItem {
+                archive: row,
+                is_group: false,
+                chapter_count: None,
+                auto_group: None,
+                auto_key: None,
+                parent_dir: None,
+                read_page,
+            }
+        })
+        .collect())
+}
+
 pub async fn list_archives(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ArchiveQuery>,
 ) -> Response {
     enum ListResult {
-        Raw(Vec<crate::db::ArchiveRow>),
+        Raw(Vec<ListItem>),
         Grouped(Vec<ListItem>),
     }
 
@@ -346,12 +372,13 @@ pub async fn list_archives(
                     parent_dir.as_deref() == Some(normalized)
                 });
             }
-            return Ok(ListResult::Raw(rows));
+            return plain_list_items(db, rows).map(ListResult::Raw);
         }
 
         // 如果指定了 group_id，返回组内所有章节
         if let Some(group_id) = query.group_id {
-            return db.get_group_chapters(group_id).map(ListResult::Raw);
+            let rows = db.get_group_chapters(group_id)?;
+            return plain_list_items(db, rows).map(ListResult::Raw);
         }
 
         let page = query.page.unwrap_or(1);
