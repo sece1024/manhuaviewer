@@ -79,6 +79,8 @@ export default function Reader() {
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 20 });
   const sentinelRefs = useRef({});
   const activeThumbRef = useRef(null);
+  // 需要程序化滚动到的目标页（跳页/缩略图/进入长图/恢复进度）；消费一次后置 null
+  const [scrollTarget, setScrollTarget] = useState(null);
 
   // 稳定的 sentinel ref 回调：从 data-idx 读索引，避免每次渲染产生新函数
   // 导致 React 对所有已挂载元素反复 detach/attach ref。
@@ -275,19 +277,37 @@ export default function Reader() {
   // eslint-disable-next-line
   }, []);
 
-  // 长图模式虚拟滚动：用 IntersectionObserver 追踪可见图片
+  // 长图模式虚拟滚动：用 IntersectionObserver 追踪可见图片，
+  // 并据此推导“当前页”currentIndex（滚动 → 状态栏/进度条/防抖保存进度都能跟上）。
   useEffect(() => {
     if (!longImage || pages.length === 0) return;
     const BUFFER = 5;
-    const observers = [];
     const visible = new Set();
+    let rafPending = false;
 
-    const updateRange = () => {
+    const update = () => {
+      rafPending = false;
       if (visible.size === 0) return;
       const indices = [...visible].sort((a, b) => a - b);
       const start = Math.max(0, indices[0] - BUFFER);
       const end = Math.min(pages.length, indices[indices.length - 1] + BUFFER + 1);
       setVisibleRange(prev => (prev.start === start && prev.end === end) ? prev : { start, end });
+
+      // 视口顶缘所在的页即当前页（读过的页已滚出顶部，min 即最靠上仍可见的一页）
+      const container = containerRef.current;
+      if (!container) return;
+      const top = container.getBoundingClientRect().top;
+      let current = -1;
+      for (const i of indices) {
+        const el = sentinelRefs.current[i];
+        if (!el) continue;
+        if (el.getBoundingClientRect().bottom > top) { current = i; break; }
+      }
+      if (current < 0 && indices.length > 0) current = indices[indices.length - 1];
+      if (current >= 0 && current !== currentIndexRef.current) {
+        currentIndexRef.current = current;
+        setCurrentIndex(current);
+      }
     };
 
     const observer = new IntersectionObserver((entries) => {
@@ -296,28 +316,59 @@ export default function Reader() {
         if (entry.isIntersecting) visible.add(idx);
         else visible.delete(idx);
       }
-      updateRange();
+      if (!rafPending) {
+        rafPending = true;
+        requestAnimationFrame(update);
+      }
     }, { root: containerRef.current, rootMargin: '1500px 0px' });
 
-    // Observe sentinel elements
-    const step = Math.max(1, Math.floor(pages.length / 100));
-    for (let i = 0; i < pages.length; i += step) {
+    // 观察全部页面哨兵（单 observer + 批量 target，代价可控；相比抽样能精确定位当前页）
+    for (let i = 0; i < pages.length; i++) {
       const el = sentinelRefs.current[i];
-      if (el) {
-        observer.observe(el);
-        observers.push(el);
-      }
-    }
-    // Always observe last page
-    const lastEl = sentinelRefs.current[pages.length - 1];
-    if (lastEl && !observers.includes(lastEl)) {
-      observer.observe(lastEl);
+      if (el) observer.observe(el);
     }
 
     return () => {
       observer.disconnect();
     };
   }, [longImage, pages]);
+
+  // 进入长图模式：从当前页继续（含恢复进度后的位置）
+  useEffect(() => {
+    if (longImage) setScrollTarget(currentIndexRef.current);
+  }, [longImage]);
+
+  // 消费 scrollTarget：仅长图模式需要滚动容器；让目标页进入渲染窗口（获得真实高度）后再滚动，
+  // 并用连续数帧 + 延迟校正收敛到精确位置。
+  useEffect(() => {
+    if (scrollTarget === null || pages.length === 0) return;
+    const idx = Math.max(0, Math.min(pages.length - 1, scrollTarget));
+    setScrollTarget(null);
+    if (!longImage) return;
+
+    setVisibleRange({ start: Math.max(0, idx - 8), end: Math.min(pages.length, idx + 10) });
+
+    const tryScroll = () => {
+      const container = containerRef.current;
+      const el = sentinelRefs.current[idx];
+      if (!container || !el) return;
+      const cRect = container.getBoundingClientRect();
+      const eRect = el.getBoundingClientRect();
+      container.scrollTop += eRect.top - cRect.top;
+    };
+
+    // 多帧校正：随周边页面图片真实高度落地，目标页偏移逐步精确
+    let attempts = 0;
+    const frameLoop = () => {
+      tryScroll();
+      attempts += 1;
+      if (attempts < 4) requestAnimationFrame(frameLoop);
+    };
+    requestAnimationFrame(frameLoop);
+    // 图片加载完成后最终校正一次
+    const finalTimer = setTimeout(() => tryScroll(), 500);
+    return () => clearTimeout(finalTimer);
+  }, [scrollTarget, longImage, pages.length]);
 
   // 翻页
   const goPage = useCallback((newIndex) => {
@@ -327,6 +378,8 @@ export default function Reader() {
     setScale(1);
     setTranslate({ x: 0, y: 0 });
     setImageLoaded(false);
+    // 长图模式下让滚动容器跟随到目标页（scrollTarget effect 内消费）
+    setScrollTarget(newIndex);
     showOverlay(`${newIndex + 1} / ${pages.length}`);
   }, [pages.length, showOverlay]);
 
