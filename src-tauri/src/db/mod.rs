@@ -251,7 +251,10 @@ impl Database {
     }
 
     /// 一次查询取回档案行与其远程封面 URL，避免封面请求两次往返 DB。
-    pub fn get_archive_with_remote_cover(&self, id: i64) -> Result<Option<(ArchiveRow, Option<String>)>> {
+    pub fn get_archive_with_remote_cover(
+        &self,
+        id: i64,
+    ) -> Result<Option<(ArchiveRow, Option<String>)>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at, remote_cover FROM archives WHERE id = ?"

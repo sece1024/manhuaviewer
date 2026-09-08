@@ -76,4 +76,3 @@ mod tests {
         assert!(dir.path().join("not-a-number").exists());
     }
 }
-
