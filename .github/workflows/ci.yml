@@ -28,6 +28,12 @@ jobs:
       - name: Build frontend
         run: pnpm --filter manhuaviewer-frontend build
 
+      - name: Run frontend tests
+        env:
+          CI: 'true'
+        run: pnpm test
+        working-directory: frontend
+
   # ── Rust (Tauri backend): fmt + clippy + test ───────────
   rust:
     runs-on: ubuntu-latest
