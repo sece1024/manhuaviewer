@@ -122,7 +122,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/recent", get(opds::recent))
         .route("/tags", get(opds::tags_list))
         .route("/tag/:tag_id", get(opds::tag_archives))
-        .route("/categories", get(opds::categories_list));
+        .route("/categories", get(opds::categories_list))
+        .route("/category/:id", get(opds::category_archives));
 
     Router::new()
         .nest("/api", api_routes)

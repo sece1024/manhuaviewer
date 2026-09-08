@@ -1,12 +1,24 @@
 use crate::AppState;
 use axum::{
     extract::{Path, Query, State},
-    response::Html,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::sync::Arc;
 
 use super::run_db;
+
+/// OPDS 响应必须是 `application/atom+xml`（此前返回 text/html，多数阅读器会解析失败）。
+fn opds_response(xml: String) -> Response {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/atom+xml; charset=utf-8",
+        )],
+        xml,
+    )
+        .into_response()
+}
 
 #[derive(Deserialize)]
 pub struct OpdsQuery {
@@ -44,7 +56,7 @@ fn opds_error_xml(message: &str) -> String {
     )
 }
 
-pub async fn root_catalog(State(_state): State<Arc<AppState>>) -> Html<String> {
+pub async fn root_catalog(State(_state): State<Arc<AppState>>) -> Response {
     let ts = current_timestamp();
     let xml = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -81,13 +93,13 @@ pub async fn root_catalog(State(_state): State<Arc<AppState>>) -> Html<String> {
 </feed>"#
     );
 
-    Html(xml)
+    opds_response(xml)
 }
 
 pub async fn catalog(
     State(state): State<Arc<AppState>>,
     Query(query): Query<OpdsQuery>,
-) -> Html<String> {
+) -> Response {
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(20);
     let offset = (page - 1) * limit;
@@ -118,7 +130,7 @@ pub async fn catalog(
                 ));
             }
 
-            Html(format!(
+            opds_response(format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer-catalog</id>
@@ -132,7 +144,7 @@ pub async fn catalog(
                 entries
             ))
         }
-        Err(_) => Html(
+        Err(_) => opds_response(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>manhuaviewer-error</id>
@@ -143,19 +155,16 @@ pub async fn catalog(
     }
 }
 
-pub async fn archive_detail(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> Html<String> {
+pub async fn archive_detail(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
     let (archive_path, archive_type, archive_title) =
         match run_db(&state, move |db| db.get_archive(id)).await {
             Ok(Some(a)) => (a.path, a.archive_type, a.title),
             Ok(None) => {
-                return Html(opds_error_xml("Archive not found"));
+                return opds_response(opds_error_xml("Archive not found"));
             }
             Err(e) => {
                 tracing::error!("Failed to get archive {}: {}", id, e);
-                return Html(opds_error_xml("Database error"));
+                return opds_response(opds_error_xml("Database error"));
             }
         };
 
@@ -174,12 +183,17 @@ pub async fn archive_detail(
                     .file_name()
                     .unwrap_or_default()
                     .to_string_lossy();
+                // 按真实扩展名给出 image type（此前硬编码 image/jpeg，PNG/WebP/AVIF 均错标）
+                let image_type = mime_guess::from_path(page_name)
+                    .first()
+                    .map(|m| m.to_string())
+                    .unwrap_or_else(|| "application/octet-stream".to_string());
 
                 entries.push_str(&format!(
                     r#"
   <entry>
     <title>{}</title>
-    <link rel="http://opds-spec.org/image" href="/api/archives/{}/pages/{}" type="image/jpeg"/>
+    <link rel="http://opds-spec.org/image" href="/api/archives/{}/pages/{}" type="{image_type}"/>
     <id>manhuaviewer-page-{}-{}</id>
     <updated>{}</updated>
   </entry>"#,
@@ -192,7 +206,7 @@ pub async fn archive_detail(
                 ));
             }
 
-            Html(format!(
+            opds_response(format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer-archive-{}-pages</id>
@@ -212,16 +226,16 @@ pub async fn archive_detail(
         }
         Ok(Err(e)) => {
             tracing::error!("Failed to list pages for archive {}: {}", id, e);
-            Html(opds_error_xml("Error loading pages"))
+            opds_response(opds_error_xml("Error loading pages"))
         }
         Err(e) => {
             tracing::error!("Task error for archive {}: {}", id, e);
-            Html(opds_error_xml("Internal error"))
+            opds_response(opds_error_xml("Internal error"))
         }
     }
 }
 
-pub async fn recent(State(state): State<Arc<AppState>>) -> Html<String> {
+pub async fn recent(State(state): State<Arc<AppState>>) -> Response {
     match run_db(&state, move |db| db.get_history(None, 20, 0)).await {
         Ok((history, _total)) => {
             let mut entries = String::new();
@@ -244,7 +258,7 @@ pub async fn recent(State(state): State<Arc<AppState>>) -> Html<String> {
                 ));
             }
 
-            Html(format!(
+            opds_response(format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer-recent</id>
@@ -258,7 +272,7 @@ pub async fn recent(State(state): State<Arc<AppState>>) -> Html<String> {
                 entries
             ))
         }
-        Err(_) => Html(
+        Err(_) => opds_response(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>manhuaviewer-error</id>
@@ -269,7 +283,7 @@ pub async fn recent(State(state): State<Arc<AppState>>) -> Html<String> {
     }
 }
 
-pub async fn tags_list(State(state): State<Arc<AppState>>) -> Html<String> {
+pub async fn tags_list(State(state): State<Arc<AppState>>) -> Response {
     match run_db(&state, |db| db.list_tags()).await {
         Ok(tags) => {
             let mut entries = String::new();
@@ -296,7 +310,7 @@ pub async fn tags_list(State(state): State<Arc<AppState>>) -> Html<String> {
                 ));
             }
 
-            Html(format!(
+            opds_response(format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer-tags</id>
@@ -310,7 +324,7 @@ pub async fn tags_list(State(state): State<Arc<AppState>>) -> Html<String> {
                 entries
             ))
         }
-        Err(_) => Html(
+        Err(_) => opds_response(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>manhuaviewer-error</id>
@@ -321,10 +335,7 @@ pub async fn tags_list(State(state): State<Arc<AppState>>) -> Html<String> {
     }
 }
 
-pub async fn tag_archives(
-    State(state): State<Arc<AppState>>,
-    Path(tag_id): Path<i64>,
-) -> Html<String> {
+pub async fn tag_archives(State(state): State<Arc<AppState>>, Path(tag_id): Path<i64>) -> Response {
     // Get archives with this tag using a single JOIN query
     let result = run_db(&state, move |db| {
         let tag_name = db
@@ -357,7 +368,7 @@ pub async fn tag_archives(
                 ));
             }
 
-            Html(format!(
+            opds_response(format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer-tag-{}-archives</id>
@@ -376,12 +387,12 @@ pub async fn tag_archives(
         }
         Err(e) => {
             tracing::error!("Failed to list archives for tag {}: {}", tag_id, e);
-            Html(opds_error_xml("Database error"))
+            opds_response(opds_error_xml("Database error"))
         }
     }
 }
 
-pub async fn categories_list(State(state): State<Arc<AppState>>) -> Html<String> {
+pub async fn categories_list(State(state): State<Arc<AppState>>) -> Response {
     match run_db(&state, |db| db.list_categories()).await {
         Ok(categories) => {
             let mut entries = String::new();
@@ -402,7 +413,7 @@ pub async fn categories_list(State(state): State<Arc<AppState>>) -> Html<String>
                 ));
             }
 
-            Html(format!(
+            opds_response(format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>manhuaviewer-categories</id>
@@ -416,7 +427,7 @@ pub async fn categories_list(State(state): State<Arc<AppState>>) -> Html<String>
                 entries
             ))
         }
-        Err(_) => Html(
+        Err(_) => opds_response(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>manhuaviewer-error</id>
@@ -424,5 +435,75 @@ pub async fn categories_list(State(state): State<Arc<AppState>>) -> Html<String>
 </feed>"#
                 .to_string(),
         ),
+    }
+}
+
+/// 分类下的档案列表（静态分类按关联表、动态分类按标题匹配，语义与库内一致）。
+pub async fn category_archives(
+    State(state): State<Arc<AppState>>,
+    Path(category_id): Path<i64>,
+) -> Response {
+    let result = run_db(&state, move |db| {
+        let category_name = db
+            .list_categories()?
+            .into_iter()
+            .find(|c| c.id == category_id)
+            .map(|c| c.name)
+            .unwrap_or_default();
+        let archives =
+            db.list_archives(None, None, Some(category_id), "updated", "desc", 200, 0)?;
+        Ok((category_name, archives))
+    })
+    .await;
+
+    match result {
+        Ok((category_name, archives)) => {
+            if category_name.is_empty() {
+                return opds_response(opds_error_xml("Category not found"));
+            }
+            let mut entries = String::new();
+            for archive in archives {
+                entries.push_str(&format!(r#"
+  <entry>
+    <title>{}</title>
+    <link rel="http://opds-spec.org/acquisition" href="/opds/archive/{}" type="application/atom+xml"/>
+    <id>manhuaviewer-archive-{}</id>
+    <updated>{}</updated>
+    <content type="text">{} pages - {}</content>
+  </entry>"#,
+                    xml_escape(&archive.title),
+                    archive.id,
+                    archive.id,
+                    archive.updated_at,
+                    archive.page_count,
+                    xml_escape(&archive.archive_type)
+                ));
+            }
+
+            opds_response(format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
+  <id>manhuaviewer-category-{}-archives</id>
+  <title>Category: {}</title>
+  <updated>{}</updated>
+  <link rel="self" href="/opds/category/{}" type="application/atom+xml"/>
+  <link rel="start" href="/opds" type="application/atom+xml"/>
+  {}
+</feed>"#,
+                category_id,
+                xml_escape(&category_name),
+                current_timestamp(),
+                category_id,
+                entries
+            ))
+        }
+        Err(e) => {
+            tracing::error!(
+                "Failed to list archives for category {}: {}",
+                category_id,
+                e
+            );
+            opds_response(opds_error_xml("Database error"))
+        }
     }
 }
