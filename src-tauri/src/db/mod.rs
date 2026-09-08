@@ -78,6 +78,36 @@ fn history_join_for(sort: &str) -> &'static str {
     }
 }
 
+/// 写操作的轻量忙重试：busy_timeout 之后仍可能与另一个连接的长事务（扫描/批量导入）
+/// 短暂冲突，重试几次兜底；每次重试重新取连接，通常在竞争者提交后即可成功。
+fn execute_with_busy_retry<F, T>(mut f: F) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+{
+    const MAX_ATTEMPTS: usize = 3;
+    let mut last_err = None;
+    for attempt in 0..MAX_ATTEMPTS {
+        match f() {
+            Ok(value) => return Ok(value),
+            Err(e) => {
+                let is_busy = match &e {
+                    rusqlite::Error::SqliteFailure(err, _) => {
+                        err.code == rusqlite::ffi::ErrorCode::DatabaseBusy
+                            || err.code == rusqlite::ffi::ErrorCode::DatabaseLocked
+                    }
+                    _ => false,
+                };
+                if !is_busy || attempt + 1 == MAX_ATTEMPTS {
+                    return Err(e);
+                }
+                last_err = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(50 * (attempt as u64 + 1)));
+            }
+        }
+    }
+    Err(last_err.unwrap())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagRow {
     pub id: i64,
@@ -133,6 +163,8 @@ impl Database {
         let manager = SqliteConnectionManager::file(path).with_init(|conn| {
             conn.pragma_update(None, "journal_mode", "WAL")?;
             conn.pragma_update(None, "foreign_keys", "ON")?;
+            // 池内多连接并发写（如翻页存 history 撞上扫描长事务）时等待而不是立刻报错
+            conn.busy_timeout(std::time::Duration::from_secs(5))?;
             Ok(())
         });
         let pool = r2d2::Pool::builder().max_size(8).build(manager)?;
@@ -1154,10 +1186,13 @@ impl Database {
         page_index: i64,
         total_pages: i64,
     ) -> Result<usize> {
-        self.conn()?.execute(
-            "INSERT OR REPLACE INTO history (archive_id, page_index, total_pages, updated_at) VALUES (?, ?, ?, datetime('now'))",
-            (archive_id, page_index, total_pages),
-        )
+        // 翻页时频繁调用；扫描等长事务可能短暂持锁，busy_timeout 后用重试兜底
+        execute_with_busy_retry(|| {
+            self.conn()?.execute(
+                "INSERT OR REPLACE INTO history (archive_id, page_index, total_pages, updated_at) VALUES (?, ?, ?, datetime('now'))",
+                (archive_id, page_index, total_pages),
+            )
+        })
     }
 
     pub fn get_history_for_archive(&self, archive_id: i64) -> Result<Option<HistoryRow>> {
@@ -2114,5 +2149,42 @@ mod tests {
             )
             .unwrap();
         assert_eq!(auto, 0);
+    }
+
+    #[test]
+    fn test_pool_connections_set_busy_timeout() {
+        let db = setup_test_db();
+        let conn = db.conn_for_test().unwrap();
+        // with_init 里设置的 busy_timeout 必须生效（毫秒）
+        let timeout: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
+    }
+
+    #[test]
+    fn test_execute_with_busy_retry_recovers_from_transient_busy() {
+        let mut calls = 0;
+        let result = execute_with_busy_retry(|| {
+            calls += 1;
+            if calls <= 2 {
+                Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                    None,
+                ))
+            } else {
+                Ok(42usize)
+            }
+        });
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(calls, 3, "前两次 busy 应触发重试");
+
+        // 非 busy 错误不重试，直接返回
+        let non_busy: Result<usize> =
+            execute_with_busy_retry(|| Err(rusqlite::Error::QueryReturnedNoRows));
+        assert!(matches!(
+            non_busy,
+            Err(rusqlite::Error::QueryReturnedNoRows)
+        ));
     }
 }
