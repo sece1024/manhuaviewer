@@ -821,6 +821,18 @@ impl Database {
         Ok(ids)
     }
 
+    /// 所有存活档案的 id 集合，用于清理不再被任何档案引用的缓存目录
+    /// （extract/thumbnails 下的孤立子目录）。
+    pub fn live_archive_ids(&self) -> Result<std::collections::HashSet<i64>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT id FROM archives")?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .filter_map(log_and_skip)
+            .collect();
+        Ok(ids)
+    }
+
     /// 淘汰超出上限的最旧缩略图目录。`exclude_id` 为刚写入的档案时跳过它，
     /// 避免“注册后立刻把自己的目录淘汰掉”。
     pub fn evict_old_thumbnails(&self, exclude_id: Option<i64>) -> Result<Vec<(i64, String)>> {

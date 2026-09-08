@@ -107,6 +107,19 @@ async fn main() {
         ));
     }
 
+    // 启动时清理缓存：删除不再被任何档案引用的 extract/thumbnails 目录，
+    // 并强制执行一次缩略图 LRU 淘汰（否则长期不生成新缩略图时磁盘无限增长）。
+    {
+        let cleanup_db = state.db.clone();
+        let cleanup_data_dir = data_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = crate::services::cleanup::cleanup_caches(&cleanup_data_dir, &cleanup_db)
+            {
+                tracing::warn!("启动缓存清理失败: {}", e);
+            }
+        });
+    }
+
     // Build Axum router for API
     let api_router = routes::create_router(state.clone());
 
