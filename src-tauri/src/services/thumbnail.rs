@@ -71,3 +71,30 @@ impl Default for ThumbnailGenerator {
         Self::new(300, 88)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_rejects_undecodable_input_without_panicking() {
+        // 解码器不支持的输入（如 image crate 没有 avif 解码器时的 avif 数据，或任意垃圾字节）
+        // 必须以 Err 返回——路由层据此降级回原始图片，而不是 500。
+        let gen = ThumbnailGenerator::default();
+        assert!(gen.generate(b"this is definitely not an image").is_err());
+
+        // AVIF 文件头（ftypavif）：在未启用 avif 解码器的构建下应走 Err 分支
+        let avif_header = b"\x00\x00\x00\x20ftypavif\x00\x00\x00\x00avifmif1miaf".to_vec();
+        assert!(gen.generate(&avif_header).is_err());
+    }
+
+    #[test]
+    fn generate_with_cache_does_not_write_cache_on_failure() {
+        let gen = ThumbnailGenerator::default();
+        let dir = tempfile::tempdir().unwrap();
+        let result = gen.generate_with_cache(b"garbage bytes", dir.path(), "page0");
+        assert!(result.is_err());
+        // 失败的生成不应留下缓存文件，否则后续会反复读到损坏的缩略图
+        assert!(!dir.path().join("page0.jpg").exists());
+    }
+}

@@ -539,26 +539,43 @@ pub async fn get_cover(
             .unwrap_or(false);
         if cache_valid {
             if let Ok(data) = std::fs::read(&cache_path) {
-                return Ok::<_, anyhow::Error>((data, false));
+                return Ok::<_, anyhow::Error>((data, "image/jpeg".to_string(), false));
             }
         }
 
         let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
         let cover = reader.get_cover()?;
-        let thumb = crate::services::thumbnail::ThumbnailGenerator::default().generate(&cover)?;
-        std::fs::create_dir_all(&thumb_dir)?;
-        std::fs::write(&cache_path, &thumb)?;
-        Ok((thumb, true))
+        match crate::services::thumbnail::ThumbnailGenerator::default().generate(&cover) {
+            Ok(thumb) => {
+                std::fs::create_dir_all(&thumb_dir)?;
+                std::fs::write(&cache_path, &thumb)?;
+                Ok((thumb, "image/jpeg".to_string(), true))
+            }
+            Err(e) => {
+                // 解码器不支持的格式（image crate 无 avif 解码器等）：降级返回原始封面，
+                // 让系统 WebView 自己解码，而不是对整个档案报 500。
+                tracing::warn!(
+                    "Thumbnail decode failed for archive {}: {}; serving original cover",
+                    id,
+                    e
+                );
+                let first_page = reader.list_pages()?.into_iter().next().unwrap_or_default();
+                let mime = mime_guess::from_path(first_page)
+                    .first_or_octet_stream()
+                    .to_string();
+                Ok((cover, mime, false))
+            }
+        }
     })
     .await;
 
     match result {
-        Ok(Ok((cover_data, fresh))) => {
+        Ok(Ok((cover_data, content_type, fresh))) => {
             if fresh {
                 register_thumbnail(&state, id, thumb_dir_str, thumb_already_set).await;
             }
             let mut pairs: Vec<(&'static str, String)> = vec![
-                ("Content-Type", "image/jpeg".to_string()),
+                ("Content-Type", content_type),
                 ("ETag", etag),
                 ("Cache-Control", CACHE_CONTROL.to_string()),
             ];
@@ -821,24 +838,41 @@ pub async fn get_page_thumb(
             anyhow::bail!("Page index {} out of range (total: {})", idx, pages.len());
         }
         let page_name = &pages[idx].filepath;
+        let page_mime = mime_guess::from_path(page_name)
+            .first_or_octet_stream()
+            .to_string();
         let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
         let data = reader.extract_page(page_name)?;
         let thumb_gen = crate::services::thumbnail::ThumbnailGenerator::default();
-        // generate_with_cache 使用 thumb_dir 作为缓存目录
-        thumb_gen.generate_with_cache(&data, &thumb_dir_clone, &page_index.to_string())
+        // generate_with_cache 使用 thumb_dir 作为缓存目录；解码失败（如 avif 无解码器）时
+        // 降级返回原图 bytes（由系统 WebView 解码），而不是对整页缩略图报 500。
+        match thumb_gen.generate_with_cache(&data, &thumb_dir_clone, &page_index.to_string()) {
+            Ok(thumb) => Ok::<_, anyhow::Error>((thumb, "image/jpeg".to_string(), true)),
+            Err(e) => {
+                tracing::warn!(
+                    "Thumbnail decode failed for archive {} page {}: {}; serving original page",
+                    id,
+                    idx,
+                    e
+                );
+                Ok((data, page_mime, false))
+            }
+        }
     })
     .await;
 
     match result {
-        Ok(Ok(thumb_data)) => {
-            // 首次生成成功，更新数据库记录；LRU 淘汰最多每分钟跑一次
-            let thumb_dir_str = thumb_dir.to_string_lossy().to_string();
-            register_thumbnail(&state, id, thumb_dir_str, thumb_already_set).await;
+        Ok(Ok((thumb_data, content_type, fresh))) => {
+            if fresh {
+                // 首次成功生成 jpg，更新数据库记录；LRU 淘汰最多每分钟跑一次
+                let thumb_dir_str = thumb_dir.to_string_lossy().to_string();
+                register_thumbnail(&state, id, thumb_dir_str, thumb_already_set).await;
+            }
 
             build_response(
                 StatusCode::OK,
                 vec![
-                    ("Content-Type", "image/jpeg".to_string()),
+                    ("Content-Type", content_type),
                     ("Cache-Control", CACHE_CONTROL.to_string()),
                 ],
                 thumb_data,
