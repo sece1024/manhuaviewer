@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../utils/api';
 import { formatSize } from '../utils/format';
 import { useToast } from '../components/Toast';
@@ -80,6 +80,24 @@ export default function Settings() {
       toast(e.message, 'error');
     }
   };
+
+  // 连续输入（颜色选择器拖拽会高频触发 onChange）：防抖提交、合并 toast，
+  // 避免每 move 一次就发一个 PUT 且刷屏“已保存”。
+  const colorSaveTimerRef = useRef(null);
+  const handleUpdateSettingDebounced = useCallback((key, value) => {
+    clearTimeout(colorSaveTimerRef.current);
+    colorSaveTimerRef.current = setTimeout(async () => {
+      try {
+        await updateSetting(key, value);
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    }, 300);
+  }, [updateSetting, toast]);
+
+  useEffect(() => {
+    return () => clearTimeout(colorSaveTimerRef.current);
+  }, []);
 
   // 按当前层级重生成自动标题
   const handleRegenerateTitles = async () => {
@@ -451,7 +469,7 @@ export default function Settings() {
           <div>
             <div className="settings-row-label">阅读器背景色</div>
           </div>
-          <input type="color" value={settings.reader_bg || '#1a1a1a'} onChange={(e) => handleUpdateSetting('reader_bg', e.target.value)} style={{ width: 50, padding: 2 }} />
+          <input type="color" value={settings.reader_bg || '#1a1a1a'} onChange={(e) => handleUpdateSettingDebounced('reader_bg', e.target.value)} style={{ width: 50, padding: 2 }} />
         </div>
       </div>
 
