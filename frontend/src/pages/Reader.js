@@ -7,27 +7,40 @@ import useReaderKeyboard from '../hooks/useReaderKeyboard';
 import TagPicker from '../components/TagPicker';
 import Modal from '../components/Modal';
 
-// 长图模式页面列表：memoized，仅当 pages/visibleRange 变化时重渲染，
+// 长图模式页面列表：memoized，仅当 pages/visibleRange/pageHeights 变化时重渲染，
 // 配合稳定的 sentinel ref 避免每次滚动触发全量 ref 重挂载。
-const LongImageList = React.memo(function LongImageList({ pages, visibleRange, sentinelRef, imgStyle }) {
+// pageHeights：已加载过页面按真实显示高度占位，消除“250px 占位 vs 真实高度”造成的
+// 滚动↔页码错位（远距离跳页/回滚时尤为明显）。
+const LongImageList = React.memo(function LongImageList({ pages, visibleRange, sentinelRef, imgStyle, pageHeights, onImageLoad }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', touchAction: 'pan-y', width: '100%' }}>
       {pages.map((p, i) => {
         const inRange = i >= visibleRange.start && i < visibleRange.end;
+        const measured = pageHeights[i];
         return (
           <div
             key={p.id}
             ref={sentinelRef}
             data-idx={i}
-            style={{ width: '100%', minHeight: inRange ? undefined : 250 }}
+            style={{ width: '100%', minHeight: inRange ? undefined : (measured || 250) }}
           >
             {inRange ? (
               <img
                 src={p.url}
                 alt={p.filename}
                 loading="lazy"
+                decoding="async"
                 style={imgStyle}
                 onError={(e) => { e.target.style.display = 'none'; }}
+                onLoad={(e) => {
+                  // 记录真实渲染高度（宽 100%，高度=容器宽×原始高宽比），供占位与跳页定位使用
+                  const img = e.currentTarget;
+                  const container = img.parentElement;
+                  const cw = container ? container.clientWidth : 0;
+                  const nh = img.naturalHeight || 0;
+                  const nw = img.naturalWidth || 1;
+                  if (cw > 0 && nh > 0) onImageLoad(i, Math.round((cw * nh) / nw));
+                }}
               />
             ) : null}
           </div>
@@ -89,6 +102,16 @@ export default function Reader() {
       const idx = Number(el.dataset.idx);
       sentinelRefs.current[idx] = el;
     }
+  }, []);
+
+  // 长图模式已加载页的真实高度缓存（idx -> px），用于占位与跳页定位
+  const [pageHeights, setPageHeights] = useState({});
+  const handleImageLoad = useCallback((idx, height) => {
+    setPageHeights(prev => {
+      const prevH = prev[idx];
+      if (prevH && Math.abs(prevH - height) < 4) return prev;
+      return { ...prev, [idx]: height };
+    });
   }, []);
 
   // url -> index 映射，用于预加载清理，避免 O(pages × 30) 的 findIndex 扫描
@@ -213,11 +236,20 @@ export default function Reader() {
     };
   }, []);
 
-  // 预加载图片（LRU 缓存，最多 30 张 Image 对象）
+  // 预加载图片（LRU 缓存，最多 12 张 Image 对象）。长图模式页面由 <img> 随滚动加载，
+  // 额外 new Image() 只会上双份内存，故长图模式不预载。
   useEffect(() => {
-    if (pages.length === 0) return;
-    const MAX_PRELOAD = 30;
+    if (pages.length === 0 || longImage) return;
+    const MAX_PRELOAD = 12;
     const cache = preloadCacheRef.current;
+
+    // 换了书：清空不属于当前页的残留缓存
+    for (const url of [...cache.order]) {
+      if (pageIndexByUrl[url] === undefined) {
+        delete cache.map[url];
+        cache.order = cache.order.filter(u => u !== url);
+      }
+    }
 
     const touch = (url) => {
       if (cache.map[url]) {
@@ -228,6 +260,7 @@ export default function Reader() {
       }
       // 新增
       const img = new Image();
+      img.decoding = 'async';
       img.src = url;
       cache.map[url] = img;
       cache.order.push(url);
@@ -245,21 +278,21 @@ export default function Reader() {
       }
     };
 
-    // 预加载当前页前后 ±2 页
+    // 预载当前页前后小窗口（-2 … +3，双页/翻页主要向下一页前进）
     const start = Math.max(0, currentIndex - 2);
-    const end = Math.min(pages.length, currentIndex + 5);
+    const end = Math.min(pages.length, currentIndex + 3);
     for (let i = start; i < end; i++) {
       if (i !== currentIndex) touch(pages[i].url);
     }
 
-    // 清理远离当前页的缓存（±10 页范围外）
+    // 清理远离当前页的缓存（±6 页范围外）
     for (const url of [...cache.order]) {
       const idx = pageIndexByUrl[url];
-      if (idx !== undefined && (idx < currentIndex - 10 || idx > currentIndex + 10)) {
+      if (idx !== undefined && (idx < currentIndex - 6 || idx > currentIndex + 6)) {
         remove(url);
       }
     }
-  }, [currentIndex, pages, pageIndexByUrl]);
+  }, [currentIndex, pages, pageIndexByUrl, longImage]);
 
   // 监听容器宽度，宽度不足时禁用双页模式
   useEffect(() => {
@@ -281,7 +314,7 @@ export default function Reader() {
   // 并据此推导“当前页”currentIndex（滚动 → 状态栏/进度条/防抖保存进度都能跟上）。
   useEffect(() => {
     if (!longImage || pages.length === 0) return;
-    const BUFFER = 5;
+    const BUFFER = 3;
     const visible = new Set();
     let rafPending = false;
 
@@ -724,7 +757,14 @@ export default function Reader() {
         onTouchEnd={handleTouchEnd}
       >
         {longImage ? (
-          <LongImageList pages={pages} visibleRange={visibleRange} sentinelRef={setSentinelRef} imgStyle={imgStyle} />
+          <LongImageList
+            pages={pages}
+            visibleRange={visibleRange}
+            sentinelRef={setSentinelRef}
+            imgStyle={imgStyle}
+            pageHeights={pageHeights}
+            onImageLoad={handleImageLoad}
+          />
         ) : doublePage && doubleLeft && doubleRight ? (
           <div style={{ display: 'flex', gap: 4, height: '100%', alignItems: 'center' }}>
             {[doubleLeft, doubleRight].map((p) => (
@@ -733,6 +773,7 @@ export default function Reader() {
                 src={p.url}
                 alt={p.filename}
                 className="reader-image"
+                decoding="async"
                 style={imgStyle}
                 draggable={false}
               />
@@ -749,6 +790,7 @@ export default function Reader() {
               src={pages[currentIndex]?.url}
               alt={pages[currentIndex]?.filename}
               className="reader-image"
+              decoding="async"
               style={{ ...imgStyle, opacity: imageLoaded ? 1 : 0, transition: 'opacity 0.2s ease' }}
               draggable={false}
               onLoad={() => setImageLoaded(true)}
