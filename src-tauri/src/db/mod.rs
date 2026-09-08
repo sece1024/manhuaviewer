@@ -560,22 +560,17 @@ impl Database {
         file_size: i64,
     ) -> Result<i64> {
         let conn = self.conn()?;
-        // Check for existing archive with the same path first
-        let existing: Option<i64> = conn
-            .query_row("SELECT id FROM archives WHERE path = ?", [path], |row| {
-                row.get(0)
-            })
-            .optional()?;
-
-        if let Some(id) = existing {
-            return Ok(id);
-        }
-
         conn.execute(
-            "INSERT INTO archives (title, path, archive_type, page_count, file_size) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO archives (title, path, archive_type, page_count, file_size)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(path) DO NOTHING",
             (title, path, archive_type, page_count, file_size),
         )?;
-        Ok(conn.last_insert_rowid())
+        // ON CONFLICT DO NOTHING 吞掉并发重复插入，随后按 path 取回 id（可能已存在）。
+        let id = conn.query_row("SELECT id FROM archives WHERE path = ?", [path], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        Ok(id)
     }
 
     pub fn delete_archive(&self, id: i64) -> Result<usize> {
