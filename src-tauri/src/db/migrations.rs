@@ -1,6 +1,18 @@
 use rusqlite::{Connection, Result};
 
+/// 当前 schema 版本。新增迁移时：把常量 +1，并在 run_migrations 里对
+/// user_version < N 的库执行第 N 版新增步骤（旧的幂等步骤会被版本守卫跳过）。
+pub const CURRENT_SCHEMA_VERSION: i64 = 1;
+
 pub fn run_migrations(conn: &Connection) -> Result<()> {
+    // 版本守卫：已是当前版本的库不再重复执行（幂等步骤仍在历史版本库上跑一次）
+    let current: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+        .unwrap_or(0);
+    if current >= CURRENT_SCHEMA_VERSION {
+        return Ok(());
+    }
+
     // Add thumbnail_path column to archives if missing
     let has_thumb_col: bool = conn
         .query_row(
@@ -192,6 +204,13 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_pages_archive_sort_order ON pages(archive_id, sort_order)",
         [],
     )?;
+
+    // 幂等步骤全部成功后才打版本号（中途失败下次启动会重跑，结构依然幂等）
+    conn.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
+    tracing::info!(
+        "Migrations complete, schema version = {}",
+        CURRENT_SCHEMA_VERSION
+    );
 
     Ok(())
 }

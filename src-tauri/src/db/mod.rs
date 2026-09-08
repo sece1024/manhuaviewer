@@ -1650,6 +1650,19 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn test_migrations_set_schema_version_and_are_skippable() {
+        let db = setup_test_db(); // init() 内部会跑迁移
+        let conn = db.conn_for_test().unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, crate::db::migrations::CURRENT_SCHEMA_VERSION);
+
+        // 版本已达标时再跑一次 init 应短路、不报错
+        db.init().unwrap();
+    }
+
     fn test_database_creation() {
         let db = setup_test_db();
         let conn = db.conn_for_test().unwrap();
