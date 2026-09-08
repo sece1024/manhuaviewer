@@ -24,6 +24,8 @@ export default function Settings() {
   const [confirmTarget, setConfirmTarget] = useState(null);
   const [cbzFiles, setCbzFiles] = useState([]);
   const [regenerating, setRegenerating] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const toast = useToast();
 
   // 检测 Tauri 环境
@@ -54,6 +56,21 @@ export default function Settings() {
   useEffect(() => {
     setScanDepth(settings.scan_depth || '1');
   }, [settings.scan_depth]);
+
+  // 检查 GitHub Releases 是否有新版本（不自动安装，引导去发布页）
+  const handleCheckUpdate = async () => {
+    if (checkingUpdate) return;
+    setCheckingUpdate(true);
+    setUpdateInfo(null);
+    try {
+      const r = await api.checkUpdate();
+      setUpdateInfo(r);
+    } catch (e) {
+      setUpdateInfo({ error: e.message || '检查失败（需联网）' });
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
 
   const handleUpdateSetting = async (key, value) => {
     try {
@@ -578,6 +595,33 @@ export default function Settings() {
               {[3, 5, 10, 20].map(n => <option key={n} value={n}>{n} 份</option>)}
             </select>
           </div>
+        </div>
+        <div className="settings-row">
+          <div>
+            <div className="settings-row-label">检查更新</div>
+            <div className="settings-row-desc">当前版本与 GitHub Releases 最新版比较（不自动安装）</div>
+            {updateInfo && (
+              updateInfo.error ? (
+                <div style={{ fontSize: 12, color: '#e5484d', marginTop: 4 }}>{updateInfo.error}</div>
+              ) : (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+                  {updateInfo.update_available ? (
+                    <span>发现新版本 <strong>{updateInfo.latest}</strong>（当前 {updateInfo.current}）</span>
+                  ) : (
+                    <span>已是最新版本 {updateInfo.current}</span>
+                  )}
+                  {updateInfo.release_url && (
+                    <a href={updateInfo.release_url} target="_blank" rel="noreferrer" style={{ marginLeft: 8 }}>
+                      前往发布页 ↗
+                    </a>
+                  )}
+                </div>
+              )
+            )}
+          </div>
+          <button className="btn btn-sm" onClick={handleCheckUpdate} disabled={checkingUpdate}>
+            {checkingUpdate ? '检查中...' : '检查更新'}
+          </button>
         </div>
       </div>
         </div>

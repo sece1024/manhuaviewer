@@ -285,6 +285,8 @@ const api = {
   updateSettings: (data) =>
     request('/settings', { method: 'PUT', body: JSON.stringify(data) }).then(r => { _invalidate('/settings'); return r; }),
   getStats: () => request('/stats'),
+  // 更新检查：{ current, latest, update_available, release_url }
+  checkUpdate: () => request('/update/check'),
 
   // Backup & Restore
   exportBackup: () => `${BASE}/backup`,
