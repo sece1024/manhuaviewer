@@ -180,6 +180,16 @@ const GroupChapterPanel = React.memo(function GroupChapterPanel({ loading, membe
   );
 });
 
+// 跨路由浏览会话：进入阅读器/设置等页面时 Library 会被卸载，这里按 mode 暂存
+// 列表/筛选/分页/展开状态与滚动位置；返回时先恢复、再后台与服务器比对。
+const librarySessions = {}; // { [mode]: { archives, page, hasMore, search, sortBy, sortOrder, selectedTag, selectedCategory, expandedGroup, groupMembers, scrollTop } }
+// jest 环境下每个用例都是独立的“首次访问”，跨用例恢复会造成泄漏，故禁用
+const IS_TEST = typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
+
+function firstPageIds(list, size) {
+  return (list || []).slice(0, size).map(a => a.id).join(',');
+}
+
 export default function Library({ mode = 'library' }) {
   const { settings, updateSetting } = useSettings();
   const { tags, reload: reloadTags } = useTags();
@@ -227,6 +237,9 @@ export default function Library({ mode = 'library' }) {
   const requestIdRef = useRef(0);
   const appendLockRef = useRef(false); // 防触底自动加载与按钮点击重复追加同一页
   const loadMoreSentinelRef = useRef(null); // 触底自动加载观察哨兵
+  const restoringRef = useRef(false); // 会话恢复期间抑制“筛选变化”触发的整表重拉
+  const listScrollRef = useRef(null); // 列表滚动容器
+  const latestStateRef = useRef(null); // 每帧最新状态镜像（卸载时写会话）
   const navigate = useNavigate();
   const toast = useToast();
 
@@ -242,10 +255,61 @@ export default function Library({ mode = 'library' }) {
   }, []);
 
   useEffect(() => {
-    loadArchives();
+    restoringRef.current = true;
+    const s = IS_TEST ? null : librarySessions[mode];
+    if (s && s.archives && s.archives.length > 0) {
+      // 恢复浏览会话：秒开旧列表，保留已加载分页、展开状态与滚动位置
+      setSearch(s.search); searchRef.current = s.search;
+      setSortBy(s.sortBy); sortByRef.current = s.sortBy;
+      setSortOrder(s.sortOrder); sortOrderRef.current = s.sortOrder;
+      setSelectedTag(s.selectedTag); selectedTagRef.current = s.selectedTag;
+      setSelectedCategory(s.selectedCategory); selectedCategoryRef.current = s.selectedCategory;
+      setArchives(s.archives);
+      pageRef.current = s.page;
+      setHasMore(s.hasMore);
+      if (s.expandedGroup) {
+        setExpandedGroup(s.expandedGroup);
+        if (s.groupMembers) setGroupMembers(s.groupMembers);
+      }
+      if (s.scrollTop) {
+        requestAnimationFrame(() => {
+          const el = listScrollRef.current;
+          if (el) el.scrollTop = s.scrollTop;
+        });
+      }
+      // 后台与服务器比对（仅内容重排时整体刷新，否则合并字段）
+      reconcileLibrary(s);
+    } else {
+      loadArchives();
+    }
     reloadCategories();
+    // 本帧渲染与后续“筛选变化重拉”effect 稳定后再放开抑制
+    requestAnimationFrame(() => { restoringRef.current = false; });
     return () => clearTimeout(searchDebounceRef.current);
-  }, []);
+  // eslint-disable-next-line
+  }, [mode]);
+
+  // 每帧镜像最新状态（卸载时用于写浏览会话）
+  useEffect(() => {
+    latestStateRef.current = {
+      archives, page: pageRef.current, hasMore,
+      search, sortBy, sortOrder, selectedTag, selectedCategory,
+      expandedGroup, groupMembers,
+    };
+  });
+
+  // 卸载（进入阅读器等路由）时保存浏览会话，返回时可恢复
+  useEffect(() => {
+    return () => {
+      if (IS_TEST) return;
+      const el = listScrollRef.current;
+      const st = latestStateRef.current;
+      if (st && st.archives && st.archives.length > 0) {
+        librarySessions[mode] = { ...st, scrollTop: el ? el.scrollTop : 0 };
+      }
+    };
+  // eslint-disable-next-line
+  }, [mode]);
 
   useEffect(() => {
     const check = () => setIsNarrow(window.innerWidth < 768);
@@ -298,6 +362,8 @@ export default function Library({ mode = 'library' }) {
   };
 
   useEffect(() => {
+    // 会话恢复期间会直接 set 这些值，其“变化”不应触发整表重拉（避免覆盖恢复的列表）
+    if (restoringRef.current) return;
     loadArchives({ search: searchRef.current, tag: selectedTag, category_id: selectedCategory });
   }, [sortBy, sortOrder, selectedTag, selectedCategory]);
 
@@ -311,6 +377,57 @@ export default function Library({ mode = 'library' }) {
 
   const handleLoadMore = useCallback(() => {
     loadArchives({ search: searchRef.current, tag: selectedTagRef.current }, true);
+  }, []);
+
+  // 后台一致性比对：与会话第一页对比。仅当服务器第一页顺序变化（增删/重排）时整体刷新；
+  // 否则只把字段级变化（read_page/标题/页数等）合并进现有列表，保留滚动与已加载分页。
+  const reconcileLibrary = useCallback(async (s) => {
+    if (!s || !s.archives) return;
+    try {
+      const data = await api.getArchives({
+        sort_by: s.sortBy,
+        sort_order: s.sortOrder,
+        limit: PAGE_SIZE,
+        page: 1,
+        search: s.search,
+        ...(s.selectedTag ? { tag: s.selectedTag } : {}),
+        ...(s.selectedCategory ? { category_id: s.selectedCategory } : {}),
+      });
+      if (!Array.isArray(data)) return;
+      // 用户在比对期间已切换条件：丢弃过期结果
+      if (sortByRef.current !== s.sortBy || sortOrderRef.current !== s.sortOrder ||
+          searchRef.current !== s.search || selectedTagRef.current !== s.selectedTag ||
+          selectedCategoryRef.current !== s.selectedCategory) {
+        return;
+      }
+      if (firstPageIds(data, PAGE_SIZE) !== firstPageIds(s.archives, PAGE_SIZE)) {
+        // 顺序变化 → 列表内容确实变了，整体刷新（此时回到顶部是正确行为）
+        setArchives(data);
+        pageRef.current = 1;
+        setHasMore(data.length >= PAGE_SIZE);
+        setExpandedGroup(null);
+        setGroupMembers(null);
+        return;
+      }
+      // 顺序一致 → 合并第一页的字段变化，保留滚动与后续分页
+      const patch = new Map(data.map(a => [a.id, a]));
+      setArchives(prev => {
+        let changed = false;
+        const next = prev.map(it => {
+          const p = patch.get(it.id);
+          if (!p) return it;
+          if (p.read_page === it.read_page && p.updated_at === it.updated_at &&
+              p.title === it.title && p.page_count === it.page_count && p.file_size === it.file_size) {
+            return it;
+          }
+          changed = true;
+          return { ...it, ...p };
+        });
+        return changed ? next : prev;
+      });
+    } catch (e) {
+      // 已恢复到旧数据；比对失败时静默保留现状
+    }
   }, []);
 
   const handleViewMode = (mode) => {
@@ -702,7 +819,7 @@ export default function Library({ mode = 'library' }) {
       )}
 
       {/* 主内容区 */}
-      <div className="library-main">
+      <div className="library-main" ref={listScrollRef}>
         {/* 顶栏 */}
         <div className="library-header">
           <input
