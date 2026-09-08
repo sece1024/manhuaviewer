@@ -4,6 +4,7 @@ import api from '../utils/api';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useReaderKeyboard from '../hooks/useReaderKeyboard';
+import useGamepad from '../hooks/useGamepad';
 import TagPicker from '../components/TagPicker';
 import Modal from '../components/Modal';
 
@@ -533,6 +534,10 @@ export default function Reader() {
     doublePage,
   });
 
+  // 外设支持：游戏手柄 / USB 翻页器（浮层打开时暂停，避免误翻）
+  const overlayOpen = showHelp || showTagPicker || showThumbnails || showJump || showMenu;
+  useGamepad({ goPrev, goNext, enabled: !overlayOpen });
+
   // 触摸手势
   const getTouchDist = (touches) => {
     const dx = touches[0].clientX - touches[1].clientX;
@@ -638,6 +643,15 @@ export default function Reader() {
     const isLeft = pageDirection === 'rtl' ? e.clientX > w * 2 / 3 : e.clientX < w / 3;
     if (isLeft) goPrev();
     else if (pageDirection === 'rtl' ? e.clientX < w / 3 : e.clientX > w * 2 / 3) goNext();
+  };
+
+  // 鼠标侧键翻页（按钮 3=后退侧键→上一页，4=前进侧键→下一页），并阻止默认的浏览器前进/后退
+  const handleAuxClick = (e) => {
+    if (e.button === 3 || e.button === 4) {
+      e.preventDefault();
+      if (e.button === 3) goPrev();
+      else goNext();
+    }
   };
 
   const handleDblClick = () => {
@@ -845,6 +859,7 @@ export default function Reader() {
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onAuxClick={handleAuxClick}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
