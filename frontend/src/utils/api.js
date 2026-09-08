@@ -187,6 +187,10 @@ const api = {
   setArchiveCover: (id, pageIndex) =>
     request(`/archives/${id}/cover`, { method: 'PUT', body: JSON.stringify({ page_index: pageIndex }) })
       .then(r => { _invalidate('/archives'); return r; }),
+  // 远程封面 URL：url=null 清除远程封面
+  setRemoteCover: (id, url) =>
+    request(`/archives/${id}/cover-url`, { method: 'PUT', body: JSON.stringify({ url }) })
+      .then(r => { _invalidate('/archives'); return r; }),
   regenerateTitles: () =>
     request('/archives/regenerate-titles', { method: 'POST' })
       .then(r => { _invalidate('/archives'); _invalidate('/history'); return r; }),

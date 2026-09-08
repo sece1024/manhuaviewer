@@ -80,6 +80,9 @@ export default function Reader() {
   const [imageLoaded, setImageLoaded] = useState(false);
   // 当前档案的书签页码集合
   const [bookmarks, setBookmarks] = useState(() => new Set());
+  // 远程封面 URL 弹窗
+  const [showCoverUrl, setShowCoverUrl] = useState(false);
+  const [coverUrlInput, setCoverUrlInput] = useState('');
   // 容器宽度不足时禁用双页模式
   const [containerTooNarrow, setContainerTooNarrow] = useState(false);
   const DOUBLE_PAGE_MIN_WIDTH = 600;
@@ -542,7 +545,7 @@ export default function Reader() {
   });
 
   // 外设支持：游戏手柄 / USB 翻页器（浮层打开时暂停，避免误翻）
-  const overlayOpen = showHelp || showTagPicker || showThumbnails || showJump || showMenu;
+  const overlayOpen = showHelp || showTagPicker || showThumbnails || showJump || showMenu || showCoverUrl;
   useGamepad({ goPrev, goNext, enabled: !overlayOpen });
 
   const handleToggleBookmark = useCallback(async () => {
@@ -580,6 +583,34 @@ export default function Reader() {
       toast('已恢复默认封面（首页）', 'success');
     } catch (e) {
       toast(e.message || '恢复封面失败', 'error');
+    }
+  }, [archiveId, toast]);
+
+  const handleSaveRemoteCover = useCallback(async () => {
+    const url = coverUrlInput.trim();
+    if (!/^https?:\/\//i.test(url)) {
+      toast('请输入 http/https 图片地址', 'warning');
+      return;
+    }
+    const id = parseInt(archiveId);
+    try {
+      await api.setRemoteCover(id, url);
+      setShowCoverUrl(false);
+      toast('远程封面已保存（回到书库可见）', 'success');
+    } catch (e) {
+      toast(e.message || '保存远程封面失败', 'error');
+    }
+  }, [archiveId, coverUrlInput, toast]);
+
+  const handleClearRemoteCover = useCallback(async () => {
+    const id = parseInt(archiveId);
+    try {
+      await api.setRemoteCover(id, null);
+      setCoverUrlInput('');
+      setShowCoverUrl(false);
+      toast('已清除远程封面', 'success');
+    } catch (e) {
+      toast(e.message || '清除远程封面失败', 'error');
     }
   }, [archiveId, toast]);
 
@@ -875,6 +906,7 @@ export default function Reader() {
           </button>
           <button className="btn btn-secondary btn-sm" onClick={handleSetCover}>🖼 设当前页为封面</button>
           <button className="btn btn-secondary btn-sm" onClick={handleResetCover}>默认封面</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => { setCoverUrlInput(''); setShowCoverUrl(true); setShowMenu(false); }}>🌐 封面 URL</button>
           <button className="btn btn-secondary btn-sm" onClick={() => { setShowTagPicker(true); setShowMenu(false); }}>🏷️ 标签</button>
           {archive && archive.archive_type === 'folder' && (
             <button className="btn btn-secondary btn-sm" onClick={() => { handlePackCbz(); setShowMenu(false); }} disabled={packing}>
@@ -1010,6 +1042,31 @@ export default function Reader() {
               onKeyDown={e => e.key === 'Enter' && handleJump()}
               placeholder="页码" autoFocus style={{ flex: 1 }} />
             <button className="btn" onClick={handleJump}>跳转</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* 远程封面 URL 对话框 */}
+      {showCoverUrl && (
+        <Modal onClose={() => setShowCoverUrl(false)} ariaLabel="远程封面 URL" innerStyle={{ minWidth: 320 }}>
+          <h3 style={{ marginBottom: 12 }}>🌐 远程封面 URL</h3>
+          <div className="settings-row-desc" style={{ marginBottom: 10 }}>
+            填入漫画封面图片地址（http/https）；优先级低于「当前页设为封面」
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              type="text"
+              value={coverUrlInput}
+              onChange={e => setCoverUrlInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSaveRemoteCover()}
+              placeholder="https://…/cover.jpg"
+              autoFocus
+              style={{ flex: 1 }}
+            />
+            <button className="btn" onClick={handleSaveRemoteCover}>保存</button>
+          </div>
+          <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+            <button className="btn btn-secondary btn-sm" onClick={handleClearRemoteCover}>清除远程封面</button>
           </div>
         </Modal>
       )}
