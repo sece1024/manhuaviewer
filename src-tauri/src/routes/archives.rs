@@ -578,21 +578,18 @@ pub async fn get_cover(
     Path(id): Path<i64>,
     headers: HeaderMap,
 ) -> Response {
-    let (archive_path, archive_type, thumb_already_set, cover_override) =
-        match super::run_db(&state, move |db| db.get_archive(id)).await {
-            Ok(Some(a)) => (
+    let (archive_path, archive_type, thumb_already_set, cover_override, remote_cover) =
+        match super::run_db(&state, move |db| db.get_archive_with_remote_cover(id)).await {
+            Ok(Some((a, rc))) => (
                 a.path,
                 a.archive_type,
                 a.thumbnail_path.is_some(),
                 a.cover_image,
+                rc,
             ),
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
             Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         };
-    let remote_cover: Option<String> = super::run_db(&state, move |db| db.get_remote_cover(id))
-        .await
-        .ok()
-        .flatten();
 
     let mtime = archive_mtime(&archive_path);
     // ETag 同时纳入覆写页与远程封面，二者任一变化都会使浏览器缓存失效

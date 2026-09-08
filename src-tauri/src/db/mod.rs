@@ -228,7 +228,6 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at FROM archives WHERE id = ?"
         )?;
-
         let mut rows = stmt.query_map([id], |row| {
             Ok(ArchiveRow {
                 id: row.get(0)?,
@@ -243,6 +242,37 @@ impl Database {
                 created_at: row.get(9)?,
                 updated_at: row.get(10)?,
             })
+        })?;
+
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 一次查询取回档案行与其远程封面 URL，避免封面请求两次往返 DB。
+    pub fn get_archive_with_remote_cover(&self, id: i64) -> Result<Option<(ArchiveRow, Option<String>)>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at, remote_cover FROM archives WHERE id = ?"
+        )?;
+        let mut rows = stmt.query_map([id], |row| {
+            Ok((
+                ArchiveRow {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    path: row.get(2)?,
+                    archive_type: row.get(3)?,
+                    page_count: row.get(4)?,
+                    cover_image: row.get(5)?,
+                    file_size: row.get(6)?,
+                    thumbnail_path: row.get(7)?,
+                    group_id: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                },
+                row.get::<_, Option<String>>(11)?,
+            ))
         })?;
 
         match rows.next() {
