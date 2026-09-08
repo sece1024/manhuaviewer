@@ -1412,38 +1412,43 @@ pub async fn list_cbz_files(State(state): State<Arc<AppState>>) -> Response {
         _ => return Json(serde_json::json!([])).into_response(),
     };
 
-    let dir = std::path::Path::new(&export_dir);
+    let dir = std::path::PathBuf::from(&export_dir);
     if !dir.exists() || !dir.is_dir() {
         return Json(serde_json::json!([])).into_response();
     }
 
-    let mut files: Vec<serde_json::Value> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path().is_file()
-                && e.path()
-                    .extension()
-                    .map(|ext| ext == "cbz")
-                    .unwrap_or(false)
-        })
-        .filter_map(|e| {
-            let metadata = e.metadata().ok()?;
-            let mtime = metadata
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            Some(serde_json::json!({
-                "name": e.file_name().to_string_lossy(),
-                "path": e.path().to_string_lossy(),
-                "size": metadata.len(),
-                "modified": mtime,
-            }))
-        })
-        .collect();
+    // 目录枚举 + 每文件 stat 是阻塞 I/O，放到 spawn_blocking 避免占满 tokio worker
+    let mut files = tokio::task::spawn_blocking(move || -> Vec<serde_json::Value> {
+        std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path().is_file()
+                    && e.path()
+                        .extension()
+                        .map(|ext| ext == "cbz")
+                        .unwrap_or(false)
+            })
+            .filter_map(|e| {
+                let metadata = e.metadata().ok()?;
+                let mtime = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                Some(serde_json::json!({
+                    "name": e.file_name().to_string_lossy(),
+                    "path": e.path().to_string_lossy(),
+                    "size": metadata.len(),
+                    "modified": mtime,
+                }))
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default();
 
     files.sort_by(|a, b| {
         let ma = a["modified"].as_u64().unwrap_or(0);
