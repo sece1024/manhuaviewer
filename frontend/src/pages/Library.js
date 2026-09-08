@@ -287,6 +287,8 @@ export default function Library({ mode = 'library' }) {
       loadArchives();
     }
     reloadCategories();
+    // 每次进入书库刷新标签列表与计数（阅读器/设置页里的改动可能已过期）
+    reloadTags();
     // 本帧渲染与后续“筛选变化重拉”effect 稳定后再放开抑制
     requestAnimationFrame(() => { restoringRef.current = false; });
     return () => clearTimeout(searchDebounceRef.current);

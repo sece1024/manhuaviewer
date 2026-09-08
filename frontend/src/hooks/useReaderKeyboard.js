@@ -31,7 +31,26 @@ export default function useReaderKeyboard({
   doublePage,
 }) {
   const handler = useCallback((e) => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    // 长按重复触发只对翻页类键有意义，且会造成连跳
+    if (e.repeat && [' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) return;
+
+    const overlayOpen = showHelp || showTagPicker || showThumbnails || showJump || showMenu;
+    // 任一浮层打开时：只放行 Escape 关闭，方向键/空格不再翻到底层页面
+    if (overlayOpen) {
+      if (e.key === 'Escape') {
+        if (showHelp) setShowHelp(false);
+        else if (showTagPicker) setShowTagPicker(false);
+        else if (showThumbnails) setShowThumbnails(false);
+        else if (showJump) setShowJump(false);
+        else if (showMenu) setShowMenu(false);
+      }
+      return;
+    }
+
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+    // 焦点在按钮上：Space/Enter 由按钮本身处理，避免“hook 翻一页 + 按钮 click 再翻一页”
+    if (e.target.tagName === 'BUTTON' && (e.key === ' ' || e.key === 'Enter')) return;
+
     switch (e.key) {
       case 'ArrowLeft': goPrev(); break;
       case 'ArrowRight': goNext(); break;

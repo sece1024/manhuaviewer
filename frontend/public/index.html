@@ -8,6 +8,15 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>MangaViewer</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>" />
+    <script>
+      // 首帧前应用主题，避免深色用户冷启动时闪现浅色背景
+      (function () {
+        try {
+          var t = localStorage.getItem('theme') || 'dark';
+          document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <noscript>请启用 JavaScript 以使用 MangaViewer</noscript>
