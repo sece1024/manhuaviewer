@@ -196,6 +196,8 @@ impl Database {
             ("sort_by", "updated"),
             ("sort_order", "desc"),
             ("reader_fit", "height"),
+            ("reader_double", "0"),
+            ("reader_long", "0"),
             ("reader_bg", "#1a1a1a"),
             ("auto_scan_interval", "0"),
             ("scan_depth", "1"),

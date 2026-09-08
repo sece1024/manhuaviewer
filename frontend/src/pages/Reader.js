@@ -132,6 +132,31 @@ export default function Reader() {
     if (settings.page_direction) setPageDirection(settings.page_direction);
   }, [settings.page_direction]);
 
+  // —— 阅读偏好持久化 ——
+  // 双页/长图/翻页方向跨会话记忆：服务端设置到达前不写回，避免首帧误写
+  const prefsReadyRef = useRef(false);
+  useEffect(() => {
+    if (settings.reader_double !== undefined) {
+      prefsReadyRef.current = true;
+      setDoublePage(settings.reader_double === '1');
+    }
+    if (settings.reader_long !== undefined) {
+      setLongImage(settings.reader_long === '1');
+    }
+  }, [settings.reader_double, settings.reader_long]);
+
+  useEffect(() => {
+    if (prefsReadyRef.current) updateSetting('reader_double', doublePage ? '1' : '0');
+  }, [doublePage]);
+  useEffect(() => {
+    if (prefsReadyRef.current) updateSetting('reader_long', longImage ? '1' : '0');
+  }, [longImage]);
+  useEffect(() => {
+    if (prefsReadyRef.current && settings.page_direction !== undefined) {
+      updateSetting('page_direction', pageDirection);
+    }
+  }, [pageDirection]);
+
   // 缩略图面板：分批渲染，滚动到末尾时追加，避免一次挂载上千 <img>
   const [thumbCount, setThumbCount] = useState(0);
   const thumbLoadMoreRef = useRef(null);
