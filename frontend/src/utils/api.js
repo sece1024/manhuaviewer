@@ -20,6 +20,7 @@ const RETRY_DELAY = 500; // 500ms base delay
 // 失效时必须用同样的相对路径前缀（如 '/archives'）去 _invalidate。
 const _cache = new Map();       // key -> { data, ts }
 const _inflight = new Map();    // key -> Promise (去重同 URL 的并发请求)
+let _generation = 0;            // 每次失效 +1：in-flight 响应落地时比对，跳过失效后的旧数据回写
 const DEFAULT_TTL = 30_000;     // 默认 30s
 const MAX_CACHE_ENTRIES = 200;  // 防止搜索/翻页等变化 URL 无限累积
 
@@ -65,8 +66,14 @@ function _setCache(url, data) {
 }
 
 function _invalidate(pattern) {
+  _generation += 1; // 使所有 in-flight GET 的缓存回写失效（见 request() 的代数比对）
   for (const key of _cache.keys()) {
     if (key.includes(pattern)) _cache.delete(key);
+  }
+  // 同步清除仍在途的同 URL 请求：失效后新发起的请求会重新拉取，
+  // 而不是复用失效前发出、即将返回的旧结果。
+  for (const key of _inflight.keys()) {
+    if (key.includes(pattern)) _inflight.delete(key);
   }
 }
 
@@ -83,14 +90,18 @@ async function request(url, options = {}) {
     // 同一 URL 正在请求中，复用 Promise
     if (_inflight.has(url)) return _inflight.get(url);
 
-    const promise = _doFetch(url, options, maxAttempts);
+    const generation = _generation; // 记录发起时的代数
+    const promise = _doFetch(url, options, maxAttempts).then((result) => {
+      // 若在请求期间缓存被失效（保存/删除等写操作），不再把旧数据写回
+      if (generation === _generation) _setCache(url, result);
+      return result;
+    });
     _inflight.set(url, promise);
     try {
-      const result = await promise;
-      _setCache(url, result);
-      return result;
+      return await promise;
     } finally {
-      _inflight.delete(url);
+      // 仅在仍指向本次请求时清理，避免误删失效后新注册的同 URL 请求
+      if (_inflight.get(url) === promise) _inflight.delete(url);
     }
   }
 
@@ -182,11 +193,24 @@ const api = {
   },
   saveHistory: (archive_id, page_index, total_pages) =>
     request('/history', { method: 'POST', body: JSON.stringify({ archive_id, page_index, total_pages }) })
-      .then(r => { _invalidate('/history'); return r; }),
+      .then(r => {
+        _invalidate('/history');
+        // 阅读进度会改变书库列表内容：卡片进度条、“最近阅读”排序、/pages 列表的续读位置
+        _invalidate('/archives');
+        return r;
+      }),
   deleteHistory: (archiveId) =>
-    request(`/history/${archiveId}`, { method: 'DELETE' }).then(r => { _invalidate('/history'); return r; }),
+    request(`/history/${archiveId}`, { method: 'DELETE' }).then(r => {
+      _invalidate('/history');
+      _invalidate('/archives');
+      return r;
+    }),
   clearHistory: () =>
-    request('/history', { method: 'DELETE' }).then(r => { _invalidate('/history'); return r; }),
+    request('/history', { method: 'DELETE' }).then(r => {
+      _invalidate('/history');
+      _invalidate('/archives');
+      return r;
+    }),
 
   // Tags
   getTags: (params = {}) => {

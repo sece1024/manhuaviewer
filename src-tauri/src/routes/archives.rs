@@ -57,6 +57,9 @@ pub struct ListItem {
     pub auto_key: Option<String>,
     #[serde(rename = "_parentDir", skip_serializing_if = "Option::is_none")]
     pub parent_dir: Option<String>,
+    /// 最近阅读进度（0-based 页码），来自 history 表；无阅读记录时为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_page: Option<i64>,
 }
 
 enum GroupKey {
@@ -106,6 +109,7 @@ fn group_archives(rows: Vec<crate::db::ArchiveRow>) -> Vec<ListItem> {
                     auto_group: None,
                     auto_key: None,
                     parent_dir: None,
+                    read_page: None,
                 }
             }
             GroupKey::Auto(key) => {
@@ -119,6 +123,7 @@ fn group_archives(rows: Vec<crate::db::ArchiveRow>) -> Vec<ListItem> {
                         auto_group: None,
                         auto_key: None,
                         parent_dir: None,
+                        read_page: None,
                     }
                 } else {
                     let primary = members[0].clone();
@@ -130,6 +135,7 @@ fn group_archives(rows: Vec<crate::db::ArchiveRow>) -> Vec<ListItem> {
                         auto_group: Some(true),
                         auto_key: Some(key),
                         parent_dir: Some(parent),
+                        read_page: None,
                     }
                 }
             }
@@ -361,11 +367,23 @@ pub async fn list_archives(
             sort,
             order,
         )?;
-        let grouped = group_archives(rows)
+        let mut grouped: Vec<ListItem> = group_archives(rows)
             .into_iter()
             .skip(offset as usize)
             .take(limit as usize)
             .collect();
+
+        // 附上当前页卡片的阅读进度（read_page），供书库进度条/已读展示使用。
+        // 合并组卡片显示其主成员（即排序最靠前的那一话）的进度。
+        let ids: Vec<i64> = grouped.iter().map(|item| item.archive.id).collect();
+        let progress = db.get_history_for_archives(&ids)?;
+        let progress_map: std::collections::HashMap<i64, i64> = progress.into_iter().collect();
+        for item in grouped.iter_mut() {
+            if let Some(page) = progress_map.get(&item.archive.id) {
+                item.read_page = Some(*page);
+            }
+        }
+
         Ok(ListResult::Grouped(grouped))
     })
     .await;

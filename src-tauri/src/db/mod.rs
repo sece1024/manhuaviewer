@@ -55,6 +55,29 @@ pub struct ArchiveRow {
     pub updated_at: String,
 }
 
+/// 排序方式 → ORDER BY 表达式。"updated"（最近阅读）优先按阅读时间排序：
+/// 有 history 记录的用 history.updated_at，从未读过的回退到 archives.updated_at，
+/// 这样"最近阅读"排序才是真实语义（读过的按最近读的时间冒泡，新加的仍按添加时间排）。
+fn order_expr_for(sort: &str) -> &'static str {
+    match sort {
+        "name" | "title" => "a.title",
+        "created" => "a.created_at",
+        "pages" => "a.page_count",
+        "size" => "a.file_size",
+        "updated" => "COALESCE(h.updated_at, a.updated_at)",
+        _ => "a.updated_at",
+    }
+}
+
+/// 仅当按"最近阅读"排序时需要 LEFT JOIN history（history.archive_id 是主键，不产生重复行）。
+fn history_join_for(sort: &str) -> &'static str {
+    if sort == "updated" {
+        " LEFT JOIN history h ON h.archive_id = a.id"
+    } else {
+        ""
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagRow {
     pub id: i64,
@@ -287,18 +310,13 @@ impl Database {
         let (join_clause, where_clause, mut params) =
             Self::build_archive_filters(&conn, search, tag, category_id)?;
 
-        let order_clause = match sort {
-            "name" => "a.title",
-            "created" => "a.created_at",
-            "pages" => "a.page_count",
-            "size" => "a.file_size",
-            _ => "a.updated_at",
-        };
+        let order_clause = order_expr_for(sort);
+        let history_join = history_join_for(sort);
         let direction = if order == "asc" { "ASC" } else { "DESC" };
 
         let sql = format!(
-            "SELECT {} FROM archives a{} {} ORDER BY {} {} LIMIT ? OFFSET ?",
-            ARCHIVE_COLUMNS, join_clause, where_clause, order_clause, direction
+            "SELECT {} FROM archives a{} {} {} ORDER BY {} {} LIMIT ? OFFSET ?",
+            ARCHIVE_COLUMNS, history_join, join_clause, where_clause, order_clause, direction
         );
 
         params.push(Box::new(limit));
@@ -329,18 +347,13 @@ impl Database {
         let (join_clause, where_clause, params) =
             Self::build_archive_filters(&conn, search, tag, category_id)?;
 
-        let order_clause = match sort {
-            "name" => "a.title",
-            "created" => "a.created_at",
-            "pages" => "a.page_count",
-            "size" => "a.file_size",
-            _ => "a.updated_at",
-        };
+        let order_clause = order_expr_for(sort);
+        let history_join = history_join_for(sort);
         let direction = if order == "asc" { "ASC" } else { "DESC" };
 
         let sql = format!(
-            "SELECT {} FROM archives a{} {} ORDER BY {} {}",
-            ARCHIVE_COLUMNS, join_clause, where_clause, order_clause, direction
+            "SELECT {} FROM archives a{} {} {} ORDER BY {} {}",
+            ARCHIVE_COLUMNS, history_join, join_clause, where_clause, order_clause, direction
         );
 
         let mut stmt = conn.prepare(&sql)?;
@@ -1168,6 +1181,24 @@ impl Database {
         }
     }
 
+    /// 批量读取一批档案的阅读进度 (archive_id, page_index)，供列表接口附在卡片上。
+    pub fn get_history_for_archives(&self, ids: &[i64]) -> Result<Vec<(i64, i64)>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!(
+            "SELECT archive_id, page_index FROM history WHERE archive_id IN ({})",
+            placeholders
+        );
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        Ok(rows.filter_map(log_and_skip).collect())
+    }
+
     pub fn delete_history(&self, archive_id: i64) -> Result<usize> {
         self.conn()?
             .execute("DELETE FROM history WHERE archive_id = ?", [archive_id])
@@ -1631,6 +1662,67 @@ mod tests {
         let (history, total) = db.get_history(None, 50, 0).unwrap();
         assert_eq!(history.len(), 0);
         assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn test_list_archives_recent_read_sort_uses_history() {
+        let db = setup_test_db();
+
+        let alpha = db
+            .insert_archive("Alpha", "/path/alpha", "zip", 10, 100)
+            .unwrap();
+        db.insert_archive("Beta", "/path/beta", "folder", 10, 100)
+            .unwrap();
+
+        // 把 Beta 的 updated_at 改到过去：Alpha 之后被读过（history.updated_at=now），
+        // Beta 从未阅读（回退到过去式 updated_at）→ "最近阅读"排序 Alpha 必须在前。
+        let conn = db.conn_for_test().unwrap();
+        conn.execute(
+            "UPDATE archives SET updated_at = datetime('now', '-1 day') WHERE title = 'Beta'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        db.save_history(alpha, 3, 10).unwrap();
+
+        // 全量列表（书库主路径）按最近阅读排序
+        let rows = db
+            .list_archives_all(None, None, None, "updated", "desc")
+            .unwrap();
+        assert_eq!(rows[0].id, alpha, "最近读过的档案应排在第一位");
+        assert_eq!(rows[1].title, "Beta");
+
+        // 分页列表（OPDS 等路径）同样按最近阅读排序
+        let rows = db
+            .list_archives(None, None, None, "updated", "desc", 10, 0)
+            .unwrap();
+        assert_eq!(rows[0].id, alpha);
+
+        // 其它排序方式不受 history 影响（如按名称）
+        let rows = db
+            .list_archives_all(None, None, None, "name", "asc")
+            .unwrap();
+        assert_eq!(rows[0].title, "Alpha");
+        assert_eq!(rows[1].title, "Beta");
+    }
+
+    #[test]
+    fn test_get_history_for_archives_batch() {
+        let db = setup_test_db();
+        let a = db.insert_archive("A", "/a", "zip", 10, 100).unwrap();
+        let b = db.insert_archive("B", "/b", "zip", 10, 100).unwrap();
+        let c = db.insert_archive("C", "/c", "zip", 10, 100).unwrap();
+        db.save_history(a, 2, 10).unwrap();
+        db.save_history(c, 7, 10).unwrap();
+
+        let progress = db.get_history_for_archives(&[a, b, c]).unwrap();
+        assert_eq!(progress.len(), 2);
+        assert!(progress.contains(&(a, 2)));
+        assert!(progress.contains(&(c, 7)));
+
+        let empty = db.get_history_for_archives(&[]).unwrap();
+        assert!(empty.is_empty());
     }
 
     #[test]
