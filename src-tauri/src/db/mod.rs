@@ -65,6 +65,7 @@ fn order_expr_for(sort: &str) -> &'static str {
         "pages" => "a.page_count",
         "size" => "a.file_size",
         "updated" => "COALESCE(h.updated_at, a.updated_at)",
+        "random" => "RANDOM()",
         _ => "a.updated_at",
     }
 }
@@ -370,17 +371,29 @@ impl Database {
     }
 
     /// 拉取所有符合过滤条件的档案（不分页），供服务端分组后统一分页。
+    /// `read`: None=全部, "read"=已有阅读记录, "unread"=从未读过。
+    #[allow(clippy::too_many_arguments)]
     pub fn list_archives_all(
         &self,
         search: Option<&str>,
         tag: Option<&str>,
         category_id: Option<i64>,
+        read: Option<&str>,
         sort: &str,
         order: &str,
     ) -> Result<Vec<ArchiveRow>> {
         let conn = self.conn()?;
-        let (join_clause, where_clause, params) =
+        let (join_clause, mut where_clause, params) =
             Self::build_archive_filters(&conn, search, tag, category_id)?;
+
+        let read_clause = match read {
+            Some("read") => " AND EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)",
+            Some("unread") => {
+                " AND NOT EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)"
+            }
+            _ => "",
+        };
+        where_clause.push_str(read_clause);
 
         let order_clause = order_expr_for(sort);
         let history_join = history_join_for(sort);
@@ -1906,7 +1919,7 @@ mod tests {
 
         // 全量列表（书库主路径）按最近阅读排序
         let rows = db
-            .list_archives_all(None, None, None, "updated", "desc")
+            .list_archives_all(None, None, None, None, "updated", "desc")
             .unwrap();
         assert_eq!(rows[0].id, alpha, "最近读过的档案应排在第一位");
         assert_eq!(rows[1].title, "Beta");
@@ -1919,10 +1932,36 @@ mod tests {
 
         // 其它排序方式不受 history 影响（如按名称）
         let rows = db
-            .list_archives_all(None, None, None, "name", "asc")
+            .list_archives_all(None, None, None, None, "name", "asc")
             .unwrap();
         assert_eq!(rows[0].title, "Alpha");
         assert_eq!(rows[1].title, "Beta");
+    }
+
+    #[test]
+    fn test_list_archives_read_filter_and_random_sort() {
+        let db = setup_test_db();
+        let a = db.insert_archive("Alpha", "/r/a", "zip", 10, 100).unwrap();
+        db.insert_archive("Beta", "/r/b", "zip", 10, 100).unwrap();
+        db.save_history(a, 3, 10).unwrap();
+
+        let read = db
+            .list_archives_all(None, None, None, Some("read"), "name", "asc")
+            .unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].id, a);
+
+        let unread = db
+            .list_archives_all(None, None, None, Some("unread"), "name", "asc")
+            .unwrap();
+        assert_eq!(unread.len(), 1);
+        assert_eq!(unread[0].title, "Beta");
+
+        // 随机排序不崩溃且返回全集
+        let random = db
+            .list_archives_all(None, None, None, None, "random", "asc")
+            .unwrap();
+        assert_eq!(random.len(), 2);
     }
 
     #[test]

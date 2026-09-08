@@ -204,6 +204,7 @@ export default function Library({ mode = 'library' }) {
   const [sortBy, setSortBy] = useState(() => settings.sort_by || 'updated');
   const [sortOrder, setSortOrder] = useState(() => settings.sort_order || 'desc');
   const [selectedTag, setSelectedTag] = useState('');
+  const [readFilter, setReadFilter] = useState('all'); // all | read | unread
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [showSidebar, setShowSidebar] = useState(true);
@@ -236,6 +237,7 @@ export default function Library({ mode = 'library' }) {
   const sortByRef = useRef(sortBy);
   const sortOrderRef = useRef(sortOrder);
   const selectedTagRef = useRef(selectedTag);
+  const readFilterRef = useRef(readFilter);
   const selectedCategoryRef = useRef(selectedCategory);
   const searchRef = useRef(search);
   const requestIdRef = useRef(0);
@@ -251,6 +253,7 @@ export default function Library({ mode = 'library' }) {
   useEffect(() => { sortByRef.current = sortBy; }, [sortBy]);
   useEffect(() => { sortOrderRef.current = sortOrder; }, [sortOrder]);
   useEffect(() => { selectedTagRef.current = selectedTag; }, [selectedTag]);
+  useEffect(() => { readFilterRef.current = readFilter; }, [readFilter]);
   useEffect(() => { selectedCategoryRef.current = selectedCategory; }, [selectedCategory]);
   useEffect(() => { searchRef.current = search; }, [search]);
 
@@ -267,6 +270,7 @@ export default function Library({ mode = 'library' }) {
       setSortBy(s.sortBy); sortByRef.current = s.sortBy;
       setSortOrder(s.sortOrder); sortOrderRef.current = s.sortOrder;
       setSelectedTag(s.selectedTag); selectedTagRef.current = s.selectedTag;
+      setReadFilter(s.readFilter || 'all'); readFilterRef.current = s.readFilter || 'all';
       setSelectedCategory(s.selectedCategory); selectedCategoryRef.current = s.selectedCategory;
       setArchives(s.archives);
       pageRef.current = s.page;
@@ -299,7 +303,7 @@ export default function Library({ mode = 'library' }) {
   useEffect(() => {
     latestStateRef.current = {
       archives, page: pageRef.current, hasMore,
-      search, sortBy, sortOrder, selectedTag, selectedCategory,
+      search, sortBy, sortOrder, selectedTag, readFilter, selectedCategory,
       expandedGroup, groupMembers,
     };
   });
@@ -348,6 +352,9 @@ export default function Library({ mode = 'library' }) {
       };
       if (categoryId) baseParams.category_id = categoryId;
       else delete baseParams.category_id;
+      if (readFilterRef.current && readFilterRef.current !== 'all') {
+        baseParams.read = readFilterRef.current;
+      }
       const data = await api.getArchives(baseParams);
       if (id !== requestIdRef.current) return;
       setArchives(prev => append ? [...prev, ...data] : data);
@@ -371,7 +378,7 @@ export default function Library({ mode = 'library' }) {
     // 会话恢复期间会直接 set 这些值，其“变化”不应触发整表重拉（避免覆盖恢复的列表）
     if (restoringRef.current) return;
     loadArchives({ search: searchRef.current, tag: selectedTag, category_id: selectedCategory });
-  }, [sortBy, sortOrder, selectedTag, selectedCategory]);
+  }, [sortBy, sortOrder, selectedTag, readFilter, selectedCategory]);
 
   const handleSearch = useCallback((val) => {
     setSearch(val);
@@ -396,6 +403,7 @@ export default function Library({ mode = 'library' }) {
         limit: PAGE_SIZE,
         page: 1,
         search: s.search,
+        ...(s.readFilter && s.readFilter !== 'all' ? { read: s.readFilter } : {}),
         ...(s.selectedTag ? { tag: s.selectedTag } : {}),
         ...(s.selectedCategory ? { category_id: s.selectedCategory } : {}),
       });
@@ -403,6 +411,7 @@ export default function Library({ mode = 'library' }) {
       // 用户在比对期间已切换条件：丢弃过期结果
       if (sortByRef.current !== s.sortBy || sortOrderRef.current !== s.sortOrder ||
           searchRef.current !== s.search || selectedTagRef.current !== s.selectedTag ||
+          readFilterRef.current !== (s.readFilter || 'all') ||
           selectedCategoryRef.current !== s.selectedCategory) {
         return;
       }
@@ -838,12 +847,19 @@ export default function Library({ mode = 'library' }) {
 
           <div className="spacer" />
 
+          <select value={readFilter} onChange={(e) => setReadFilter(e.target.value)} style={{ minWidth: 88 }} aria-label="阅读状态">
+            <option value="all">全部</option>
+            <option value="unread">未读</option>
+            <option value="read">已读</option>
+          </select>
+
           <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{ minWidth: 100 }} aria-label="排序方式">
             <option value="updated">最近阅读</option>
             <option value="name">名称</option>
             <option value="created">添加时间</option>
             <option value="pages">页数</option>
             <option value="size">大小</option>
+            <option value="random">随机</option>
           </select>
 
           <div className="toggle-group" role="group" aria-label="视图模式">

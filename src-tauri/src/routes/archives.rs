@@ -321,6 +321,8 @@ pub struct ArchiveQuery {
     pub search: Option<String>,
     pub tag: Option<String>,
     pub category_id: Option<i64>,
+    /// read=已读（有阅读记录）/ unread=未读，缺省全部
+    pub read: Option<String>,
     pub group_id: Option<i64>,
     /// 精确标题过滤（配合 parent 用于拉取自动分组完整成员列表）
     pub title: Option<String>,
@@ -419,6 +421,7 @@ pub async fn list_archives(
             query.search.as_deref(),
             query.tag.as_deref(),
             query.category_id,
+            query.read.as_deref(),
             sort,
             order,
         )?;
