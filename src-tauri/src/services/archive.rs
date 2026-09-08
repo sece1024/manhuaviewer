@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use super::is_image_file;
@@ -17,6 +18,9 @@ const WINDOWS_7Z_CANDIDATES: &[&str] = &[
     r"C:\Program Files\7-Zip\7z.exe",
     r"C:\Program Files (x86)\7-Zip\7z.exe",
 ];
+
+/// 持久化解压目录中的签名文件：内容是档案签名 `mtime_secs:len`，用于失效检测。
+const EXTRACT_MARKER: &str = ".mv_extracted";
 
 /// 解析外部工具路径：先查 PATH，再查 Windows 常见安装目录。
 fn resolve_tool(exe: &str, _windows_candidates: &[&str]) -> Option<PathBuf> {
@@ -55,6 +59,46 @@ fn resolve_tool_cached(name: &'static str, candidates: &[&str]) -> Option<PathBu
     let resolved = resolve_tool(name, candidates);
     tool_cache().lock().unwrap().insert(name, resolved.clone());
     resolved
+}
+
+/// 档案文件签名：(mtime 秒, 长度)。签名变化说明文件被替换/修改，需要重新解压。
+fn archive_signature(path: &str) -> Option<(i64, u64)> {
+    let md = fs::metadata(path).ok()?;
+    let mtime = md
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    Some((mtime, md.len()))
+}
+
+/// 整包解压串行化：并发首访同一档案时只允许一个线程真正解压，
+/// 其余线程在锁内重新检查签名后直接命中缓存。
+fn extract_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn read_extract_marker(dir: &Path) -> Option<(i64, u64)> {
+    let content = fs::read_to_string(dir.join(EXTRACT_MARKER)).ok()?;
+    let mut parts = content.trim().splitn(2, ':');
+    let mtime = parts.next()?.parse().ok()?;
+    let len = parts.next()?.parse().ok()?;
+    Some((mtime, len))
+}
+
+fn write_extract_marker(dir: &Path, sig: (i64, u64)) -> Result<()> {
+    fs::write(dir.join(EXTRACT_MARKER), format!("{}:{}", sig.0, sig.1))?;
+    Ok(())
+}
+
+/// 页面名是否安全（可安全 join 进缓存目录，拒绝绝对路径与 `..` 逃逸）。
+fn is_safe_page_name(name: &str) -> bool {
+    let p = Path::new(name);
+    !p.is_absolute()
+        && p.components()
+            .all(|c| !matches!(c, std::path::Component::ParentDir))
 }
 
 pub trait ArchiveReader {
@@ -168,14 +212,47 @@ impl ArchiveReader for FolderArchive {
 pub struct RarArchive {
     path: String,
     unrar: PathBuf,
+    /// 持久化解压缓存目录；Some 时首次访问整包解压到该目录，之后页面直接读盘。
+    cache: Option<PathBuf>,
 }
 
 impl RarArchive {
-    pub fn new(path: &str, unrar: PathBuf) -> Result<Self> {
+    pub fn new(path: &str, unrar: PathBuf, cache: Option<PathBuf>) -> Result<Self> {
         Ok(Self {
             path: path.to_string(),
             unrar,
+            cache,
         })
+    }
+
+    /// 若配置了缓存目录且签名不匹配（未解压 / 档案已变更），整包解压一次。
+    fn ensure_extracted(&self) -> Result<()> {
+        let Some(dir) = self.cache.as_deref() else {
+            return Ok(());
+        };
+        let Some(sig) = archive_signature(&self.path) else {
+            return Ok(());
+        };
+
+        let _guard = extract_lock().lock().unwrap();
+        if read_extract_marker(dir) == Some(sig) {
+            return Ok(());
+        }
+        if dir.exists() {
+            let _ = fs::remove_dir_all(dir);
+        }
+        fs::create_dir_all(dir)?;
+        let output = std::process::Command::new(&self.unrar)
+            .args(["x", "-o+", "-y", &self.path, &dir.to_string_lossy()])
+            .output()?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "Failed to extract archive: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        write_extract_marker(dir, sig)?;
+        Ok(())
     }
 }
 
@@ -204,6 +281,22 @@ impl ArchiveReader for RarArchive {
     }
 
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>> {
+        // 持久化解压缓存命中时直接读盘：无子进程、无 tempdir、无 O(N²) 顺解（solid 包）
+        if self.cache.is_some() && is_safe_page_name(page_name) {
+            self.ensure_extracted()?;
+            if let Some(dir) = self.cache.as_deref() {
+                let candidate = dir.join(page_name);
+                if candidate.is_file() {
+                    return Ok(fs::read(&candidate)?);
+                }
+                tracing::warn!(
+                    "Page {} not found in extraction cache {}; falling back to targeted extract",
+                    page_name,
+                    dir.display()
+                );
+            }
+        }
+
         let temp_dir = tempfile::tempdir()?;
 
         let output = std::process::Command::new(&self.unrar)
@@ -246,14 +339,52 @@ impl ArchiveReader for RarArchive {
 pub struct SevenZArchive {
     path: String,
     sevenz: PathBuf,
+    /// 持久化解压缓存目录；Some 时首次访问整包解压到该目录，之后页面直接读盘。
+    cache: Option<PathBuf>,
 }
 
 impl SevenZArchive {
-    pub fn new(path: &str, sevenz: PathBuf) -> Result<Self> {
+    pub fn new(path: &str, sevenz: PathBuf, cache: Option<PathBuf>) -> Result<Self> {
         Ok(Self {
             path: path.to_string(),
             sevenz,
+            cache,
         })
+    }
+
+    /// 若配置了缓存目录且签名不匹配（未解压 / 档案已变更），整包解压一次。
+    fn ensure_extracted(&self) -> Result<()> {
+        let Some(dir) = self.cache.as_deref() else {
+            return Ok(());
+        };
+        let Some(sig) = archive_signature(&self.path) else {
+            return Ok(());
+        };
+
+        let _guard = extract_lock().lock().unwrap();
+        if read_extract_marker(dir) == Some(sig) {
+            return Ok(());
+        }
+        if dir.exists() {
+            let _ = fs::remove_dir_all(dir);
+        }
+        fs::create_dir_all(dir)?;
+        let output = std::process::Command::new(&self.sevenz)
+            .args([
+                "x",
+                "-y",
+                &self.path,
+                &format!("-o{}", dir.to_string_lossy()),
+            ])
+            .output()?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "Failed to extract archive: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        write_extract_marker(dir, sig)?;
+        Ok(())
     }
 }
 
@@ -291,6 +422,22 @@ impl ArchiveReader for SevenZArchive {
     }
 
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>> {
+        // 持久化解压缓存命中时直接读盘：无子进程、无 tempdir、无 O(N²) 顺解（solid 包）
+        if self.cache.is_some() && is_safe_page_name(page_name) {
+            self.ensure_extracted()?;
+            if let Some(dir) = self.cache.as_deref() {
+                let candidate = dir.join(page_name);
+                if candidate.is_file() {
+                    return Ok(fs::read(&candidate)?);
+                }
+                tracing::warn!(
+                    "Page {} not found in extraction cache {}; falling back to targeted extract",
+                    page_name,
+                    dir.display()
+                );
+            }
+        }
+
         let temp_dir = tempfile::tempdir()?;
 
         let output = std::process::Command::new(&self.sevenz)
@@ -330,13 +477,31 @@ impl ArchiveReader for SevenZArchive {
 }
 
 pub fn create_archive_reader(path: &str, archive_type: &str) -> Result<Box<dyn ArchiveReader>> {
+    create_archive_reader_impl(path, archive_type, None)
+}
+
+/// 带持久化解压缓存目录的版本：RAR/7z 首次访问时整包解压到 `cache_dir`，
+/// 之后每页直接读盘（避免每页 spawn 子进程 + tempdir + 整包顺解）。zip/folder 不受影响。
+pub fn create_archive_reader_with_cache(
+    path: &str,
+    archive_type: &str,
+    cache_dir: Option<PathBuf>,
+) -> Result<Box<dyn ArchiveReader>> {
+    create_archive_reader_impl(path, archive_type, cache_dir)
+}
+
+fn create_archive_reader_impl(
+    path: &str,
+    archive_type: &str,
+    cache_dir: Option<PathBuf>,
+) -> Result<Box<dyn ArchiveReader>> {
     match archive_type {
         "zip" | "cbz" => Ok(Box::new(ZipArchive::new(path)?)),
         "folder" => Ok(Box::new(FolderArchive::new(path)?)),
         "rar" | "cbr" => {
             // Check if unrar is available（结果进程级缓存，避免每页重复探测）
             match resolve_tool_cached("unrar", WINDOWS_UNRAR_CANDIDATES) {
-                Some(bin) => Ok(Box::new(RarArchive::new(path, bin)?)),
+                Some(bin) => Ok(Box::new(RarArchive::new(path, bin, cache_dir)?)),
                 None => anyhow::bail!(
                     "RAR support requires the unrar tool. Install it via Homebrew \
                      (macOS: brew install unrar), 7-Zip/WinRAR (Windows: put unrar.exe in PATH \
@@ -347,7 +512,7 @@ pub fn create_archive_reader(path: &str, archive_type: &str) -> Result<Box<dyn A
         "7z" => {
             // Check if 7z is available（结果进程级缓存，避免每页重复探测）
             match resolve_tool_cached("7z", WINDOWS_7Z_CANDIDATES) {
-                Some(bin) => Ok(Box::new(SevenZArchive::new(path, bin)?)),
+                Some(bin) => Ok(Box::new(SevenZArchive::new(path, bin, cache_dir)?)),
                 None => anyhow::bail!(
                     "7Z support requires the 7z tool. Install 7-Zip (Windows), \
                      Homebrew p7zip (macOS: brew install p7zip), or apt \
@@ -379,5 +544,19 @@ mod tests {
         let b = resolve_tool_cached("true", &[]);
         assert_eq!(a, b);
         assert!(a.is_some());
+    }
+
+    #[test]
+    fn extract_marker_roundtrip_and_page_name_safety() {
+        let dir = tempfile::tempdir().unwrap();
+        write_extract_marker(dir.path(), (1_700_000_000, 42)).unwrap();
+        assert_eq!(read_extract_marker(dir.path()), Some((1_700_000_000, 42)));
+
+        assert!(is_safe_page_name("folder/img01.jpg"));
+        assert!(is_safe_page_name("img01.jpg"));
+        // 拒绝路径逃逸与绝对路径，防止整包解压缓存被用于任意路径读取
+        assert!(!is_safe_page_name("../evil.jpg"));
+        assert!(!is_safe_page_name("/etc/passwd"));
+        assert!(!is_safe_page_name("a/../../b.jpg"));
     }
 }

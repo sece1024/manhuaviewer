@@ -405,11 +405,13 @@ pub async fn get_archive(State(state): State<Arc<AppState>>, Path(id): Path<i64>
 
 pub async fn delete_archive(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
     let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
+    let extract_dir = state.data_dir.join("extract").join(id.to_string());
 
     match super::run_db(&state, move |db| db.delete_archive(id)).await {
         Ok(_) => {
-            // 删除缩略图目录
+            // 删除缩略图目录与解压缓存目录
             let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
+            let _ = tokio::fs::remove_dir_all(&extract_dir).await;
             Json(serde_json::json!({ "success": true })).into_response()
         }
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -433,10 +435,12 @@ pub async fn batch_delete_archives(
     let ids_db = ids.clone();
     match super::run_db(&state, move |db| db.batch_delete_archives(&ids_db)).await {
         Ok(affected) => {
-            // 逐个清理缩略图目录
+            // 逐个清理缩略图目录与解压缓存目录
             for id in &ids {
                 let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
                 let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
+                let extract_dir = state.data_dir.join("extract").join(id.to_string());
+                let _ = tokio::fs::remove_dir_all(&extract_dir).await;
             }
             Json(serde_json::json!({ "success": true, "affected": affected })).into_response()
         }
@@ -529,6 +533,8 @@ pub async fn get_cover(
     // 封面走缩略图缓存：生成 2:3 的等比缩略图，避免每屏都解压原始首页大图。
     let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
     let thumb_dir_str = thumb_dir.to_string_lossy().to_string();
+    // RAR/7z 等压缩包：持久化解压目录（<data_dir>/extract/{id}/），首次访问整包解压后直接读盘
+    let extract_dir = state.data_dir.join("extract").join(id.to_string());
     let result = tokio::task::spawn_blocking(move || {
         let cache_path = thumb_dir.join("cover.jpg");
 
@@ -543,7 +549,11 @@ pub async fn get_cover(
             }
         }
 
-        let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
+        let reader = crate::services::archive::create_archive_reader_with_cache(
+            &archive_path,
+            &archive_type,
+            Some(extract_dir),
+        )?;
         let cover = reader.get_cover()?;
         match crate::services::thumbnail::ThumbnailGenerator::default().generate(&cover) {
             Ok(thumb) => {
@@ -697,6 +707,8 @@ pub async fn get_page(
 
     let mtime_secs = archive_mtime_secs(&archive_path);
     let db = state.db.clone();
+    // 压缩包页面：持久化解压目录，避免 RAR/7z 每页 spawn 子进程 + tempdir
+    let extract_dir = state.data_dir.join("extract").join(archive_id.to_string());
     let result = tokio::task::spawn_blocking(move || {
         let pages = load_page_rows(&db, archive_id, &archive_path, &archive_type, mtime_secs)?;
         let idx = page_index as usize;
@@ -708,9 +720,12 @@ pub async fn get_page(
             .first_or_octet_stream()
             .to_string();
         if is_compressed(&archive_type) {
-            // 压缩包：解压后整体返回（需要解压，无法直接流式）
-            let reader =
-                crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
+            // 压缩包：优先从持久化解压目录读盘；未缓存时（zip 等）仍走解压
+            let reader = crate::services::archive::create_archive_reader_with_cache(
+                &archive_path,
+                &archive_type,
+                Some(extract_dir),
+            )?;
             let data = reader.extract_page(page_name)?;
             Ok::<_, anyhow::Error>((Some(data), mime, None))
         } else {
@@ -831,6 +846,8 @@ pub async fn get_page_thumb(
     let thumb_dir_clone = thumb_dir.clone();
     let mtime_secs = archive_mtime_secs(&archive_path);
     let db = state.db.clone();
+    // 压缩包页面：持久化解压目录，避免 RAR/7z 每页 spawn 子进程 + tempdir
+    let extract_dir = state.data_dir.join("extract").join(id.to_string());
     let result = tokio::task::spawn_blocking(move || {
         let pages = load_page_rows(&db, id, &archive_path, &archive_type, mtime_secs)?;
         let idx = page_index as usize;
@@ -841,7 +858,11 @@ pub async fn get_page_thumb(
         let page_mime = mime_guess::from_path(page_name)
             .first_or_octet_stream()
             .to_string();
-        let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
+        let reader = crate::services::archive::create_archive_reader_with_cache(
+            &archive_path,
+            &archive_type,
+            Some(extract_dir),
+        )?;
         let data = reader.extract_page(page_name)?;
         let thumb_gen = crate::services::thumbnail::ThumbnailGenerator::default();
         // generate_with_cache 使用 thumb_dir 作为缓存目录；解码失败（如 avif 无解码器）时
