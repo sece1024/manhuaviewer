@@ -75,6 +75,12 @@ pub fn create_router(state: AppState) -> Router {
             "/archives/:id/pages/:page/thumb",
             get(archives::get_page_thumb),
         )
+        .route("/archives/:id/bookmarks", get(archives::list_bookmarks))
+        .route("/archives/:id/bookmarks", post(archives::add_bookmark))
+        .route(
+            "/archives/:id/bookmarks/:page_index",
+            delete(archives::remove_bookmark),
+        )
         .route("/open", post(archives::open_file))
         .route("/scan", post(archives::scan))
         .route("/merge", post(archives::merge_archives))

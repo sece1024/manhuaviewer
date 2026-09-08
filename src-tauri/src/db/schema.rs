@@ -83,6 +83,16 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+-- 阅读书签（档案内任意页码）
+CREATE TABLE IF NOT EXISTS bookmarks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    archive_id INTEGER NOT NULL,
+    page_index INTEGER NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(archive_id, page_index),
+    FOREIGN KEY (archive_id) REFERENCES archives(id) ON DELETE CASCADE
+);
+
 -- 索引：加速列表排序、搜索与历史记录查询
 CREATE INDEX IF NOT EXISTS idx_archives_updated_at ON archives(updated_at);
 CREATE INDEX IF NOT EXISTS idx_archives_created_at ON archives(created_at);

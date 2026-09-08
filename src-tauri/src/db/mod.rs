@@ -640,6 +640,32 @@ impl Database {
             .execute("DELETE FROM archives WHERE path = ?", [path])
     }
 
+    // Bookmarks
+    /// 某档案的全部书签页码（升序）。
+    pub fn list_bookmarks(&self, archive_id: i64) -> Result<Vec<i64>> {
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare("SELECT page_index FROM bookmarks WHERE archive_id = ? ORDER BY page_index")?;
+        let rows = stmt.query_map([archive_id], |row| row.get::<_, i64>(0))?;
+        Ok(rows.filter_map(log_and_skip).collect())
+    }
+
+    /// 添加书签（同一页重复添加会被 UNIQUE 忽略）。
+    pub fn add_bookmark(&self, archive_id: i64, page_index: i64) -> Result<usize> {
+        self.conn()?.execute(
+            "INSERT OR IGNORE INTO bookmarks (archive_id, page_index) VALUES (?, ?)",
+            (archive_id, page_index),
+        )
+    }
+
+    /// 移除书签。
+    pub fn remove_bookmark(&self, archive_id: i64, page_index: i64) -> Result<usize> {
+        self.conn()?.execute(
+            "DELETE FROM bookmarks WHERE archive_id = ? AND page_index = ?",
+            (archive_id, page_index),
+        )
+    }
+
     /// 批量删除档案，单事务执行
     pub fn batch_delete_archives(&self, ids: &[i64]) -> Result<usize> {
         if ids.is_empty() {
@@ -1459,6 +1485,22 @@ impl Database {
             .filter_map(log_and_skip)
             .collect();
 
+        let mut stmt = conn.prepare(
+            "SELECT a.path, b.page_index
+             FROM bookmarks b
+             JOIN archives a ON a.id = b.archive_id
+             ORDER BY a.path, b.page_index",
+        )?;
+        let bookmarks: Vec<serde_json::Value> = stmt
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "path": row.get::<_, String>(0)?,
+                    "page_index": row.get::<_, i64>(1)?,
+                }))
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+
         let settings = self.get_settings()?;
 
         Ok(serde_json::json!({
@@ -1470,6 +1512,7 @@ impl Database {
             "archive_tags": archive_tags,
             "archive_categories": archive_categories,
             "history": history,
+            "bookmarks": bookmarks,
             "settings": settings,
         }))
     }
@@ -1599,6 +1642,21 @@ impl Database {
                             total_pages = excluded.total_pages,
                             updated_at = excluded.updated_at",
                         (page_index, total_pages, updated_at, path),
+                    )?;
+                }
+            }
+        }
+
+        // 导入书签（按 path 解析档案 id；重复页会被 UNIQUE 忽略）
+        if let Some(bookmarks) = backup["bookmarks"].as_array() {
+            for b in bookmarks {
+                if let (Some(path), Some(page_index)) =
+                    (b["path"].as_str(), b["page_index"].as_i64())
+                {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO bookmarks (archive_id, page_index)
+                         SELECT a.id, ?2 FROM archives a WHERE a.path = ?1",
+                        (path, page_index),
                     )?;
                 }
             }
@@ -2040,12 +2098,15 @@ mod tests {
         db1.assign_tag(a_id, tag_id).unwrap();
         db1.assign_category(a_id, cat_id).unwrap();
         db1.save_history(a_id, 6, 10).unwrap();
+        db1.add_bookmark(a_id, 4).unwrap();
+        db1.add_bookmark(a_id, 8).unwrap();
 
         // Export backup
         let backup = db1.export_backup().unwrap();
         assert!(backup["archive_tags"].is_array());
         assert!(backup["archive_categories"].is_array());
         assert_eq!(backup["history"].as_array().unwrap().len(), 1);
+        assert_eq!(backup["bookmarks"].as_array().unwrap().len(), 2);
 
         // Create new database and restore
         let db2 = setup_test_db();
@@ -2077,6 +2138,31 @@ mod tests {
         let restored_cats = db2.get_archive_categories(restored_a.id).unwrap();
         assert_eq!(restored_cats.len(), 1);
         assert_eq!(restored_cats[0].name, "Action");
+
+        // 书签同样按 path 重建
+        assert_eq!(db2.list_bookmarks(restored_a.id).unwrap(), vec![4, 8]);
+    }
+
+    #[test]
+    fn test_bookmark_crud() {
+        let db = setup_test_db();
+        let a = db
+            .insert_archive("Manga A", "/path/a", "zip", 10, 500)
+            .unwrap();
+
+        db.add_bookmark(a, 3).unwrap();
+        db.add_bookmark(a, 7).unwrap();
+        db.add_bookmark(a, 3).unwrap(); // 重复页幂等
+        assert_eq!(db.list_bookmarks(a).unwrap(), vec![3, 7]);
+
+        db.remove_bookmark(a, 3).unwrap();
+        assert_eq!(db.list_bookmarks(a).unwrap(), vec![7]);
+
+        // 其它档案互不影响
+        let b = db
+            .insert_archive("Manga B", "/path/b", "zip", 5, 100)
+            .unwrap();
+        assert!(db.list_bookmarks(b).unwrap().is_empty());
     }
 
     #[test]

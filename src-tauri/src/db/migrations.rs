@@ -2,7 +2,7 @@ use rusqlite::{Connection, Result};
 
 /// 当前 schema 版本。新增迁移时：把常量 +1，并在 run_migrations 里对
 /// user_version < N 的库执行第 N 版新增步骤（旧的幂等步骤会被版本守卫跳过）。
-pub const CURRENT_SCHEMA_VERSION: i64 = 1;
+pub const CURRENT_SCHEMA_VERSION: i64 = 2;
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
     // 版本守卫：已是当前版本的库不再重复执行（幂等步骤仍在历史版本库上跑一次）
@@ -204,6 +204,28 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_pages_archive_sort_order ON pages(archive_id, sort_order)",
         [],
     )?;
+
+    // v2: 书签表（schema 已含；此处兜底老库）
+    let has_bookmarks: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='bookmarks'",
+            [],
+            |row| row.get::<_, i64>(0).map(|c| c > 0),
+        )
+        .unwrap_or(false);
+    if !has_bookmarks {
+        tracing::info!("Creating bookmarks table (migration v2)...");
+        conn.execute_batch(
+            "CREATE TABLE bookmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                archive_id INTEGER NOT NULL,
+                page_index INTEGER NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(archive_id, page_index),
+                FOREIGN KEY (archive_id) REFERENCES archives(id) ON DELETE CASCADE
+            );",
+        )?;
+    }
 
     // 幂等步骤全部成功后才打版本号（中途失败下次启动会重跑，结构依然幂等）
     conn.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;

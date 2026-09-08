@@ -1406,6 +1406,46 @@ pub async fn list_cbz_files(State(state): State<Arc<AppState>>) -> Response {
     Json(files).into_response()
 }
 
+#[derive(Deserialize)]
+pub struct BookmarkRequest {
+    pub page_index: i64,
+}
+
+/// 列出某档案的全部书签页码。
+pub async fn list_bookmarks(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
+    match super::run_db(&state, move |db| db.list_bookmarks(id)).await {
+        Ok(pages) => Json(serde_json::json!({ "archive_id": id, "pages": pages })).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// 在当前页添加书签（同一页重复添加幂等）。
+pub async fn add_bookmark(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(payload): Json<BookmarkRequest>,
+) -> Response {
+    if payload.page_index < 0 {
+        return error_response(StatusCode::BAD_REQUEST, "page_index 不能为负");
+    }
+    match super::run_db(&state, move |db| db.add_bookmark(id, payload.page_index)).await {
+        Ok(_) => Json(serde_json::json!({ "success": true, "page_index": payload.page_index }))
+            .into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// 移除书签。
+pub async fn remove_bookmark(
+    State(state): State<Arc<AppState>>,
+    Path((id, page_index)): Path<(i64, i64)>,
+) -> Response {
+    match super::run_db(&state, move |db| db.remove_bookmark(id, page_index)).await {
+        Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
