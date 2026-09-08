@@ -1218,6 +1218,7 @@ pub async fn scan(
 
         let mut added = 0usize;
         let mut updated = 0usize;
+        let mut upserts: Vec<(String, String, String, i64, i64, i64)> = Vec::new();
 
         for archive_path in &discovered {
             let archive_type = scanner.detect_archive_type(archive_path);
@@ -1273,15 +1274,18 @@ pub async fn scan(
                 }
             };
 
-            db.upsert_scanned_archive(
-                &title,
-                archive_path,
-                &archive_type,
+            upserts.push((
+                title,
+                archive_path.clone(),
+                archive_type,
                 page_count,
                 file_size,
                 file_mtime,
-            )?;
+            ));
         }
+
+        // 单事务批量写入，避免每个档案单独获取连接 + SELECT id
+        db.batch_upsert_scanned_archives(&upserts)?;
 
         // 清理孤儿档案：本 root 下磁盘已消失的路径（只清本 root，不影响其它根）
         let mut removed = 0usize;

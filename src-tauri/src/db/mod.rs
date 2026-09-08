@@ -608,6 +608,45 @@ impl Database {
         Ok(id)
     }
 
+    /// 批量 upsert 扫描结果：单连接 + 单事务内完成全部写入，避免每次 upsert
+    /// 都单独获取连接并在 `SELECT id` 上往返。`entries` 为 (title, path, archive_type,
+    /// page_count, file_size, file_mtime)。
+    pub fn batch_upsert_scanned_archives(
+        &self,
+        entries: &[(String, String, String, i64, i64, i64)],
+    ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO archives (title, path, archive_type, page_count, file_size, file_mtime, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+                 ON CONFLICT(path) DO UPDATE SET
+                    title = excluded.title,
+                    archive_type = excluded.archive_type,
+                    page_count = excluded.page_count,
+                    file_size = excluded.file_size,
+                    file_mtime = excluded.file_mtime,
+                    updated_at = excluded.updated_at",
+            )?;
+            for (title, path, archive_type, page_count, file_size, file_mtime) in entries {
+                stmt.execute((
+                    title.as_str(),
+                    path.as_str(),
+                    archive_type.as_str(),
+                    *page_count,
+                    *file_size,
+                    *file_mtime,
+                ))?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// 读取某根目录下所有档案的扫描元数据快照：(path, page_count, file_size, file_mtime)。
     pub fn scan_meta_for_root(&self, root: &str) -> Result<Vec<(String, i64, i64, i64)>> {
         let conn = self.conn()?;
