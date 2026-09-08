@@ -210,6 +210,14 @@ export default function Reader() {
     currentIndexRef.current = 0;
     chapterListRef.current = null; // 换档时清掉旧的组章节序列
     chapterEndFiredRef.current = false;
+    // 视图状态也属旧书，换档后重置，避免长图模式短暂渲染旧书窗口/高度、缩放/旋转残留
+    setVisibleRange({ start: 0, end: 20 });
+    setPageHeights({});
+    setScale(1);
+    setRotation(0);
+    setTranslate({ x: 0, y: 0 });
+    setImageLoaded(false);
+    sentinelRefs.current = {}; // 释放旧书 DOM 节点引用
     async function load() {
       try {
         const data = await api.getPages(archiveId);
