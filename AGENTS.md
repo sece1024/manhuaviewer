@@ -12,7 +12,7 @@ pnpm tauri build               # production build (runs beforeBuildCommand, then
 
 # Tests
 cd frontend && pnpm test                           # all frontend tests (React Testing Library, CRA)
-cd frontend && pnpm test -- --testPathPattern=Library   # single frontend test file
+cd frontend && pnpm test --testPathPattern Library     # single frontend test file (space form, NOT `-- --testPathPattern=X` — pnpm mangles the `=` form)
 cd src-tauri && cargo test                         # all backend tests
 cd src-tauri && cargo test test_name               # single backend test (use full path::name for nested)
 

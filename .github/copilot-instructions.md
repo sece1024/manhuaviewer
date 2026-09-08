@@ -12,7 +12,7 @@ pnpm --filter manhuaviewer-frontend start
 
 # Tests
 cd frontend && pnpm test                           # all frontend tests (React Testing Library)
-cd frontend && pnpm test -- --testPathPattern=Library  # single test file
+cd frontend && pnpm test --testPathPattern Library    # single test file (space form, NOT `-- --testPathPattern=X` — pnpm mangles the `=` form)
 cd src-tauri && cargo test                         # all backend tests
 cd src-tauri && cargo test test_name               # single backend test
 
