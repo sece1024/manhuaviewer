@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS archives (
     archive_type TEXT NOT NULL DEFAULT 'folder',  -- folder | zip | rar | cbz | cbr | 7z
     page_count INTEGER DEFAULT 0,
     cover_image TEXT,           -- 封面图片路径（相对于档案）
+    remote_cover TEXT,          -- 远程封面 URL（可选的图片地址，优先级低于 cover_image）
     file_size INTEGER DEFAULT 0,
     thumbnail_path TEXT,        -- 缩略图目录路径（thumbnails/{id}/）
     thumb_accessed_at TEXT,     -- 缩略图最近被访问/生成时间，用于按真实使用做 LRU 淘汰

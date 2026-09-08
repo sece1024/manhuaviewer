@@ -2,7 +2,7 @@ use rusqlite::{Connection, Result};
 
 /// 当前 schema 版本。新增迁移时：把常量 +1，并在 run_migrations 里对
 /// user_version < N 的库执行第 N 版新增步骤（旧的幂等步骤会被版本守卫跳过）。
-pub const CURRENT_SCHEMA_VERSION: i64 = 2;
+pub const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
     // 版本守卫：已是当前版本的库不再重复执行（幂等步骤仍在历史版本库上跑一次）
@@ -204,6 +204,19 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_pages_archive_sort_order ON pages(archive_id, sort_order)",
         [],
     )?;
+
+    // v3: 远程封面 URL 列（老库兜底）
+    let has_remote_cover: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('archives') WHERE name='remote_cover'",
+            [],
+            |row| row.get::<_, i64>(0).map(|c| c > 0),
+        )
+        .unwrap_or(false);
+    if !has_remote_cover {
+        tracing::info!("Adding remote_cover column to archives (migration v3)...");
+        conn.execute("ALTER TABLE archives ADD COLUMN remote_cover TEXT", [])?;
+    }
 
     // v2: 书签表（schema 已含；此处兜底老库）
     let has_bookmarks: bool = conn

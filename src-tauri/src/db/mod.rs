@@ -873,6 +873,30 @@ impl Database {
         }
     }
 
+    /// 读取远程封面 URL（无则 None）。
+    pub fn get_remote_cover(&self, id: i64) -> Result<Option<String>> {
+        self.conn()?
+            .query_row(
+                "SELECT remote_cover FROM archives WHERE id = ?",
+                [id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(|v| v.flatten())
+    }
+
+    /// 设置/清除远程封面 URL（None 清除，恢复 页面封面/首页 的优先级）。
+    pub fn set_remote_cover(&self, id: i64, url: Option<&str>) -> Result<usize> {
+        let conn = self.conn()?;
+        match url {
+            Some(u) => conn.execute(
+                "UPDATE archives SET remote_cover = ?1 WHERE id = ?2",
+                (u, id),
+            ),
+            None => conn.execute("UPDATE archives SET remote_cover = NULL WHERE id = ?", [id]),
+        }
+    }
+
     // Tag operations
     pub fn list_tags(&self) -> Result<Vec<TagRow>> {
         let conn = self.conn()?;
@@ -2195,6 +2219,24 @@ mod tests {
         // 恢复默认
         db.set_archive_cover(a, None).unwrap();
         assert!(db.get_archive(a).unwrap().unwrap().cover_image.is_none());
+    }
+
+    #[test]
+    fn test_remote_cover_set_get_clear() {
+        let db = setup_test_db();
+        let a = db
+            .insert_archive("Manga A", "/path/a", "zip", 10, 100)
+            .unwrap();
+
+        assert!(db.get_remote_cover(a).unwrap().is_none());
+        db.set_remote_cover(a, Some("https://example.com/c.jpg"))
+            .unwrap();
+        assert_eq!(
+            db.get_remote_cover(a).unwrap().as_deref(),
+            Some("https://example.com/c.jpg")
+        );
+        db.set_remote_cover(a, None).unwrap();
+        assert!(db.get_remote_cover(a).unwrap().is_none());
     }
 
     #[test]

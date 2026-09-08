@@ -72,6 +72,10 @@ pub fn create_router(state: AppState) -> Router {
             "/archives/:id/cover",
             get(archives::get_cover).put(archives::set_archive_cover),
         )
+        .route(
+            "/archives/:id/cover-url",
+            put(archives::set_remote_cover_url),
+        )
         .route("/archives/:id/pages", get(archives::list_pages))
         .route("/archives/:id/pages/:page", get(archives::get_page))
         .route(

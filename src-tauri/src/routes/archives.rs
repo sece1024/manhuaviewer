@@ -554,6 +554,25 @@ pub async fn merge_archives(
     }
 }
 
+/// 下载远程图片到本地缓存文件（幂等：已有文件则直接返回其内容）。
+/// 用系统 curl（桌面端均有），避免为单次下载引入 HTTP 依赖。
+fn remote_cover_bytes(id: i64, url: &str, covers_dir: &std::path::Path) -> anyhow::Result<Vec<u8>> {
+    std::fs::create_dir_all(covers_dir)?;
+    let dest = covers_dir.join(format!("{}.img", id));
+    if !dest.is_file() {
+        let status = std::process::Command::new("curl")
+            .args(["-fsSL", "--max-time", "25", "-o"])
+            .arg(&dest)
+            .arg(url)
+            .status()?;
+        if !status.success() || !dest.is_file() {
+            let _ = std::fs::remove_file(&dest);
+            anyhow::bail!("failed to download remote cover");
+        }
+    }
+    Ok(std::fs::read(&dest)?)
+}
+
 pub async fn get_cover(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
@@ -570,9 +589,18 @@ pub async fn get_cover(
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
             Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         };
+    let remote_cover: Option<String> = super::run_db(&state, move |db| db.get_remote_cover(id))
+        .await
+        .ok()
+        .flatten();
 
     let mtime = archive_mtime(&archive_path);
-    let etag = etag_for_cover(id, mtime, cover_override.as_deref());
+    // ETag 同时纳入覆写页与远程封面，二者任一变化都会使浏览器缓存失效
+    let etag_key = cover_override
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or_else(|| remote_cover.as_deref().filter(|s| !s.is_empty()));
+    let etag = etag_for_cover(id, mtime, etag_key);
     let last_modified = mtime.and_then(http_date);
 
     if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
@@ -598,6 +626,8 @@ pub async fn get_cover(
     let thumb_dir_str = thumb_dir.to_string_lossy().to_string();
     // RAR/7z 等压缩包：持久化解压目录（<data_dir>/extract/{id}/），首次访问整包解压后直接读盘
     let extract_dir = state.data_dir.join("extract").join(id.to_string());
+    // 远程封面缓存目录
+    let covers_dir = state.data_dir.join("covers");
     let result = tokio::task::spawn_blocking(move || {
         let cache_path = thumb_dir.join("cover.jpg");
 
@@ -617,10 +647,19 @@ pub async fn get_cover(
             &archive_type,
             Some(extract_dir),
         )?;
-        // 用户手动指定过封面页时优先用该页，否则取首页
-        let cover = match &cover_override {
-            Some(name) if !name.is_empty() => reader.extract_page(name)?,
-            _ => reader.get_cover()?,
+        // 封面来源优先级：手动指定页 > 远程封面 URL > 首页
+        let cover = if let Some(name) = cover_override.as_deref().filter(|s| !s.is_empty()) {
+            reader.extract_page(name)?
+        } else if let Some(url) = remote_cover.as_deref().filter(|s| !s.is_empty()) {
+            match remote_cover_bytes(id, url, &covers_dir) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    tracing::warn!("Remote cover download failed ({}): {}", url, e);
+                    reader.get_cover()?
+                }
+            }
+        } else {
+            reader.get_cover()?
         };
         match crate::services::thumbnail::ThumbnailGenerator::default().generate(&cover) {
             Ok(thumb) => {
@@ -1517,6 +1556,42 @@ pub async fn set_archive_cover(
             let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
             let _ = tokio::fs::remove_file(thumb_dir.join("cover.jpg")).await;
             Json(serde_json::json!({ "success": true, "cover_image": page_name })).into_response()
+        }
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RemoteCoverRequest {
+    pub url: Option<String>,
+}
+
+/// 设置/清除远程封面 URL（http/https）。设置时清掉旧下载缓存，下次访问封面会重新拉取。
+pub async fn set_remote_cover_url(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(payload): Json<RemoteCoverRequest>,
+) -> Response {
+    let url = payload
+        .url
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty());
+    if let Some(u) = &url {
+        let is_http = u.starts_with("http://") || u.starts_with("https://");
+        if !is_http {
+            return error_response(StatusCode::BAD_REQUEST, "仅支持 http/https 图片地址");
+        }
+    }
+
+    let db_url = url.clone();
+    match super::run_db(&state, move |db| db.set_remote_cover(id, db_url.as_deref())).await {
+        Ok(_) => {
+            // 失效缓存：缩略图与远程原图缓存都要重新生成/下载
+            let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
+            let _ = tokio::fs::remove_file(thumb_dir.join("cover.jpg")).await;
+            let covers_file = state.data_dir.join("covers").join(format!("{}.img", id));
+            let _ = tokio::fs::remove_file(&covers_file).await;
+            Json(serde_json::json!({ "success": true, "remote_cover": url })).into_response()
         }
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
