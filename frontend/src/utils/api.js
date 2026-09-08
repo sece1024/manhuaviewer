@@ -168,6 +168,13 @@ const api = {
     ...data,
     pages: data.pages.map(p => ({ ...p, url: fixUrl(p.url), thumb_url: fixUrl(p.thumb_url) })),
   })),
+  // 阅读书签（档案内任意页码）
+  getBookmarks: (archiveId) =>
+    request(`/archives/${archiveId}/bookmarks`).then(r => (r && Array.isArray(r.pages) ? r.pages : [])),
+  addBookmark: (archiveId, pageIndex) =>
+    request(`/archives/${archiveId}/bookmarks`, { method: 'POST', body: JSON.stringify({ page_index: pageIndex }) }),
+  removeBookmark: (archiveId, pageIndex) =>
+    request(`/archives/${archiveId}/bookmarks/${pageIndex}`, { method: 'DELETE' }),
   deleteArchive: (id) =>
     request(`/archives/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/archives'); _invalidate('/history'); return r; }),
   batchDeleteArchives: (ids) =>

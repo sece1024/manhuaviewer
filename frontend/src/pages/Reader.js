@@ -78,6 +78,8 @@ export default function Reader() {
   const [overlayText, setOverlayText] = useState('');
   const overlayTimer = useRef(null);
   const [imageLoaded, setImageLoaded] = useState(false);
+  // 当前档案的书签页码集合
+  const [bookmarks, setBookmarks] = useState(() => new Set());
   // 容器宽度不足时禁用双页模式
   const [containerTooNarrow, setContainerTooNarrow] = useState(false);
   const DOUBLE_PAGE_MIN_WIDTH = 600;
@@ -195,6 +197,7 @@ export default function Reader() {
     setArchive(null);
     setPages([]);
     setChapters(null);
+    setBookmarks(new Set()); // 换档清掉旧书签
     setCurrentIndex(0);
     currentIndexRef.current = 0;
     chapterListRef.current = null; // 换档时清掉旧的组章节序列
@@ -222,6 +225,10 @@ export default function Reader() {
             .then(list => { if (!cancelled && list && list.length) chapterListRef.current = list; })
             .catch(() => {});
         }
+        // 书签页码集合
+        api.getBookmarks(parseInt(archiveId))
+          .then(list => { if (!cancelled) setBookmarks(new Set(list)); })
+          .catch(() => {});
         if (data.read_page > 0 && data.read_page < data.pages.length) {
           currentIndexRef.current = data.read_page;
           setCurrentIndex(data.read_page);
@@ -538,6 +545,24 @@ export default function Reader() {
   const overlayOpen = showHelp || showTagPicker || showThumbnails || showJump || showMenu;
   useGamepad({ goPrev, goNext, enabled: !overlayOpen });
 
+  const handleToggleBookmark = useCallback(async () => {
+    const page = currentIndexRef.current;
+    const id = parseInt(archiveId);
+    try {
+      if (bookmarks.has(page)) {
+        await api.removeBookmark(id, page);
+        setBookmarks(prev => { const s = new Set(prev); s.delete(page); return s; });
+        showOverlay(`已移除书签 ${page + 1}`);
+      } else {
+        await api.addBookmark(id, page);
+        setBookmarks(prev => new Set(prev).add(page));
+        showOverlay(`已添加书签 ${page + 1}，缩略图面板 ⭐ 可跳转`);
+      }
+    } catch (e) {
+      toast(e.message || '书签操作失败', 'error');
+    }
+  }, [archiveId, bookmarks, showOverlay, toast]);
+
   // 触摸手势
   const getTouchDist = (touches) => {
     const dx = touches[0].clientX - touches[1].clientX;
@@ -825,6 +850,9 @@ export default function Reader() {
           <button className="btn btn-secondary btn-sm" onClick={() => { setPageDirection(d => d === 'rtl' ? 'ltr' : 'rtl'); setShowMenu(false); }}>
             {pageDirection === 'rtl' ? '→← 右翻' : '←→ 左翻'}
           </button>
+          <button className="btn btn-secondary btn-sm" onClick={handleToggleBookmark}>
+            {bookmarks.has(currentIndex) ? '🔖 移除书签' : '🔖 添加书签'}
+          </button>
           <button className="btn btn-secondary btn-sm" onClick={() => { setShowTagPicker(true); setShowMenu(false); }}>🏷️ 标签</button>
           {archive && archive.archive_type === 'folder' && (
             <button className="btn btn-secondary btn-sm" onClick={() => { handlePackCbz(); setShowMenu(false); }} disabled={packing}>
@@ -941,7 +969,7 @@ export default function Reader() {
                   onClick={() => { goPage(i); setShowThumbnails(false); }}
                 >
                   <img src={p.thumb_url || p.url} alt={p.filename} loading="lazy" />
-                  <div className="page-num">{i + 1}</div>
+                  <div className="page-num">{i + 1}{bookmarks.has(i) ? ' ⭐' : ''}</div>
                 </div>
               ))}
               {thumbCount < pages.length && <div ref={thumbLoadMoreRef} style={{ height: 1 }} />}
