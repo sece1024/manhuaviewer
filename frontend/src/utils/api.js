@@ -146,6 +146,14 @@ const api = {
   openFile: (filePath) =>
     request('/open', { method: 'POST', body: JSON.stringify({ filePath }) }).then(r => { _invalidate('/archives'); return r; }),
 
+  // 批量扫描根目录（增量：新增入库、变更更新、磁盘已删除的档案会被清理）
+  scan: (path, depth) =>
+    request('/scan', { method: 'POST', body: JSON.stringify({ path, depth }) }).then(r => {
+      _invalidate('/archives');
+      _invalidate('/history');
+      return r;
+    }),
+
   // CBZ export
   listCbz: () => request('/cbz/list'),
 

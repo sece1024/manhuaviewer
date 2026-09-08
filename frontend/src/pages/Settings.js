@@ -14,6 +14,9 @@ export default function Settings() {
   const [newTagColor, setNewTagColor] = useState('#6366f1');
   const [categories, setCategories] = useState([]);
   const [cbzDirInput, setCbzDirInput] = useState(settings.cbz_export_dir || '');
+  const [rootDir, setRootDir] = useState(settings.root_dir || '');
+  const [scanDepth, setScanDepth] = useState(settings.scan_depth || '1');
+  const [scanning, setScanning] = useState(false);
   const [newCatName, setNewCatName] = useState('');
   const [newCatColor, setNewCatColor] = useState('#6366f1');
   const [importing, setImporting] = useState(false);
@@ -43,6 +46,14 @@ export default function Settings() {
   useEffect(() => {
     setCbzDirInput(settings.cbz_export_dir || '');
   }, [settings.cbz_export_dir]);
+
+  // 服务端设置就绪/变化后同步扫描表单（设置是唯一数据源）
+  useEffect(() => {
+    setRootDir(settings.root_dir || '');
+  }, [settings.root_dir]);
+  useEffect(() => {
+    setScanDepth(settings.scan_depth || '1');
+  }, [settings.scan_depth]);
 
   const handleUpdateSetting = async (key, value) => {
     try {
@@ -84,6 +95,49 @@ export default function Settings() {
       }
     } catch (e) {
       toast('选择目录失败: ' + e.message, 'error');
+    }
+  };
+
+  // 选择书库根目录
+  const handleSelectScanDir = async () => {
+    if (!isTauri) {
+      toast('目录选择仅在桌面应用中可用', 'warning');
+      return;
+    }
+    try {
+      const selected = await window.__TAURI__.dialog.open({
+        directory: true,
+        multiple: false,
+        title: '选择书库根目录',
+      });
+      if (selected) {
+        setRootDir(selected);
+        await handleUpdateSetting('root_dir', selected);
+      }
+    } catch (e) {
+      toast('选择目录失败: ' + e.message, 'error');
+    }
+  };
+
+  // 增量扫描根目录：先持久化根目录与深度，再触发扫描
+  const handleScan = async () => {
+    const dir = rootDir.trim();
+    if (!dir) {
+      toast('请先设置书库根目录', 'warning');
+      return;
+    }
+    if (scanning) return;
+    setScanning(true);
+    try {
+      await updateSetting('root_dir', dir);
+      await updateSetting('scan_depth', scanDepth);
+      const r = await api.scan(dir, Number(scanDepth) || 1);
+      toast(r.message || '扫描完成', 'success');
+      api.getStats().then(setStats).catch(() => {});
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      setScanning(false);
     }
   };
 
@@ -304,6 +358,39 @@ export default function Settings() {
           <button className="btn btn-sm" onClick={handleRegenerateTitles} disabled={regenerating}>
             {regenerating ? '生成中...' : '重新生成'}
           </button>
+        </div>
+        <div className="settings-row">
+          <div>
+            <div className="settings-row-label">书库根目录（批量扫描）</div>
+            <div className="settings-row-desc">
+              保存根目录后点「立即扫描」：新增档案入库、变更档案更新、磁盘上已删除的文件会被清理
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              <input
+                type="text"
+                value={rootDir}
+                onChange={(e) => setRootDir(e.target.value)}
+                placeholder="漫画书库目录路径"
+                style={{ flex: 1 }}
+              />
+              <button
+                className="btn btn-sm"
+                onClick={handleSelectScanDir}
+                disabled={!isTauri}
+                title={isTauri ? '选择目录' : '目录选择仅在桌面应用中可用'}
+              >
+                选择…
+              </button>
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+            <select value={scanDepth} onChange={(e) => setScanDepth(e.target.value)} aria-label="扫描深度">
+              {[1, 2, 3, 4, 5].map(d => <option key={d} value={d}>{d} 层</option>)}
+            </select>
+            <button className="btn btn-sm btn-primary" onClick={handleScan} disabled={scanning}>
+              {scanning ? '扫描中...' : '立即扫描'}
+            </button>
+          </div>
         </div>
       </div>
 
