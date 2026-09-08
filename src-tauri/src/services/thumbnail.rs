@@ -58,9 +58,11 @@ impl ThumbnailGenerator {
         // Generate thumbnail
         let thumbnail = self.generate(input)?;
 
-        // Save to cache
+        // Save to cache (原子写：tmp+rename，避免并发请求互相读到半截文件)
         std::fs::create_dir_all(cache_dir)?;
-        std::fs::write(&cache_path, &thumbnail)?;
+        let tmp_path = cache_dir.join(format!("{}.jpg.tmp", cache_key));
+        std::fs::write(&tmp_path, &thumbnail)?;
+        std::fs::rename(&tmp_path, &cache_path)?;
 
         Ok(thumbnail)
     }

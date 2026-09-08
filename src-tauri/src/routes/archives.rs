@@ -13,7 +13,12 @@ use std::time::SystemTime;
 
 use super::error_response;
 
-const CACHE_CONTROL: &str = "private, max-age=86400";
+const CACHE_CONTROL: &str = "private, max-age=3600, must-revalidate";
+
+/// 缩略图访问节流表（进程内），避免每个图片请求都写一次 DB。
+static THUMB_TOUCH: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<i64, std::time::Instant>>,
+> = std::sync::OnceLock::new();
 
 fn archive_mtime(path: &str) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
@@ -241,6 +246,28 @@ fn not_modified(etag: String, last_modified: Option<String>) -> Response {
     build_response(StatusCode::NOT_MODIFIED, pairs, "")
 }
 
+/// 节流记录缩略图访问（每档案 ≤1 次/60 秒），避免书库滚动时产生大量 DB 写；
+/// touch 后 LRU 会按真实使用时间保留/淘汰缩略图目录。
+async fn touch_thumbnail_usage(state: &Arc<AppState>, id: i64) {
+    {
+        let map = THUMB_TOUCH
+            .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+            .lock()
+            .unwrap();
+        if let Some(t) = map.get(&id) {
+            if t.elapsed().as_secs() < 60 {
+                return;
+            }
+        }
+    }
+    let _ = super::run_db(state, move |db| db.touch_thumbnail_access(id)).await;
+    THUMB_TOUCH
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .unwrap()
+        .insert(id, std::time::Instant::now());
+}
+
 /// 生成缩略图后登记 thumbnail_path 并按需触发 LRU 淘汰（每分钟最多一次）。
 async fn register_thumbnail(
     state: &Arc<AppState>,
@@ -265,7 +292,8 @@ async fn register_thumbnail(
         let dir = thumb_dir_str.clone();
         super::run_db(state, move |db| {
             db.set_thumbnail_path(id, &dir)?;
-            db.evict_old_thumbnails()
+            // 排除刚注册的档案，避免自淘汰刚写入的缩略图目录
+            db.evict_old_thumbnails(Some(id))
         })
         .await
         .unwrap_or_default()
@@ -585,7 +613,10 @@ pub async fn get_cover(
         match crate::services::thumbnail::ThumbnailGenerator::default().generate(&cover) {
             Ok(thumb) => {
                 std::fs::create_dir_all(&thumb_dir)?;
-                std::fs::write(&cache_path, &thumb)?;
+                // 原子写（tmp+rename）：并发请求同时生成时，读取方永远拿不到半截 jpg
+                let tmp_path = cache_path.with_extension("jpg.tmp");
+                std::fs::write(&tmp_path, &thumb)?;
+                std::fs::rename(&tmp_path, &cache_path)?;
                 Ok((thumb, "image/jpeg".to_string(), true))
             }
             Err(e) => {
@@ -611,6 +642,8 @@ pub async fn get_cover(
             if fresh {
                 register_thumbnail(&state, id, thumb_dir_str, thumb_already_set).await;
             }
+            // 记录一次访问（节流），让 LRU 保留真正在用的封面
+            touch_thumbnail_usage(&state, id).await;
             let mut pairs: Vec<(&'static str, String)> = vec![
                 ("Content-Type", content_type),
                 ("ETag", etag),
@@ -861,6 +894,12 @@ pub async fn get_page_thumb(
                 if let Some(lm) = file_mtime.and_then(http_date) {
                     pairs.push(("Last-Modified", lm));
                 }
+                if let Some(d) =
+                    file_mtime.and_then(|mt| mt.duration_since(std::time::UNIX_EPOCH).ok())
+                {
+                    pairs.push(("ETag", format!("\"thumb-{}-{}\"", id, d.as_secs())));
+                }
+                touch_thumbnail_usage(&state, id).await;
                 return build_response(StatusCode::OK, pairs, data);
             }
             Err(e) => {
@@ -917,14 +956,34 @@ pub async fn get_page_thumb(
                 register_thumbnail(&state, id, thumb_dir_str, thumb_already_set).await;
             }
 
-            build_response(
-                StatusCode::OK,
-                vec![
-                    ("Content-Type", content_type),
-                    ("Cache-Control", CACHE_CONTROL.to_string()),
-                ],
-                thumb_data,
-            )
+            // 记录一次访问（节流），让 LRU 保留真正在用的缩略图
+            touch_thumbnail_usage(&state, id).await;
+
+            let mut pairs: Vec<(&'static str, String)> = vec![
+                ("Content-Type", content_type),
+                ("Cache-Control", CACHE_CONTROL.to_string()),
+            ];
+            // 200 响应同样带验证头：fresh 用缓存文件 mtime，降级原图用档案 mtime
+            let lm = if fresh {
+                std::fs::metadata(thumb_dir.join(format!("{}.jpg", page_index)))
+                    .and_then(|m| m.modified())
+                    .ok()
+            } else {
+                Some(
+                    std::time::UNIX_EPOCH
+                        + std::time::Duration::from_secs(mtime_secs.max(0) as u64),
+                )
+            };
+            if let Some(mt) = lm {
+                if let Some(d) = http_date(mt) {
+                    pairs.push(("Last-Modified", d));
+                }
+                if let Ok(d) = mt.duration_since(std::time::UNIX_EPOCH) {
+                    pairs.push(("ETag", format!("\"thumb-{}-{}\"", id, d.as_secs())));
+                }
+            }
+
+            build_response(StatusCode::OK, pairs, thumb_data)
         }
         Ok(Err(e)) => {
             let msg = e.to_string();

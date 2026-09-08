@@ -173,5 +173,25 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         tracing::info!("read_history 迁移完成");
     }
 
+    // Add thumb_accessed_at column to archives if missing (LRU by real usage)
+    let has_thumb_access: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('archives') WHERE name='thumb_accessed_at'",
+            [],
+            |row| row.get::<_, i64>(0).map(|c| c > 0),
+        )
+        .unwrap_or(false);
+
+    if !has_thumb_access {
+        tracing::info!("Adding thumb_accessed_at column to archives...");
+        conn.execute("ALTER TABLE archives ADD COLUMN thumb_accessed_at TEXT", [])?;
+    }
+
+    // 页码排序覆盖索引（旧库补充）
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pages_archive_sort_order ON pages(archive_id, sort_order)",
+        [],
+    )?;
+
     Ok(())
 }

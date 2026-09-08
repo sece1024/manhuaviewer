@@ -752,7 +752,7 @@ impl Database {
     }
 
     // Thumbnail cache operations
-    const MAX_CACHED_ARCHIVES: i64 = 20;
+    const MAX_CACHED_ARCHIVES: i64 = 30;
 
     pub fn set_thumbnail_path(&self, archive_id: i64, thumb_path: &str) -> Result<()> {
         self.conn()?.execute(
@@ -762,13 +762,21 @@ impl Database {
         Ok(())
     }
 
+    /// 记录一次缩略图访问（由路由层节流调用），供 LRU 按真实使用时间淘汰。
+    pub fn touch_thumbnail_access(&self, archive_id: i64) -> Result<usize> {
+        self.conn()?.execute(
+            "UPDATE archives SET thumb_accessed_at = datetime('now') WHERE id = ?",
+            [archive_id],
+        )
+    }
+
+    /// 有缩略图缓存的档案，按「最近访问 → updated_at」倒序排列（最近使用的留在缓存）。
     pub fn get_cached_archive_ids(&self) -> Result<Vec<i64>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT a.id FROM archives a
-             LEFT JOIN history h ON h.archive_id = a.id
              WHERE a.thumbnail_path IS NOT NULL
-             ORDER BY COALESCE(h.updated_at, a.updated_at) DESC",
+             ORDER BY COALESCE(a.thumb_accessed_at, a.updated_at) DESC",
         )?;
         let ids = stmt
             .query_map([], |row| row.get::<_, i64>(0))?
@@ -777,18 +785,24 @@ impl Database {
         Ok(ids)
     }
 
-    pub fn evict_old_thumbnails(&self) -> Result<Vec<(i64, String)>> {
+    /// 淘汰超出上限的最旧缩略图目录。`exclude_id` 为刚写入的档案时跳过它，
+    /// 避免“注册后立刻把自己的目录淘汰掉”。
+    pub fn evict_old_thumbnails(&self, exclude_id: Option<i64>) -> Result<Vec<(i64, String)>> {
         let cached_ids = self.get_cached_archive_ids()?;
         if cached_ids.len() as i64 <= Self::MAX_CACHED_ARCHIVES {
             return Ok(vec![]);
         }
 
         // 要淘汰的：超出限制的最旧条目
-        let to_evict = &cached_ids[Self::MAX_CACHED_ARCHIVES as usize..];
+        let to_evict: Vec<i64> = cached_ids[Self::MAX_CACHED_ARCHIVES as usize..]
+            .iter()
+            .copied()
+            .filter(|id| Some(*id) != exclude_id)
+            .collect();
         let mut evicted = Vec::new();
         let conn = self.conn()?;
 
-        for &id in to_evict {
+        for id in to_evict {
             let thumb_path: Option<String> = conn.query_row(
                 "SELECT thumbnail_path FROM archives WHERE id = ?",
                 [id],
