@@ -11,10 +11,13 @@
 - 🏷️ **命名空间标签** — 支持 `artist:name`、`series:name` 格式
 - 📂 **分类系统** — 动态/静态分类，支持置顶
 - 🔍 **搜索过滤** — 按名称模糊搜索，标签过滤侧栏
-- 📊 **阅读历史** — 自动保存进度，断点续读
-- 🎨 **主题系统** — 浅色/深色/护眼三套主题
+- 📊 **阅读历史** — 自动保存进度，断点续读；长图模式滚动即记进度；末页自动续读下一话
+- 🔖 **书签与封面** — 任意页书签（缩略图面板 ⭐ 快捷跳转）；封面支持首页/指定页/远程 URL/Bangumi 搜索
+- 🎨 **主题系统** — 浅色/深色/护眼三套主题（首帧预置，无闪烁）
 - 📱 **移动端适配** — 响应式布局，触摸手势（缩放/双击/滑动翻页）
-- ⌨️ **快捷键** — 完整的键盘操作支持
+- ⌨️ **快捷键** — 完整键盘操作；支持游戏手柄/USB 翻页器与鼠标侧键翻页
+- 🏠 **局域网模式** — 设置内开启后手机/平板浏览器与 OPDS 阅读器均可访问
+- 🔄 **增量扫描** — 扫描根目录：跳过未变化档案、清理已删除档案（支持定时自动备份）
 - 🖥️ **跨平台应用** — macOS, Windows, Linux（基于 Tauri 2.0）
 
 ## 🚀 快速开始
@@ -103,6 +106,12 @@ frontend/
 | `/api/archives/:id/pages` | GET | 页面列表 |
 | `/api/archives/:id/pages/:page` | GET | 单页图片（支持 ETag/Last-Modified 缓存） |
 | `/api/archives/:id/pages/:page/thumb` | GET | 单页缩略图 |
+| `/api/archives/:id/cover` | PUT | 手动封面（page_index=null 恢复默认） |
+| `/api/archives/:id/cover-url` | PUT | 远程封面 URL（null 清除） |
+| `/api/archives/:id/bookmarks` | GET/POST | 书签列表 / 添加书签 |
+| `/api/archives/:id/bookmarks/:page_index` | DELETE | 移除书签 |
+| `/api/metadata/search` | GET | Bangumi 元数据搜索（?q=） |
+| `/api/update/check` | GET | 检查 GitHub Releases 更新 |
 | `/api/archives/batch-delete` | POST | 批量删除档案 |
 | `/api/archives/pack-cbz` | POST | 将文件夹打包为 CBZ |
 | `/api/open` | POST | 直接打开文件/文件夹路径 |
