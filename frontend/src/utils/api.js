@@ -191,6 +191,8 @@ const api = {
   setRemoteCover: (id, url) =>
     request(`/archives/${id}/cover-url`, { method: 'PUT', body: JSON.stringify({ url }) })
       .then(r => { _invalidate('/archives'); return r; }),
+  // 元数据搜索（Bangumi）：{ items: [{title,cover,score,tags,source_id}] }
+  metadataSearch: (q) => request(`/metadata/search?q=${encodeURIComponent(q)}`),
   regenerateTitles: () =>
     request('/archives/regenerate-titles', { method: 'POST' })
       .then(r => { _invalidate('/archives'); _invalidate('/history'); return r; }),

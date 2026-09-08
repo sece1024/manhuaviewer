@@ -83,6 +83,11 @@ export default function Reader() {
   // 远程封面 URL 弹窗
   const [showCoverUrl, setShowCoverUrl] = useState(false);
   const [coverUrlInput, setCoverUrlInput] = useState('');
+  // 元数据（Bangumi）搜索弹窗
+  const [showMeta, setShowMeta] = useState(false);
+  const [metaQuery, setMetaQuery] = useState('');
+  const [metaItems, setMetaItems] = useState([]);
+  const [metaLoading, setMetaLoading] = useState(false);
   // 容器宽度不足时禁用双页模式
   const [containerTooNarrow, setContainerTooNarrow] = useState(false);
   const DOUBLE_PAGE_MIN_WIDTH = 600;
@@ -545,7 +550,7 @@ export default function Reader() {
   });
 
   // 外设支持：游戏手柄 / USB 翻页器（浮层打开时暂停，避免误翻）
-  const overlayOpen = showHelp || showTagPicker || showThumbnails || showJump || showMenu || showCoverUrl;
+  const overlayOpen = showHelp || showTagPicker || showThumbnails || showJump || showMenu || showCoverUrl || showMeta;
   useGamepad({ goPrev, goNext, enabled: !overlayOpen });
 
   const handleToggleBookmark = useCallback(async () => {
@@ -611,6 +616,41 @@ export default function Reader() {
       toast('已清除远程封面', 'success');
     } catch (e) {
       toast(e.message || '清除远程封面失败', 'error');
+    }
+  }, [archiveId, toast]);
+
+  const handleOpenMetaSearch = useCallback(() => {
+    setMetaQuery(archive ? archive.title : '');
+    setMetaItems([]);
+    setShowMeta(true);
+  }, [archive]);
+
+  const handleMetaSearch = useCallback(async () => {
+    const q = metaQuery.trim();
+    if (!q || metaLoading) return;
+    setMetaLoading(true);
+    try {
+      const r = await api.metadataSearch(q);
+      setMetaItems((r && r.items) || []);
+    } catch (e) {
+      toast(e.message || '搜索失败（需联网）', 'error');
+    } finally {
+      setMetaLoading(false);
+    }
+  }, [metaQuery, metaLoading, toast]);
+
+  const handleApplyMeta = useCallback(async (item) => {
+    const id = parseInt(archiveId);
+    if (!item.cover) {
+      toast('该条目没有封面，仅记录已跳过', 'warning');
+      return;
+    }
+    try {
+      await api.setRemoteCover(id, item.cover);
+      toast(`已应用封面：${item.title}`, 'success');
+      setShowMeta(false);
+    } catch (e) {
+      toast(e.message || '应用封面失败', 'error');
     }
   }, [archiveId, toast]);
 
@@ -907,6 +947,7 @@ export default function Reader() {
           <button className="btn btn-secondary btn-sm" onClick={handleSetCover}>🖼 设当前页为封面</button>
           <button className="btn btn-secondary btn-sm" onClick={handleResetCover}>默认封面</button>
           <button className="btn btn-secondary btn-sm" onClick={() => { setCoverUrlInput(''); setShowCoverUrl(true); setShowMenu(false); }}>🌐 封面 URL</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => { handleOpenMetaSearch(); setShowMenu(false); }}>🔎 搜封面</button>
           <button className="btn btn-secondary btn-sm" onClick={() => { setShowTagPicker(true); setShowMenu(false); }}>🏷️ 标签</button>
           {archive && archive.archive_type === 'folder' && (
             <button className="btn btn-secondary btn-sm" onClick={() => { handlePackCbz(); setShowMenu(false); }} disabled={packing}>
@@ -1068,6 +1109,57 @@ export default function Reader() {
           <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
             <button className="btn btn-secondary btn-sm" onClick={handleClearRemoteCover}>清除远程封面</button>
           </div>
+        </Modal>
+      )}
+
+      {/* 元数据（Bangumi）搜索弹窗 */}
+      {showMeta && (
+        <Modal onClose={() => setShowMeta(false)} ariaLabel="搜索封面" innerStyle={{ minWidth: 360, maxHeight: '80vh', overflow: 'auto' }}>
+          <h3 style={{ marginBottom: 12 }}>🔎 搜索封面（Bangumi）</h3>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <input
+              type="text"
+              value={metaQuery}
+              onChange={e => setMetaQuery(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleMetaSearch()}
+              placeholder="漫画名（默认当前标题）"
+              autoFocus
+              style={{ flex: 1 }}
+            />
+            <button className="btn" onClick={handleMetaSearch} disabled={metaLoading}>
+              {metaLoading ? '搜索中...' : '搜索'}
+            </button>
+          </div>
+          {metaLoading ? (
+            <div className="empty-state" style={{ padding: 16 }}>搜索中…</div>
+          ) : metaItems.length === 0 ? (
+            <div className="empty-state" style={{ padding: 16 }}>
+              {metaQuery ? '无结果（需联网）' : '输入关键词搜索'}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {metaItems.map((item, i) => (
+                <div
+                  key={`${item.source_id}-${i}`}
+                  className="chapter-item"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px',
+                    borderRadius: 8, cursor: 'pointer', background: 'var(--card-bg)',
+                    border: '1px solid var(--border)',
+                  }}
+                  onClick={() => handleApplyMeta(item)}
+                >
+                  <span style={{ flex: 1, fontSize: 14 }}>{item.title}</span>
+                  {item.score != null && (
+                    <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>⭐ {item.score}</span>
+                  )}
+                  <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>
+                    {item.cover ? '点此应用封面' : '无封面'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </Modal>
       )}
 
