@@ -1746,7 +1746,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn test_migrations_set_schema_version_and_are_skippable() {
         let db = setup_test_db(); // init() 内部会跑迁移
         let conn = db.conn_for_test().unwrap();
