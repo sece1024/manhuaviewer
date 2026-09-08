@@ -1,6 +1,7 @@
 pub mod archives;
 pub mod categories;
 pub mod history;
+pub mod metadata;
 pub mod opds;
 pub mod settings;
 pub mod tags;
@@ -145,6 +146,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/config", get(settings::get_config))
         .route("/config", put(settings::update_config))
         .route("/stats", get(settings::get_stats))
+        .route("/metadata/search", get(metadata::search))
         // Backup
         .route("/backup", get(settings::export_backup))
         .route("/restore", post(settings::import_backup));

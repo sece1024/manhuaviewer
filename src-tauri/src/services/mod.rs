@@ -1,6 +1,7 @@
 pub mod archive;
 pub mod backup;
 pub mod cbz;
+pub mod metadata;
 pub mod scanner;
 pub mod thumbnail;
 
