@@ -465,6 +465,17 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 }
 .archive-card:active { transform: translateY(-2px) scale(0.99); }
 
+/* 大数据量列表：跳过视口外卡片的布局/绘制（不支持 content-visibility 的引擎会忽略，不影响功能） */
+.archive-card,
+.archive-list-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 300px;
+}
+.archive-group-expanded {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
+}
+
 /* 首屏网格的柔和入场：仅 transform + opacity（合成层动画，不触发重排） */
 @media (prefers-reduced-motion: no-preference) {
   .archive-card, .archive-list-item {

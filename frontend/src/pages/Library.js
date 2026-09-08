@@ -225,6 +225,8 @@ export default function Library({ mode = 'library' }) {
   const selectedCategoryRef = useRef(selectedCategory);
   const searchRef = useRef(search);
   const requestIdRef = useRef(0);
+  const appendLockRef = useRef(false); // 防触底自动加载与按钮点击重复追加同一页
+  const loadMoreSentinelRef = useRef(null); // 触底自动加载观察哨兵
   const navigate = useNavigate();
   const toast = useToast();
 
@@ -252,10 +254,13 @@ export default function Library({ mode = 'library' }) {
   }, []);
 
   const loadArchives = async (params = {}, append = false) => {
+    if (append && appendLockRef.current) return; // 追加页正在加载，忽略重复触发
     const id = ++requestIdRef.current;
     if (append) {
+      appendLockRef.current = true;
       setLoadingMore(true);
     } else {
+      appendLockRef.current = false; // 新一轮查询使在途追加失效
       setLoading(true);
       // 列表整体刷新（排序/过滤/增删改）后，分组结构可能变化，收起已展开的组
       setExpandedGroup(null);
@@ -282,8 +287,12 @@ export default function Library({ mode = 'library' }) {
       if (id === requestIdRef.current) toast(e.message, 'error');
     } finally {
       if (id === requestIdRef.current) {
-        if (append) setLoadingMore(false);
-        else setLoading(false);
+        if (append) {
+          appendLockRef.current = false;
+          setLoadingMore(false);
+        } else {
+          setLoading(false);
+        }
       }
     }
   };
@@ -554,6 +563,18 @@ export default function Library({ mode = 'library' }) {
   // 根据 mode 决定展示哪组
   const isCollection = mode === 'collection';
   const displayArchives = isCollection ? compressedArchives : folderArchives;
+
+  // 触底自动加载更多：滚动接近底部自动拉下一页（底部按钮保留作手动兜底）。
+  // 用 appendLockRef 防止 IO 回调与点击在短时间内重复请求同一页。
+  useEffect(() => {
+    const el = loadMoreSentinelRef.current;
+    if (!el || !hasMore || displayArchives.length === 0 || loading || loadingMore) return;
+    const obs = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) handleLoadMore();
+    }, { rootMargin: '600px 0px' });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [hasMore, displayArchives.length, loading, loadingMore, handleLoadMore]);
 
   // 按命名空间分组标签
   const tagsByNamespace = useMemo(() => {
@@ -842,15 +863,19 @@ export default function Library({ mode = 'library' }) {
 
         {/* 加载更多按钮 */}
         {hasMore && displayArchives.length > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '24px 0' }}>
-            <button
-              className="btn btn-secondary"
-              onClick={handleLoadMore}
-              disabled={loadingMore}
-            >
-              {loadingMore ? '加载中...' : `加载更多 (已显示 ${displayArchives.length})`}
-            </button>
-          </div>
+          <>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '24px 0' }}>
+              <button
+                className="btn btn-secondary"
+                onClick={handleLoadMore}
+                disabled={loadingMore}
+              >
+                {loadingMore ? '加载中...' : `加载更多 (已显示 ${displayArchives.length})`}
+              </button>
+            </div>
+            {/* 触底自动加载哨兵 */}
+            <div ref={loadMoreSentinelRef} aria-hidden="true" style={{ height: 1 }} />
+          </>
         )}
       </div>
 
