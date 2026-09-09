@@ -7,6 +7,23 @@ const BASE = `${API_ORIGIN}/api`;
 export const apiOrigin = () => API_ORIGIN;
 export const apiBase = () => BASE;
 
+// ---- 局域网访问口令（可配置鉴权）----
+// 口令在桌面端“设置→局域网”里生成；这里仅负责把它附到请求头上。
+// 用 localStorage 保存便于跨页面/跨设备会话使用（桌面端由设置页同步）。
+const TOKEN_KEY = 'mv_server_token';
+function localStorageGet(k) {
+  try { return window.localStorage.getItem(k) || ''; } catch (e) { return ''; }
+}
+function localStorageSet(k, v) {
+  try { if (v) window.localStorage.setItem(k, v); else window.localStorage.removeItem(k); } catch (e) { /* 忽略 */ }
+}
+let _serverToken = localStorageGet(TOKEN_KEY);
+export const getServerToken = () => _serverToken;
+export function setServerToken(token) {
+  _serverToken = (token || '').trim();
+  localStorageSet(TOKEN_KEY, _serverToken);
+}
+
 // 将后端返回的相对路径 URL 补全为可用的绝对 URL
 function fixUrl(url) {
   if (!API_ORIGIN || !url || !url.startsWith('/')) return url;
@@ -114,8 +131,12 @@ async function _doFetch(url, options, maxAttempts) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const res = await fetch(`${BASE}${url}`, {
-        ...(options.body && { headers: { 'Content-Type': 'application/json' } }),
-        ...options,
+        method: options.method || 'GET',
+        headers: {
+          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(_serverToken ? { Authorization: `Bearer ${_serverToken}` } : {}),
+        },
+        ...(options.body ? { body: options.body } : {}),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));

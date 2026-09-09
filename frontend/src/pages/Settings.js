@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import api from '../utils/api';
+import api, { setServerToken } from '../utils/api';
 import { formatSize } from '../utils/format';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
@@ -69,6 +69,36 @@ export default function Settings() {
       setUpdateInfo({ error: e.message || '检查失败（需联网）' });
     } finally {
       setCheckingUpdate(false);
+    }
+  };
+
+  // —— 局域网访问令牌（可配置鉴权） ——
+  const lanTokenSetting = settings.server_token || '';
+  const genLanToken = () => {
+    const bytes = new Uint8Array(18);
+    (window.crypto && crypto.getRandomValues) ? crypto.getRandomValues(bytes) : Array.from(bytes, (_, i) => bytes[i] = Math.floor(Math.random() * 256));
+    return Array.from(bytes).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+  };
+  const handleGenLanToken = async () => {
+    const tok = genLanToken();
+    try {
+      await updateSetting('server_token', tok);
+      setServerToken(tok);
+      toast('已生成并启用局域网口令', 'success');
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  const handleClearLanToken = async () => {
+    try {
+      await updateSetting('server_token', '');
+      setServerToken('');
+      toast('已清除局域网口令（鉴权关闭）', 'success');
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  const copyLanToken = async () => {
+    if (!lanTokenSetting) return;
+    try { await navigator.clipboard.writeText(lanTokenSetting); toast('已复制口令', 'success'); }
+    catch (e) {
+      window.prompt('口令（手动复制）：', lanTokenSetting);
     }
   };
 
@@ -439,6 +469,28 @@ export default function Settings() {
             <option value="127.0.0.1">仅本机</option>
             <option value="0.0.0.0">局域网（重启生效）</option>
           </select>
+        </div>
+        <div className="settings-row">
+          <div>
+            <div className="settings-row-label">局域网访问口令 {lanTokenSetting ? '🔒' : ''}</div>
+            <div className="settings-row-desc">
+              开启后，局域网里的写操作与备份/设置需携带该口令；本机使用不受影响。清空=关闭鉴权
+            </div>
+            {lanTokenSetting && (
+              <div style={{ marginTop: 6, fontFamily: 'monospace', fontSize: 13, wordBreak: 'break-all', opacity: 0.9 }}>
+                {lanTokenSetting}
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', alignSelf: 'center' }}>
+            <button className="btn btn-sm" onClick={handleGenLanToken}>生成新口令</button>
+            {lanTokenSetting && (
+              <button className="btn btn-sm btn-secondary" onClick={copyLanToken}>复制口令</button>
+            )}
+            {lanTokenSetting && (
+              <button className="btn btn-sm btn-secondary" onClick={handleClearLanToken}>清除口令</button>
+            )}
+          </div>
         </div>
       </div>
 
