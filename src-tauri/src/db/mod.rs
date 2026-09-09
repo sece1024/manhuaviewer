@@ -201,6 +201,7 @@ impl Database {
             ("reader_long", "0"),
             ("reader_bg", "#1a1a1a"),
             ("server_bind", "127.0.0.1"),
+            ("server_token", ""),
             ("backup_interval_hours", "0"),
             ("backup_keep", "10"),
             ("auto_scan_interval", "0"),

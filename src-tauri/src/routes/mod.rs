@@ -1,4 +1,5 @@
 pub mod archives;
+pub mod auth;
 pub mod categories;
 pub mod history;
 pub mod metadata;
@@ -9,7 +10,9 @@ pub mod update;
 
 use crate::AppState;
 use axum::{
+    extract::Request,
     http::StatusCode,
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
@@ -164,9 +167,18 @@ pub fn create_router(state: AppState) -> Router {
         .route("/categories", get(opds::categories_list))
         .route("/category/:id", get(opds::category_archives));
 
+    // 可配置局域网鉴权：关闭(server_token 为空)时与旧行为一致；开启后回环本机放行、
+    // 局域网敏感请求(写 + settings/backup/config)需口令。DB Arc 在 build 期克隆进闭包。
+    let auth_db = state.db.clone();
+    let auth_layer = middleware::from_fn(move |req: Request, next: Next| {
+        let db = auth_db.clone();
+        async move { auth::lan_guard_core(db, req, next).await }
+    });
+
     Router::new()
         .nest("/api", api_routes)
         .nest("/opds", opds_routes)
+        .layer(auth_layer)
         .layer(cors)
         .fallback_service(static_fallback())
         .with_state(Arc::new(state))

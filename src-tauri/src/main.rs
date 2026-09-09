@@ -161,7 +161,12 @@ async fn main() {
 
                 info!("API server ready on port {}", addr.port());
 
-                if let Err(e) = axum::serve(listener, api_router).await {
+                if let Err(e) = axum::serve(
+                    listener,
+                    api_router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                )
+                .await
+                {
                     tracing::error!("API server error: {}", e);
                 }
             });
