@@ -1052,7 +1052,17 @@ pub async fn open_file(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<OpenFileRequest>,
 ) -> Response {
-    let file_path = payload.file_path.clone();
+    let file_path = payload.file_path.trim().to_string();
+    // 入参卫生：拒绝空串/含 NUL/非绝对路径，避免把任意输入喂给文件系统或外部工具
+    if file_path.is_empty() || file_path.contains('\0') {
+        return error_response(StatusCode::BAD_REQUEST, "无效的文件路径");
+    }
+    if !std::path::Path::new(&file_path).is_absolute() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "路径必须是绝对路径（桌面端由文件选择器返回）",
+        );
+    }
 
     // Check DB first (quick operation)
     let existing = super::run_db(&state, {
