@@ -237,14 +237,12 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// 起一个真实的 Axum 服务，返回端口；用裸 TCP 发请求，避免引入 HTTP 客户端依赖。
-    async fn spawn_server() -> (u16, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap();
-        let db = crate::db::Database::new(dir.path().join("t.db").to_str().unwrap()).unwrap();
-        db.init().unwrap();
+    /// 用给定的 DB 与数据目录起一个真实的 Axum 服务，返回端口；用裸 TCP 发请求，
+    /// 避免引入 HTTP 客户端依赖。便于在启动前预置种子数据。
+    async fn spawn_server_with(db: Arc<crate::db::Database>, data_dir: std::path::PathBuf) -> u16 {
         let state = crate::AppState {
-            db: Arc::new(db),
-            data_dir: dir.path().to_path_buf(),
+            db,
+            data_dir,
             last_thumb_eviction: Arc::new(std::sync::Mutex::new(None)),
         };
         let app = create_router(state);
@@ -257,6 +255,15 @@ mod tests {
             )
             .await;
         });
+        port
+    }
+
+    /// 起一个真实的 Axum 服务，返回端口；用裸 TCP 发请求，避免引入 HTTP 客户端依赖。
+    async fn spawn_server() -> (u16, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::new(dir.path().join("t.db").to_str().unwrap()).unwrap();
+        db.init().unwrap();
+        let port = spawn_server_with(Arc::new(db), dir.path().to_path_buf()).await;
         (port, dir)
     }
 
@@ -267,6 +274,31 @@ mod tests {
         s.write_all(
             format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
                 .as_bytes(),
+        )
+        .await
+        .unwrap();
+        let mut buf = Vec::new();
+        s.read_to_end(&mut buf).await.unwrap();
+        let raw = String::from_utf8_lossy(&buf).to_string();
+        let status = raw
+            .split_whitespace()
+            .nth(1)
+            .and_then(|c| c.parse().ok())
+            .unwrap_or(0);
+        (status, raw)
+    }
+
+    async fn post(port: u16, path: &str, body: &str) -> (u16, String) {
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        s.write_all(
+            format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .as_bytes(),
         )
         .await
         .unwrap();
@@ -321,5 +353,71 @@ mod tests {
             let (status, _) = get(port, path).await;
             assert_eq!(status, 200, "{path} 应可访问 OPDS 根目录");
         }
+    }
+
+    /// 扫描的孤儿清理：只删除磁盘上确实不存在的路径；
+    /// 磁盘上仍存在但本次扫描未发现的（深度限制/扩展名白名单等）一律保留，
+    /// 避免误删手动打开或处于扫描盲区的档案及其标签/历史。
+    #[tokio::test]
+    async fn scan_cleanup_removes_only_missing_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("library");
+        // series/ch1 是深度 2 的文件夹档案（含图片）；deep/manga.cbz 是深度 2 的压缩包
+        std::fs::create_dir_all(root.join("series/ch1")).unwrap();
+        std::fs::write(root.join("series/ch1/page01.jpg"), b"img").unwrap();
+        std::fs::create_dir_all(root.join("deep")).unwrap();
+        std::fs::write(root.join("deep/manga.cbz"), b"x").unwrap();
+
+        let db = crate::db::Database::new(dir.path().join("t.db").to_str().unwrap()).unwrap();
+        db.init().unwrap();
+        let root_s = root.to_string_lossy().into_owned();
+        // S/D：磁盘上存在（本次扫不到应跳过不删）；G：磁盘上不存在（应清理）
+        db.upsert_scanned_archive("S", &format!("{root_s}/series/ch1"), "folder", 3, 10, 111)
+            .unwrap();
+        db.upsert_scanned_archive("D", &format!("{root_s}/deep/manga.cbz"), "cbz", 3, 20, 222)
+            .unwrap();
+        db.upsert_scanned_archive("G", &format!("{root_s}/gone.cbz"), "cbz", 3, 30, 333)
+            .unwrap();
+
+        let db_arc = Arc::new(db);
+        let port = spawn_server_with(db_arc.clone(), dir.path().to_path_buf()).await;
+
+        // 深度 1：只有根的直接子项被遍历，series/ch1 与 deep/manga.cbz 都扫不到
+        let body = serde_json::json!({ "path": root_s, "depth": 1 }).to_string();
+        let (status, raw) = post(port, "/api/scan", &body).await;
+        assert_eq!(status, 200, "扫描应成功: {}", raw);
+        let json_part = raw.split("\r\n\r\n").nth(1).expect("响应应有 JSON 体");
+        let resp: serde_json::Value =
+            serde_json::from_str(json_part).expect("响应体应为合法 JSON");
+        assert_eq!(
+            resp["removed"].as_u64(),
+            Some(1),
+            "磁盘上已消失的档案应被清理: {raw}"
+        );
+        assert_eq!(
+            resp["skipped"].as_u64(),
+            Some(2),
+            "存在但本次扫不到的档案应被跳过: {raw}"
+        );
+
+        // 数据库终态：G 被删，S/D 保留
+        assert!(
+            db_arc
+                .get_archive_by_path(&format!("{root_s}/series/ch1"))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            db_arc
+                .get_archive_by_path(&format!("{root_s}/deep/manga.cbz"))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            db_arc
+                .get_archive_by_path(&format!("{root_s}/gone.cbz"))
+                .unwrap()
+                .is_none()
+        );
     }
 }

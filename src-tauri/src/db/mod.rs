@@ -17,6 +17,18 @@ fn log_and_skip<T>(row_result: std::result::Result<T, rusqlite::Error>) -> Optio
     }
 }
 
+/// 判断 `path` 是否位于扫描根目录 `root` 之下（含相等）。
+///
+/// 使用 `Path::starts_with` 做**整组件**比较（Rust std 语义），而不是字符串前缀：
+/// 目录名互为字符串前缀（如 `海贼` 与 `海贼王`）不会被误判为从属关系——
+/// `/manhua/海贼王/01` 属于 `/manhua`，但不属于 `/manhua/海贼`。
+/// 注意 `..`/`.` 片段按字面组件参与比较（与扫描/入库用的绝对化路径一致）。
+fn path_is_within(root: &str, path: &str) -> bool {
+    let r = std::path::Path::new(root);
+    let p = std::path::Path::new(path);
+    p == r || p.starts_with(r)
+}
+
 /// 统一的档案查询列（带 `a.` 前缀，用于 JOIN 场景）。
 const ARCHIVE_COLUMNS: &str = "a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.thumbnail_path, a.group_id, a.created_at, a.updated_at";
 
@@ -684,7 +696,6 @@ impl Database {
     /// 读取某根目录下所有档案的扫描元数据快照：(path, page_count, file_size, file_mtime)。
     pub fn scan_meta_for_root(&self, root: &str) -> Result<Vec<(String, i64, i64, i64)>> {
         let conn = self.conn()?;
-        let root_path = std::path::Path::new(root);
         let mut stmt =
             conn.prepare("SELECT path, page_count, file_size, file_mtime FROM archives")?;
         let rows = stmt.query_map([], |row| {
@@ -697,10 +708,7 @@ impl Database {
         })?;
         Ok(rows
             .filter_map(log_and_skip)
-            .filter(|(path, _, _, _)| {
-                let p = std::path::Path::new(path);
-                p == root_path || p.starts_with(root_path)
-            })
+            .filter(|(path, _, _, _)| path_is_within(root, path))
             .collect())
     }
 
@@ -2567,5 +2575,25 @@ mod tests {
         assert!(db.get_archive_by_path("/root/a").unwrap().is_none());
         assert!(db.get_archive_by_path("/other/b").unwrap().is_some());
         assert!(db.get_archive_by_path("/root-x/c").unwrap().is_some());
+    }
+
+    #[test]
+    fn test_scan_meta_root_component_level_prefix() {
+        let db = setup_test_db();
+        // 目录名互为字符串前缀（海贼 vs 海贼王）：组件级比较下互不归属
+        db.upsert_scanned_archive("海贼", "/manhua/海贼", "folder", 5, 1, 111)
+            .unwrap();
+        db.upsert_scanned_archive("海贼王01", "/manhua/海贼王/01", "folder", 5, 1, 222)
+            .unwrap();
+        db.upsert_scanned_archive("海贼王02", "/manhua/海贼王/02", "folder", 5, 1, 333)
+            .unwrap();
+
+        // 扫描 /manhua/海贼：只有路径恰为 /manhua/海贼 的记录属于它
+        let meta = db.scan_meta_for_root("/manhua/海贼").unwrap();
+        assert_eq!(meta.len(), 1);
+        assert_eq!(meta[0].0, "/manhua/海贼");
+
+        // 扫描 /manhua：三者都在其下
+        assert_eq!(db.scan_meta_for_root("/manhua").unwrap().len(), 3);
     }
 }

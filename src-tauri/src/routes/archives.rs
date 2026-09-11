@@ -1294,14 +1294,26 @@ pub async fn scan(
         // 单事务批量写入，避免每个档案单独获取连接 + SELECT id
         db.batch_upsert_scanned_archives(&upserts)?;
 
-        // 清理孤儿档案：本 root 下磁盘已消失的路径（只清本 root，不影响其它根）
+        // 清理孤儿档案：本 root 下、磁盘上确实已不存在的路径（只清本 root，不影响其它根）。
+        // 磁盘上仍存在但本次扫描未发现的路径（深度限制、扩展名白名单外、无图片文件夹、
+        // 路径字符串形态差异等）一律跳过，避免误删手动打开或位于扫描盲区的档案及其标签/历史。
         let mut removed = 0usize;
+        let mut skipped = 0usize;
         for (row_path, _pc, _fs, _fm) in meta {
-            if !present.contains(&row_path) {
-                tracing::info!("Scan cleanup: removing orphan archive {}", row_path);
-                db.delete_archive_by_path(&row_path)?;
-                removed += 1;
+            if present.contains(&row_path) {
+                continue; // 本次扫描已发现，保留
             }
+            if std::path::Path::new(&row_path).exists() {
+                tracing::info!(
+                    "Scan cleanup: keeping {} (exists on disk but not discovered this scan)",
+                    row_path
+                );
+                skipped += 1;
+                continue;
+            }
+            tracing::info!("Scan cleanup: removing orphan archive {}", row_path);
+            db.delete_archive_by_path(&row_path)?;
+            removed += 1;
         }
 
         Ok(serde_json::json!({
@@ -1309,12 +1321,14 @@ pub async fn scan(
             "added": added,
             "updated": updated,
             "removed": removed,
+            "skipped": skipped,
             "message": format!(
-                "扫描完成：共 {} 个档案，新增 {}，更新 {}，清理 {} 个已删除档案",
+                "扫描完成：共 {} 个档案，新增 {}，更新 {}，清理 {} 个已删除档案，跳过 {} 个仍存在的档案",
                 discovered.len(),
                 added,
                 updated,
-                removed
+                removed,
+                skipped
             )
         }))
     })
