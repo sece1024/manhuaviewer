@@ -463,6 +463,8 @@ export default function Settings() {
             <div className="settings-row-desc">
               设为「仅本机」时服务只监听 127.0.0.1；设为「局域网」后在手机/平板浏览器访问 http://本机IP:5002/ 或任意 OPDS 阅读器。
               <strong> 重启应用后生效</strong>
+              <br />
+              Windows 首次开启会弹出防火墙提示，需勾选「专用网络」并允许访问，否则局域网设备连不上。
             </div>
           </div>
           <select value={settings.server_bind || '127.0.0.1'} onChange={(e) => handleUpdateSetting('server_bind', e.target.value)} aria-label="局域网访问">

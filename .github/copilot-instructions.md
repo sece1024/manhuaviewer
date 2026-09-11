@@ -7,7 +7,7 @@
 pnpm tauri dev                 # dev with hot-reload
 pnpm tauri build               # production build
 
-# Frontend only (CRA dev server, proxied to :5002)
+# Frontend only (Vite dev server, proxied to :5002)
 pnpm --filter manhuaviewer-frontend start
 
 # Tests
@@ -22,14 +22,14 @@ pnpm format                    # cargo fmt (auto-fix)
 pnpm lint                      # cargo clippy -D warnings
 ```
 
-CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, and `pnpm --filter manhuaviewer-frontend build` (compile + ESLint). **CI does not run frontend Jest tests** — verify those locally.
+CI (`.github/workflows/ci.yml`) runs two jobs: **frontend** (`pnpm --filter manhuaviewer-frontend build` + `pnpm test`) and **rust** (`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`). The rust job does **not** build the frontend, so backend code must compile with an empty `frontend/build`.
 
 ## Architecture
 
-Tauri 2.0 desktop app: Rust backend spawns an Axum HTTP server on port 5002; React frontend communicates via REST. In dev mode the CRA dev server proxies to `:5002`; in production Tauri loads the built frontend via `tauri://localhost` with CORS to the Axum server.
+Tauri 2.0 desktop app: Rust backend spawns an Axum HTTP server on port 5002; React frontend communicates via REST. In dev mode the Vite dev server proxies to `:5002`; in production Tauri loads the built frontend via `tauri://localhost` with CORS to the Axum server.
 
 - **Backend** (`src-tauri/src/`): `routes/` (Axum handlers: archives, tags, categories, history, settings, metadata, update, opds, plus `auth.rs` middleware), `services/` (`archive.rs` extraction, `scanner.rs`, `thumbnail.rs`, `cbz.rs`, `backup.rs`, `cleanup.rs`, `metadata.rs`), `db/` (rusqlite wrapper + schema + migrations), `logging.rs` (file logging, panic hook).
-- **Frontend** (`frontend/src/`): React 19 + React Router v7 (CRA). Pages: `Library`, `Reader`, `History`, `Settings`. Shared hooks in `hooks/` (`useSettings`, `useTags`, `useReaderKeyboard`, `useGamepad`), all API calls through `utils/api.js`.
+- **Frontend** (`frontend/src/`): React 19 + React Router v7, built with Vite (Jest tests still run through `react-scripts test`). Pages: `Library`, `Reader`, `History`, `Settings`. Shared hooks in `hooks/` (`useSettings`, `useTags`, `useReaderKeyboard`, `useGamepad`), all API calls through `utils/api.js`.
 - **Database**: SQLite via rusqlite at `~/Library/Application Support/MangaViewer/data/manhuaviewer.db` (macOS; other platforms via `dirs::data_dir()`). Overridable via `DATA_DIR` env var (use it for isolated dev/test runs); HTTP port overridable via `PORT`. `db/mod.rs` holds the `Database` struct + all queries; `db/schema.rs` is the canonical idempotent schema; `db/migrations.rs` migrates legacy tables (`folders`, `folder_tags`, `read_history`) and adds columns.
 - **Two archive types**: `folder` (directory scanned at request time, no pages stored in DB) vs compressed (`zip`/`cbz`/`rar`/`cbr`/`7z` — page list stored in DB, extracted on demand).
 - **Startup side effects** (`main.rs`): after DB init, `services::cleanup::cleanup_caches` prunes `extract/` and `thumbnails/` subdirectories whose archive IDs no longer exist and runs one thumbnail LRU eviction pass.
@@ -55,7 +55,7 @@ Tauri 2.0 desktop app: Rust backend spawns an Axum HTTP server on port 5002; Rea
 
 ## Testing
 
-Frontend tests live in `frontend/src/__tests__/` (React Testing Library + CRA Jest). Page-level tests must wrap the component in the same providers as `App.js`: `SettingsProvider`, `TagsProvider`, `ToastProvider`, and `MemoryRouter`. API calls are mocked via `frontend/src/__mocks__/api.js`, auto-resolved by `jest.mock('../utils/api')`. `frontend/package.json` carries a `moduleNameMapper` for `react-router-dom` to work around CRA bundling — don't remove it.
+Frontend tests live in `frontend/src/__tests__/` (React Testing Library + `react-scripts test`). Page-level tests must wrap the component in the same providers as `App.js`: `SettingsProvider`, `TagsProvider`, `ToastProvider`, and `MemoryRouter`. API calls are mocked via `frontend/src/__mocks__/api.js`, auto-resolved by `jest.mock('../utils/api')`. `frontend/package.json` carries a `moduleNameMapper` for `react-router-dom` to work around ESM bundling — don't remove it.
 
 Backend tests are inline `#[cfg(test)]` modules. Prefer testing pure helpers; tests that need a DB should point `DATA_DIR` at a temp directory.
 
@@ -86,9 +86,9 @@ Version must be synchronized in three places before tagging: `src-tauri/tauri.co
 - If `pnpm install` fails with `ERR_PNPM_IGNORED_BUILDS`, whitelist the native package via `onlyBuiltDependencies` in pnpm config (the old `allowBuilds` entries were removed as invalid).
 - RAR/7Z support shells out to system binaries (`unrar`, `7z`); on macOS install via Homebrew (`brew install unrar p7zip`). ZIP/CBZ are handled natively by the Rust `zip` crate.
 - Tauri uses the system WebView — CSS/JS behavior varies across platforms.
-- `pnpm tauri dev` already runs `beforeDevCommand` (the CRA dev server) — don't start it manually alongside.
+- `pnpm tauri dev` already runs `beforeDevCommand` (the Vite dev server) — don't start it manually alongside.
 - `scripts/bump-version.sh` uses macOS `sed -i ''` syntax; on Linux it needs plain `sed -i`.
-- The CSP in `src-tauri/tauri.conf.json` allows `unsafe-inline`/`unsafe-eval` for CRA's inline runtime — don't tighten it without testing a dev build.
+- The CSP in `src-tauri/tauri.conf.json` allows `unsafe-inline`/`unsafe-eval` for the bundler's inline runtime — don't tighten it without testing a dev build.
 - Deleting `manhuaviewer.db` resets state but loses settings and history.
 - `AGENTS.md` at the repo root covers the same ground for other agents; keep the two in sync when changing conventions. `CONTRIBUTING.md` has environment setup and Linux deps; `README.md` has the API endpoint table and keyboard shortcuts.
 
