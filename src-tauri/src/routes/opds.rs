@@ -444,12 +444,7 @@ pub async fn category_archives(
     Path(category_id): Path<i64>,
 ) -> Response {
     let result = run_db(&state, move |db| {
-        let category_name = db
-            .list_categories()?
-            .into_iter()
-            .find(|c| c.id == category_id)
-            .map(|c| c.name)
-            .unwrap_or_default();
+        let category_name = db.get_category_name(category_id)?.unwrap_or_default();
         let archives =
             db.list_archives(None, None, Some(category_id), "updated", "desc", 200, 0)?;
         Ok((category_name, archives))

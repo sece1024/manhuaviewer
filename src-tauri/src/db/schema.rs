@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS archives (
     page_list_mtime INTEGER DEFAULT 0,  -- 缓存页面列表时的档案文件 mtime（秒），用于失效检测
     file_mtime INTEGER DEFAULT 0,  -- 最近一次入库/扫描时的档案文件 mtime（秒），供增量扫描跳过未变化档案
     title_auto INTEGER NOT NULL DEFAULT 1,  -- 1=按路径自动派生的标题（可批量重生成），0=用户手动改名
+    last_read_at TEXT,      -- 冗余的最近阅读时间（save_history 同步写，供“最近阅读”排序建索引）
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );

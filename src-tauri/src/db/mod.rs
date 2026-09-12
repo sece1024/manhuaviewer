@@ -68,27 +68,23 @@ pub struct ArchiveRow {
 }
 
 /// 排序方式 → ORDER BY 表达式。"updated"（最近阅读）优先按阅读时间排序：
-/// 有 history 记录的用 history.updated_at，从未读过的回退到 archives.updated_at，
-/// 这样"最近阅读"排序才是真实语义（读过的按最近读的时间冒泡，新加的仍按添加时间排）。
+/// 用冗余列 last_read_at（由 save_history 同步写），从未读过的回退到 archives.updated_at，
+/// 这样"最近阅读"排序不依赖 history JOIN，且能走索引。
 fn order_expr_for(sort: &str) -> &'static str {
     match sort {
         "name" | "title" => "a.title",
         "created" => "a.created_at",
         "pages" => "a.page_count",
         "size" => "a.file_size",
-        "updated" => "COALESCE(h.updated_at, a.updated_at)",
+        "updated" => "COALESCE(a.last_read_at, a.updated_at)",
         "random" => "RANDOM()",
         _ => "a.updated_at",
     }
 }
 
-/// 仅当按"最近阅读"排序时需要 LEFT JOIN history（history.archive_id 是主键，不产生重复行）。
-fn history_join_for(sort: &str) -> &'static str {
-    if sort == "updated" {
-        " LEFT JOIN history h ON h.archive_id = a.id"
-    } else {
-        ""
-    }
+/// 曾为"最近阅读"排序 LEFT JOIN history；引入 last_read_at 冗余列后不再需要 JOIN。
+fn history_join_for(_sort: &str) -> &'static str {
+    ""
 }
 
 /// 写操作的轻量忙重试：busy_timeout 之后仍可能与另一个连接的长事务（扫描/批量导入）
@@ -787,6 +783,35 @@ impl Database {
         Ok(affected > 0)
     }
 
+    /// 批量重生成自动标题：单连接 + 单事务 + 单条 prepared 语句，返回实际变更数。
+    pub fn update_titles_auto(&self, entries: &[(i64, String)]) -> Result<usize> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        let mut changed = 0usize;
+        {
+            let mut stmt = tx.prepare_cached(
+                "UPDATE archives SET title = ?1, updated_at = datetime('now') WHERE id = ?2 AND title != ?1",
+            )?;
+            for (id, title) in entries {
+                changed += stmt.execute((title, id))? as usize;
+            }
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    /// 单个分类的名称查询（供 OPDS 等只需要名字的场景，免拉全量分类及其计数）。
+    pub fn get_category_name(&self, id: i64) -> Result<Option<String>> {
+        self.conn()?
+            .query_row("SELECT name FROM categories WHERE id = ?", [id], |row| {
+                row.get(0)
+            })
+            .optional()
+    }
+
     /// 获取组内所有章节（按路径排序）
     pub fn get_group_chapters(&self, group_id: i64) -> Result<Vec<ArchiveRow>> {
         let conn = self.conn()?;
@@ -851,21 +876,23 @@ impl Database {
     pub fn merge_archives(&self, archive_ids: &[i64]) -> Result<i64> {
         let primary_id = archive_ids[0];
         let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
 
         // 主档案: group_id 设为自身 id
-        conn.execute(
+        tx.execute(
             "UPDATE archives SET group_id = ?, updated_at = datetime('now') WHERE id = ?",
             (primary_id, primary_id),
         )?;
 
         // 其余档案: group_id 设为主档案 id
         for &id in &archive_ids[1..] {
-            conn.execute(
+            tx.execute(
                 "UPDATE archives SET group_id = ?, updated_at = datetime('now') WHERE id = ?",
                 (primary_id, id),
             )?;
         }
 
+        tx.commit()?;
         Ok(primary_id)
     }
 
@@ -929,23 +956,30 @@ impl Database {
             .copied()
             .filter(|id| Some(*id) != exclude_id)
             .collect();
-        let mut evicted = Vec::new();
-        let conn = self.conn()?;
-
-        for id in to_evict {
-            let thumb_path: Option<String> = conn.query_row(
-                "SELECT thumbnail_path FROM archives WHERE id = ?",
-                [id],
-                |row| row.get(0),
-            )?;
-            if let Some(path) = thumb_path {
-                conn.execute(
-                    "UPDATE archives SET thumbnail_path = NULL WHERE id = ?",
-                    [id],
-                )?;
-                evicted.push((id, path));
-            }
+        if to_evict.is_empty() {
+            return Ok(vec![]);
         }
+        let conn = self.conn()?;
+        let placeholders = vec!["?"; to_evict.len()].join(",");
+
+        // 一次 IN 读回路径 + 一次 IN 置空（替代逐 id 的 2N 次往返）
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, thumbnail_path FROM archives WHERE id IN ({})",
+            placeholders
+        ))?;
+        let mut evicted: Vec<(i64, String)> = stmt
+            .query_map(rusqlite::params_from_iter(to_evict.iter()), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+        conn.execute(
+            &format!(
+                "UPDATE archives SET thumbnail_path = NULL WHERE id IN ({})",
+                placeholders
+            ),
+            rusqlite::params_from_iter(to_evict.iter()),
+        )?;
 
         Ok(evicted)
     }
@@ -1396,12 +1430,21 @@ impl Database {
         page_index: i64,
         total_pages: i64,
     ) -> Result<usize> {
-        // 翻页时频繁调用；扫描等长事务可能短暂持锁，busy_timeout 后用重试兜底
+        // 翻页时频繁调用；扫描等长事务可能短暂持锁，busy_timeout 后用重试兜底。
+        // 同一事务内写入 history 并同步冗余列 last_read_at（供“最近阅读”排序走索引）。
         execute_with_busy_retry(|| {
-            self.conn()?.execute(
+            let conn = self.conn()?;
+            let tx = conn.unchecked_transaction()?;
+            let n = tx.execute(
                 "INSERT OR REPLACE INTO history (archive_id, page_index, total_pages, updated_at) VALUES (?, ?, ?, datetime('now'))",
                 (archive_id, page_index, total_pages),
-            )
+            )?;
+            tx.execute(
+                "UPDATE archives SET last_read_at = datetime('now') WHERE id = ?",
+                [archive_id],
+            )?;
+            tx.commit()?;
+            Ok(n)
         })
     }
 
@@ -1445,12 +1488,24 @@ impl Database {
     }
 
     pub fn delete_history(&self, archive_id: i64) -> Result<usize> {
-        self.conn()?
-            .execute("DELETE FROM history WHERE archive_id = ?", [archive_id])
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        let n = tx.execute("DELETE FROM history WHERE archive_id = ?", [archive_id])?;
+        tx.execute(
+            "UPDATE archives SET last_read_at = NULL WHERE id = ?",
+            [archive_id],
+        )?;
+        tx.commit()?;
+        Ok(n)
     }
 
     pub fn clear_history(&self) -> Result<usize> {
-        self.conn()?.execute("DELETE FROM history", [])
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        let n = tx.execute("DELETE FROM history", [])?;
+        tx.execute("UPDATE archives SET last_read_at = NULL", [])?;
+        tx.commit()?;
+        Ok(n)
     }
 
     // Settings operations
@@ -1471,12 +1526,14 @@ impl Database {
         settings: &std::collections::HashMap<String, String>,
     ) -> Result<()> {
         let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
         for (key, value) in settings {
-            conn.execute(
+            tx.execute(
                 "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
                 (key, value),
             )?;
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1853,6 +1910,7 @@ mod tests {
         db.init().unwrap();
     }
 
+    #[test]
     fn test_database_creation() {
         let db = setup_test_db();
         let conn = db.conn_for_test().unwrap();

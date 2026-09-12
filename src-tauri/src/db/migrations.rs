@@ -2,7 +2,8 @@ use rusqlite::{Connection, Result};
 
 /// 当前 schema 版本。新增迁移时：把常量 +1，并在 run_migrations 里对
 /// user_version < N 的库执行第 N 版新增步骤（旧的幂等步骤会被版本守卫跳过）。
-pub const CURRENT_SCHEMA_VERSION: i64 = 3;
+/// v4: archives.last_read_at 冗余列 + 两个新索引（见下方 run_migrations 末尾）。
+pub const CURRENT_SCHEMA_VERSION: i64 = 4;
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
     // 版本守卫：已是当前版本的库不再重复执行（幂等步骤仍在历史版本库上跑一次）
@@ -96,6 +97,38 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         // 已有档案无法区分是否手动改名，保守标记为 0，避免批量重生成覆盖现有标题
         conn.execute("UPDATE archives SET title_auto = 0", [])?;
     }
+
+    // Add last_read_at column to archives if missing（“最近阅读”排序免 JOIN 的冗余列）
+    let has_last_read_at: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('archives') WHERE name='last_read_at'",
+            [],
+            |row| row.get::<_, i64>(0).map(|c| c > 0),
+        )
+        .unwrap_or(false);
+
+    if !has_last_read_at {
+        tracing::info!("Adding last_read_at column to archives...");
+        conn.execute("ALTER TABLE archives ADD COLUMN last_read_at TEXT", [])?;
+        // 历史迁移：把既有 history 的最近阅读时间回填到冗余列
+        conn.execute(
+            "UPDATE archives SET last_read_at = (
+                 SELECT h.updated_at FROM history h WHERE h.archive_id = archives.id
+                 ORDER BY h.updated_at DESC LIMIT 1
+             )",
+            [],
+        )?;
+    }
+
+    // 幂等索引：新库由 schema.rs 建，旧库在此补齐
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_archives_last_read_at ON archives(last_read_at)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_archives_title_nocase ON archives(title COLLATE NOCASE)",
+        [],
+    )?;
 
     // Check for legacy 'folders' table and migrate
     let has_folders: bool = conn

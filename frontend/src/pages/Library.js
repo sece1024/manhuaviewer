@@ -257,6 +257,8 @@ export default function Library({ mode = 'library' }) {
   const searchDebounceRef = useRef(null);
   const sortByRef = useRef(sortBy);
   const sortOrderRef = useRef(sortOrder);
+  // 随机排序的会话种子：同一 seed 下服务端顺序确定，滚动加载更多不会跨页重复/遗漏
+  const randomSeedRef = useRef(null);
   const selectedTagRef = useRef(selectedTag);
   const readFilterRef = useRef(readFilter);
   const selectedCategoryRef = useRef(selectedCategory);
@@ -372,6 +374,10 @@ export default function Library({ mode = 'library' }) {
         page: nextPage,
         ...params,
       };
+      if (sortByRef.current === 'random') {
+        if (!randomSeedRef.current) randomSeedRef.current = Math.floor(Math.random() * 1e9) + 1;
+        baseParams.seed = randomSeedRef.current;
+      }
       if (categoryId) baseParams.category_id = categoryId;
       else delete baseParams.category_id;
       if (readFilterRef.current && readFilterRef.current !== 'all') {
@@ -883,7 +889,7 @@ export default function Library({ mode = 'library' }) {
             <option value="read">已读</option>
           </select>
 
-          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{ minWidth: 100 }} aria-label="排序方式">
+          <select value={sortBy} onChange={(e) => { randomSeedRef.current = null; setSortBy(e.target.value); }} style={{ minWidth: 100 }} aria-label="排序方式">
             <option value="updated">最近阅读</option>
             <option value="name">名称</option>
             <option value="created">添加时间</option>

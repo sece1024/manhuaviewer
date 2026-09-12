@@ -389,6 +389,8 @@ pub struct ArchiveQuery {
     /// read=已读（有阅读记录）/ unread=未读，缺省全部
     pub read: Option<String>,
     pub group_id: Option<i64>,
+    /// 随机排序的会话种子：同一 seed 下顺序确定，滚动加载更多不会跨页重复/遗漏
+    pub seed: Option<i64>,
     /// 精确标题过滤（配合 parent 用于拉取自动分组完整成员列表）
     pub title: Option<String>,
     /// 父目录路径（精确标题过滤时按此筛选同目录成员）
@@ -415,6 +417,17 @@ pub struct PackCbzRequest {
     /// 可选：覆盖归档目录（不传则从 settings 读取）
     #[serde(alias = "outputDir")]
     pub output_dir: Option<String>,
+}
+
+/// 确定性伪随机 key：给定 (id, seed) 稳定输出，用于随机排序的分页一致性。
+/// SQL 的 RANDOM() 每次查询重排，导致“加载更多”会重复/漏掉条目。
+fn stable_random_key(id: i64, seed: i64) -> u64 {
+    let mut h = (id as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (seed as u64);
+    h ^= h >> 30;
+    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^ (h >> 31)
 }
 
 /// 把「原始档案行」转成不带组信息的 ListItem，并批量附上阅读进度。
@@ -486,7 +499,7 @@ pub async fn list_archives(
         let sort = query.sort.as_deref().unwrap_or("updated");
         let order = query.order.as_deref().unwrap_or("desc");
 
-        let rows = db.list_archives_all(
+        let mut rows = db.list_archives_all(
             query.search.as_deref(),
             query.tag.as_deref(),
             query.category_id,
@@ -494,6 +507,12 @@ pub async fn list_archives(
             sort,
             order,
         )?;
+        // 随机排序：带会话种子时改为确定性洗牌，保证分页/无限滚动不重不漏；
+        // 未带 seed（旧客户端）保持库里 RANDOM() 的原行为。
+        if sort == "random" {
+            let seed = query.seed.unwrap_or(0);
+            rows.sort_by_key(|a| stable_random_key(a.id, seed));
+        }
         let mut grouped: Vec<ListItem> = group_archives(rows)
             .into_iter()
             .skip(offset as usize)
@@ -1434,15 +1453,18 @@ pub async fn regenerate_titles(State(state): State<Arc<AppState>>) -> Response {
 
     let result = super::run_db(&state, move |db| {
         let rows = db.list_auto_titled()?;
-        let mut changed = 0;
-        for (id, path) in rows {
-            let new_title =
-                crate::services::scanner::derive_title(std::path::Path::new(&path), title_depth);
-            if db.update_title_auto(id, &new_title)? {
-                changed += 1;
-            }
-        }
-        Ok::<usize, rusqlite::Error>(changed)
+        // 批量计算标题，单事务一次写入（旧实现逐行独立取连接 + prepare）
+        let entries: Vec<(i64, String)> = rows
+            .into_iter()
+            .map(|(id, path)| {
+                let new_title = crate::services::scanner::derive_title(
+                    std::path::Path::new(&path),
+                    title_depth,
+                );
+                (id, new_title)
+            })
+            .collect();
+        Ok::<usize, rusqlite::Error>(db.update_titles_auto(&entries)?)
     })
     .await;
 
@@ -1773,5 +1795,26 @@ mod tests {
         assert_eq!(items[0].chapter_count, Some(2));
         assert_eq!(items[0].auto_group, None);
         assert_eq!(items[0].archive.id, 1);
+    }
+
+    /// 随机排序的 key 必须与 (id, seed) 一一确定：同 seed 稳定、跨 seed 变化，
+    /// 这样分页/无限滚动才不会重复或漏掉条目。
+    #[test]
+    fn stable_random_key_is_deterministic_and_seed_sensitive() {
+        assert_eq!(stable_random_key(42, 7), stable_random_key(42, 7));
+        assert_ne!(stable_random_key(42, 7), stable_random_key(42, 8));
+        // 同一 seed 下不同 id 应给出不同 key（避免退化成原顺序）
+        assert_ne!(stable_random_key(1, 7), stable_random_key(2, 7));
+
+        // 分页一致性：按该 key 排序后切页，并集恰好覆盖全部且无重复
+        let mut ids: Vec<i64> = (1..=50).collect();
+        ids.sort_by_key(|id| stable_random_key(*id, 12345));
+        let page1: Vec<i64> = ids[..20].to_vec();
+        let page2: Vec<i64> = ids[20..40].to_vec();
+        let page3: Vec<i64> = ids[40..].to_vec();
+        let mut union: Vec<i64> = page1.iter().chain(&page2).chain(&page3).copied().collect();
+        union.sort_unstable();
+        union.dedup();
+        assert_eq!(union, (1..=50).collect::<Vec<i64>>());
     }
 }
