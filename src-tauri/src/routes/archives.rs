@@ -65,6 +65,9 @@ pub struct ListItem {
     /// 最近阅读进度（0-based 页码），来自 history 表；无阅读记录时为 None。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_page: Option<i64>,
+    /// 该档案的标签（批量 IN 查询附加）；无标签时为 Some([])。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<crate::db::TagRow>>,
 }
 
 enum GroupKey {
@@ -115,6 +118,7 @@ fn group_archives(rows: Vec<crate::db::ArchiveRow>) -> Vec<ListItem> {
                     auto_key: None,
                     parent_dir: None,
                     read_page: None,
+                    tags: None,
                 }
             }
             GroupKey::Auto(key) => {
@@ -129,6 +133,7 @@ fn group_archives(rows: Vec<crate::db::ArchiveRow>) -> Vec<ListItem> {
                         auto_key: None,
                         parent_dir: None,
                         read_page: None,
+                        tags: None,
                     }
                 } else {
                     let primary = members[0].clone();
@@ -141,6 +146,7 @@ fn group_archives(rows: Vec<crate::db::ArchiveRow>) -> Vec<ListItem> {
                         auto_key: Some(key),
                         parent_dir: Some(parent),
                         read_page: None,
+                        tags: None,
                     }
                 }
             }
@@ -361,10 +367,13 @@ fn plain_list_items(
     let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
     let progress = db.get_history_for_archives(&ids)?;
     let map: std::collections::HashMap<i64, i64> = progress.into_iter().collect();
+    // 批量附加标签（单条 IN 查询，避免逐档案 N+1）
+    let tags_map = db.get_archive_tags_batch(&ids)?;
     Ok(rows
         .into_iter()
         .map(|row| {
-            let read_page = map.get(&row.id).copied();
+            let archive_id = row.id;
+            let read_page = map.get(&archive_id).copied();
             ListItem {
                 archive: row,
                 is_group: false,
@@ -373,6 +382,7 @@ fn plain_list_items(
                 auto_key: None,
                 parent_dir: None,
                 read_page,
+                tags: Some(tags_map.get(&archive_id).cloned().unwrap_or_default()),
             }
         })
         .collect())
@@ -436,10 +446,13 @@ pub async fn list_archives(
         let ids: Vec<i64> = grouped.iter().map(|item| item.archive.id).collect();
         let progress = db.get_history_for_archives(&ids)?;
         let progress_map: std::collections::HashMap<i64, i64> = progress.into_iter().collect();
+        // 批量附加标签：让书库卡片的标签 chips / 色点真正有数据可渲染
+        let tags_map = db.get_archive_tags_batch(&ids)?;
         for item in grouped.iter_mut() {
             if let Some(page) = progress_map.get(&item.archive.id) {
                 item.read_page = Some(*page);
             }
+            item.tags = Some(tags_map.get(&item.archive.id).cloned().unwrap_or_default());
         }
 
         Ok(ListResult::Grouped(grouped))

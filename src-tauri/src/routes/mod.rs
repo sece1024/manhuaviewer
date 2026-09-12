@@ -497,4 +497,27 @@ mod tests {
             .unwrap()
             .is_none());
     }
+
+    /// 书库列表必须携带每档案的标签（此前 /archives 不带 tags，卡片标签/色点永不显示）。
+    #[tokio::test]
+    async fn archives_list_includes_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::new(dir.path().join("t.db").to_str().unwrap()).unwrap();
+        db.init().unwrap();
+        let id = db
+            .upsert_scanned_archive("Tagged", "/x/a.cbz", "cbz", 5, 10, 1)
+            .unwrap();
+        let tag_id = db.create_tag("", "日常", "#4a86e8").unwrap();
+        db.assign_tag(id, tag_id).unwrap();
+
+        let db_arc = Arc::new(db);
+        let port = spawn_server_with(db_arc.clone(), dir.path().to_path_buf()).await;
+        let (status, raw) = get(
+            port,
+            "/api/archives?limit=50&page=1&sort_by=created&sort_order=asc",
+        )
+        .await;
+        assert_eq!(status, 200, "/archives 应成功: {}", raw);
+        assert!(raw.contains("\"日常\""), "列表响应应包含档案标签: {}", raw);
+    }
 }
