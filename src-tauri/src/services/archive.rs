@@ -101,6 +101,35 @@ fn is_safe_page_name(name: &str) -> bool {
             .all(|c| !matches!(c, std::path::Component::ParentDir))
 }
 
+/// 整包解压后校验：目录内每个条目（含子目录递归）规范化后必须仍位于 `dir` 之内。
+/// 外部解压工具遇到恶意条目名（`..`/绝对路径/symlink）时可能把文件写到缓存目录外，
+/// 这里兜底拦截并清空缓存。设遍历上限防止病态归档拖死进程。
+fn validate_extracted_tree(dir: &Path) -> Result<()> {
+    let base = dir.canonicalize()?;
+    let mut stack = vec![base.clone()];
+    let mut checked = 0usize;
+    while let Some(d) = stack.pop() {
+        for entry in fs::read_dir(&d)? {
+            let entry = entry?;
+            let p = entry.path();
+            let canon = p
+                .canonicalize()
+                .map_err(|e| anyhow::anyhow!("cannot resolve {}: {}", p.display(), e))?;
+            if !canon.starts_with(&base) {
+                anyhow::bail!("extracted entry escapes cache dir: {}", canon.display());
+            }
+            if entry.file_type()?.is_dir() {
+                stack.push(p);
+            }
+            checked += 1;
+            if checked > 100_000 {
+                anyhow::bail!("extraction tree too large, aborting validation");
+            }
+        }
+    }
+    Ok(())
+}
+
 pub trait ArchiveReader {
     fn list_pages(&self) -> Result<Vec<String>>;
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>>;
@@ -251,6 +280,11 @@ impl RarArchive {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+        // 条目路径整体校验：异常即清掉缓存目录并报错，避免脏缓存被后续读取
+        if let Err(e) = validate_extracted_tree(dir) {
+            let _ = fs::remove_dir_all(dir);
+            return Err(e);
+        }
         write_extract_marker(dir, sig)?;
         Ok(())
     }
@@ -272,7 +306,7 @@ impl ArchiveReader for RarArchive {
         let stdout = String::from_utf8(output.stdout)?;
         let mut pages: Vec<String> = stdout
             .lines()
-            .filter(|line| is_image_file(line))
+            .filter(|line| is_safe_page_name(line) && is_image_file(line))
             .map(|s| s.to_string())
             .collect();
 
@@ -281,8 +315,14 @@ impl ArchiveReader for RarArchive {
     }
 
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>> {
+        // 路径安全：拒绝绝对路径与 `..` 逃逸。缓存命中与回退解压两条路径都必须先过这一关，
+        // 否则恶意的归档条目名可让 join 后的路径写到临时目录之外。
+        if !is_safe_page_name(page_name) {
+            anyhow::bail!("Unsafe page name rejected: {}", page_name);
+        }
+
         // 持久化解压缓存命中时直接读盘：无子进程、无 tempdir、无 O(N²) 顺解（solid 包）
-        if self.cache.is_some() && is_safe_page_name(page_name) {
+        if self.cache.is_some() {
             self.ensure_extracted()?;
             if let Some(dir) = self.cache.as_deref() {
                 let candidate = dir.join(page_name);
@@ -383,6 +423,11 @@ impl SevenZArchive {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+        // 条目路径整体校验：与 RarArchive 同理
+        if let Err(e) = validate_extracted_tree(dir) {
+            let _ = fs::remove_dir_all(dir);
+            return Err(e);
+        }
         write_extract_marker(dir, sig)?;
         Ok(())
     }
@@ -411,7 +456,7 @@ impl ArchiveReader for SevenZArchive {
             }
             // 7z output format: Date Time Attr Size Compressed Name
             if let Some(name) = line.split_whitespace().last() {
-                if is_image_file(name) {
+                if is_safe_page_name(name) && is_image_file(name) {
                     pages.push(name.to_string());
                 }
             }
@@ -422,8 +467,13 @@ impl ArchiveReader for SevenZArchive {
     }
 
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>> {
+        // 路径安全：与 RarArchive 同理，缓存与回退两条路径都先校验条目名。
+        if !is_safe_page_name(page_name) {
+            anyhow::bail!("Unsafe page name rejected: {}", page_name);
+        }
+
         // 持久化解压缓存命中时直接读盘：无子进程、无 tempdir、无 O(N²) 顺解（solid 包）
-        if self.cache.is_some() && is_safe_page_name(page_name) {
+        if self.cache.is_some() {
             self.ensure_extracted()?;
             if let Some(dir) = self.cache.as_deref() {
                 let candidate = dir.join(page_name);

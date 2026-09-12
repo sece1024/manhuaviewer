@@ -1,14 +1,13 @@
 use crate::AppState;
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::{error_response, run_db};
+use super::{internal_error, run_db};
 
 #[derive(Deserialize)]
 pub struct SaveHistory {
@@ -76,7 +75,7 @@ pub async fn get_history(
                 .collect();
             Json(serde_json::json!({ "items": data, "total": total })).into_response()
         }
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -90,7 +89,7 @@ pub async fn save_history(
     .await
     {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -100,13 +99,13 @@ pub async fn delete_history(
 ) -> Response {
     match run_db(&state, move |db| db.delete_history(archive_id)).await {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
 pub async fn clear_history(State(state): State<Arc<AppState>>) -> Response {
     match run_db(&state, |db| db.clear_history()).await {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }

@@ -35,6 +35,19 @@ pub fn request_is_sensitive(m: &Method, path: &str) -> bool {
         .any(|p| first == p.trim_start_matches('/'))
 }
 
+/// 恒定时间字符串比较：长度不一致直接短路，长度一致时按位异或累计，
+/// 避免侧信道（现实威胁低，成本可忽略）。
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.bytes().zip(b.bytes()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// 口令匹配：未配置(空) => 放行；否则 header(Bearer/裸) 或 URL ?token= 命中其一即可。
 pub fn token_authorized(auth: Option<&str>, query: Option<&str>, expected: &str) -> bool {
     if expected.is_empty() {
@@ -42,9 +55,9 @@ pub fn token_authorized(auth: Option<&str>, query: Option<&str>, expected: &str)
     }
     let bear = auth
         .and_then(|v| v.strip_prefix("Bearer "))
-        .is_some_and(|v| v == expected);
-    let raw = auth.is_some_and(|v| v == expected);
-    let q = query.is_some_and(|v| v == expected);
+        .is_some_and(|v| constant_time_eq(v, expected));
+    let raw = auth.is_some_and(|v| constant_time_eq(v, expected));
+    let q = query.is_some_and(|v| constant_time_eq(v, expected));
     bear || raw || q
 }
 
@@ -59,16 +72,15 @@ fn extract_query_token(q: Option<&str>) -> Option<String> {
     })
 }
 
-fn peer_is_loopback(req: &Request) -> bool {
+/// 仅信任传输层真实对端 IP（ConnectInfo 由服务器注入，不可伪造）。
+/// 曾经信任过客户端可控的 `X-Forwarded-For`（把 `127.0.0.1` 视为回环），
+/// 而本后端直连 axum、无受信反代，LAN 攻击者加一个头即可绕过 token——
+/// 该分支已删除。无 ConnectInfo（直连单测等）默认放行，防误锁。
+pub(crate) fn peer_is_loopback(req: &Request) -> bool {
     req.extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip().is_loopback())
-        .unwrap_or(true) // 无 ConnectInfo（直连单测等）默认放行，防误锁
-        || req.headers()
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.starts_with("127.0.0.1") || v.starts_with("::1"))
-            .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 async fn configured_token(db: &Database) -> String {
@@ -180,5 +192,25 @@ mod tests {
             Some("other"),
             "sec1"
         ));
+    }
+
+    #[test]
+    fn xff_header_cannot_spoof_loopback() {
+        // 非回环真实对端 + 伪造 X-Forwarded-For：必须判定为非回环（曾有信任该头的绕过）
+        let addr: std::net::SocketAddr = "203.0.113.5:9999".parse().unwrap();
+        let req = Request::builder()
+            .header("x-forwarded-for", "127.0.0.1")
+            .extension(ConnectInfo(addr))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert!(!peer_is_loopback(&req));
+
+        // 回环真实对端：放行（防锁死桌面端）
+        let loopback: std::net::SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        let req2 = Request::builder()
+            .extension(ConnectInfo(loopback))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert!(peer_is_loopback(&req2));
     }
 }

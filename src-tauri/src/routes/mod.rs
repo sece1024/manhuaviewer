@@ -24,6 +24,15 @@ pub fn error_response(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
+/// 内部错误统一出口：细节进日志，客户端只收通用消息（避免泄露主机路径/DB 细节）。
+pub fn internal_error(err: impl std::fmt::Display) -> Response {
+    tracing::error!("Internal error: {}", err);
+    error_response(StatusCode::INTERNAL_SERVER_ERROR, "服务器内部错误")
+}
+
+/// 局域网（非回环）环境下敏感的设置项：不出现在备份/恢复与 API 响应里。
+pub(crate) const LAN_SENSITIVE_SETTINGS: &[&str] = &["server_token", "server_bind"];
+
 /// Run a blocking closure against the DB pool off the async runtime.
 ///
 /// All rusqlite calls are synchronous and must not run on the Tokio worker
@@ -60,14 +69,25 @@ fn asset_response(path: &str, data: Vec<u8>) -> Response {
     } else {
         "no-cache"
     };
-    (
+    let mut resp = (
         [
             (axum::http::header::CONTENT_TYPE, mime.as_ref()),
             (axum::http::header::CACHE_CONTROL, cache),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
         data,
     )
-        .into_response()
+        .into_response();
+    // 局域网浏览器直连 HTTP 服务时无 tauri.conf.json 的 CSP 兜底，这里为 HTML 补一份。
+    if path.ends_with(".html") {
+        resp.headers_mut().insert(
+            axum::http::header::CONTENT_SECURITY_POLICY,
+            "default-src 'self'; connect-src 'self' http://localhost:* http://127.0.0.1:*; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+                .parse()
+                .expect("static CSP header"),
+        );
+    }
+    resp
 }
 
 /// SPA 兜底：静态文件命中则返回；未命中一律回 index.html，让前端路由处理
@@ -95,19 +115,81 @@ async fn serve_frontend(uri: axum::http::Uri) -> Response {
     }
 }
 
+/// 递归移除对象中的内部路径字段与局域网敏感设置，防止非回环客户端枚举宿主文件系统。
+fn strip_private_fields(value: &mut serde_json::Value) {
+    if let Some(map) = value.as_object_mut() {
+        // 直接删掉字段（无论层级），保留数组结构
+        map.retain(|k, v| {
+            let keep = !matches!(
+                k.as_str(),
+                "path" | "cover_image" | "thumbnail_path" | "root_dir" | "cbz_export_dir"
+            ) && !LAN_SENSITIVE_SETTINGS.contains(&k.as_str());
+            if keep && v.is_object() {
+                strip_private_fields(v);
+            }
+            if keep && v.is_array() {
+                for item in v.as_array_mut().unwrap() {
+                    strip_private_fields(item);
+                }
+            }
+            keep
+        });
+    }
+}
+
+/// 非回环请求的 JSON 响应脱敏：剥离主机路径等内部字段。
+/// 只在响应确为 application/json 时解析改写（图片/XML 等二进制体直接透传）。
+async fn redact_lan_paths(req: Request, next: Next) -> Response {
+    let is_loopback = crate::routes::auth::peer_is_loopback(&req);
+    let resp = next.run(req).await;
+    if is_loopback {
+        return resp;
+    }
+    let is_json = resp
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.starts_with("application/json"))
+        .unwrap_or(false);
+    if !is_json {
+        return resp;
+    }
+    let (mut parts, body) = resp.into_parts();
+    let bytes = match axum::body::to_bytes(body, 16 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return Response::from_parts(parts, axum::body::Body::empty()),
+    };
+    let mut value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return Response::from_parts(parts, axum::body::Body::from(bytes)),
+    };
+    strip_private_fields(&mut value);
+    let new_body = serde_json::to_vec(&value).unwrap_or_else(|_| bytes.to_vec());
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+    if let Ok(len_header) = axum::http::HeaderValue::from_str(&new_body.len().to_string()) {
+        parts
+            .headers
+            .insert(axum::http::header::CONTENT_LENGTH, len_header);
+    }
+    Response::from_parts(parts, axum::body::Body::from(new_body))
+}
+
 pub fn create_router(state: AppState) -> Router {
     // CORS 只放行自己的前端来源（Tauri 生产 origin + 本机开发端口）。
     // 局域网模式下 UI 与 API 同源，不需要通配；通配会让任意网页跨站调用本地库。
-    let origins: Vec<axum::http::HeaderValue> = [
-        "tauri://localhost",
-        "http://tauri.localhost",
-        "http://localhost:1420",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ]
-    .iter()
-    .map(|s| s.parse().expect("static origin header"))
-    .collect();
+    // 开发端口仅 debug 构建放行，release 严格只留 Tauri 生产 origin。
+    let mut origin_strs = vec!["tauri://localhost", "http://tauri.localhost"];
+    if cfg!(debug_assertions) {
+        origin_strs.extend([
+            "http://localhost:1420",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]);
+    }
+    let origins: Vec<axum::http::HeaderValue> = origin_strs
+        .iter()
+        .map(|s| s.parse().expect("static origin header"))
+        .collect();
     let cors = CorsLayer::new()
         .allow_origin(tower_http::cors::AllowOrigin::list(origins))
         .allow_methods(Any)
@@ -228,6 +310,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/opds/", get(opds::root_catalog))
         .layer(auth_layer)
         .layer(cors)
+        // 非回环 JSON 响应脱敏（在鉴权之后、静态资源兜底之外）
+        .layer(middleware::from_fn(redact_lan_paths))
         .fallback(serve_frontend)
         .with_state(Arc::new(state))
 }

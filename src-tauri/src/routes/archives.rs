@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use super::error_response;
+use super::{error_response, internal_error};
 
 const CACHE_CONTROL: &str = "private, max-age=3600, must-revalidate";
 
@@ -449,7 +449,7 @@ pub async fn list_archives(
     match result {
         Ok(ListResult::Raw(archives)) => Json(archives).into_response(),
         Ok(ListResult::Grouped(items)) => Json(items).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -457,7 +457,7 @@ pub async fn get_archive(State(state): State<Arc<AppState>>, Path(id): Path<i64>
     match super::run_db(&state, move |db| db.get_archive(id)).await {
         Ok(Some(archive)) => Json(serde_json::json!({ "data": archive })).into_response(),
         Ok(None) => error_response(StatusCode::NOT_FOUND, "Archive not found"),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -472,7 +472,7 @@ pub async fn delete_archive(State(state): State<Arc<AppState>>, Path(id): Path<i
             let _ = tokio::fs::remove_dir_all(&extract_dir).await;
             Json(serde_json::json!({ "success": true })).into_response()
         }
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -502,7 +502,7 @@ pub async fn batch_delete_archives(
             }
             Json(serde_json::json!({ "success": true, "affected": affected })).into_response()
         }
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -519,7 +519,7 @@ pub async fn update_archive_title(
     let title_db = payload.title.clone();
     match super::run_db(&state, move |db| db.update_archive_title(id, &title_db)).await {
         Ok(_) => Json(serde_json::json!({ "id": id, "title": payload.title })).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -550,7 +550,7 @@ pub async fn merge_archives(
             "chapter_count": chapter_count,
         }))
         .into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -588,7 +588,7 @@ pub async fn get_cover(
                 rc,
             ),
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
-            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+            Err(e) => return internal_error(e),
         };
 
     let mtime = archive_mtime(&archive_path);
@@ -702,11 +702,8 @@ pub async fn get_cover(
             }
             build_response(StatusCode::OK, pairs, cover_data)
         }
-        Ok(Err(e)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Internal error: {}", e),
-        ),
+        Ok(Err(e)) => internal_error(e),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -723,7 +720,7 @@ pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>)
     {
         Ok((Some(a), read_page)) => (a, read_page),
         Ok((None, _)) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
-        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => return internal_error(e),
     };
 
     let archive_path = archive.path.clone();
@@ -767,11 +764,8 @@ pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>)
             }))
             .into_response()
         }
-        Ok(Err(e)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Internal error: {}", e),
-        ),
+        Ok(Err(e)) => internal_error(e),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -788,7 +782,7 @@ pub async fn get_page(
         match super::run_db(&state, move |db| db.get_archive(id)).await {
             Ok(Some(a)) => (a.id, a.path, a.archive_type),
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
-            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+            Err(e) => return internal_error(e),
         };
 
     let mtime = archive_mtime(&archive_path);
@@ -869,7 +863,7 @@ pub async fn get_page(
                     }
                     build_response(StatusCode::OK, pairs, axum::body::Body::from_stream(stream))
                 }
-                Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+                Err(e) => internal_error(e),
             }
         }
         Ok(Ok((None, _, None))) => {
@@ -880,13 +874,10 @@ pub async fn get_page(
             if msg.contains("out of range") {
                 error_response(StatusCode::NOT_FOUND, &msg)
             } else {
-                error_response(StatusCode::INTERNAL_SERVER_ERROR, &msg)
+                internal_error(msg)
             }
         }
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -906,7 +897,7 @@ pub async fn get_page_thumb(
                 (a.path, a.archive_type, dir, a.thumbnail_path.is_some())
             }
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
-            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+            Err(e) => return internal_error(e),
         };
 
     let cache_path = thumb_dir.join(format!("{}.jpg", page_index));
@@ -1038,13 +1029,10 @@ pub async fn get_page_thumb(
             if msg.contains("out of range") {
                 error_response(StatusCode::NOT_FOUND, &msg)
             } else {
-                error_response(StatusCode::INTERNAL_SERVER_ERROR, &msg)
+                internal_error(msg)
             }
         }
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -1160,7 +1148,7 @@ pub async fn open_file(
                     "archive_type": archive_type,
                 }))
                 .into_response(),
-                Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+                Err(e) => internal_error(e),
             }
         }
         Ok(Err(e)) => {
@@ -1168,13 +1156,10 @@ pub async fn open_file(
             if msg.contains("not found") {
                 error_response(StatusCode::NOT_FOUND, &msg)
             } else {
-                error_response(StatusCode::INTERNAL_SERVER_ERROR, &msg)
+                internal_error(msg)
             }
         }
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -1206,7 +1191,7 @@ pub async fn scan(
     {
         Ok(Some(v)) => v,
         Ok(None) => return error_response(StatusCode::BAD_REQUEST, "No root directory configured"),
-        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => return internal_error(e),
     };
 
     // 增量扫描 + 孤儿清理，全部在阻塞线程执行
@@ -1336,11 +1321,8 @@ pub async fn scan(
 
     match result {
         Ok(Ok(body)) => Json(body).into_response(),
-        Ok(Err(e)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Scan task error: {}", e),
-        ),
+        Ok(Err(e)) => internal_error(e),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -1377,7 +1359,7 @@ pub async fn regenerate_titles(State(state): State<Arc<AppState>>) -> Response {
             "message": format!("已按当前层级重新生成 {} 个标题", changed),
         }))
         .into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -1406,7 +1388,7 @@ pub async fn pack_cbz(
         Ok(None) => {
             return error_response(StatusCode::BAD_REQUEST, "请先在设置中配置 CBZ 归档目录")
         }
-        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => return internal_error(e),
     };
 
     // 在独立线程中执行 CPU/IO 密集型打包任务
@@ -1423,10 +1405,7 @@ pub async fn pack_cbz(
         }))
         .into_response(),
         Ok(Err(e)) => error_response(StatusCode::BAD_REQUEST, &e.to_string()),
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("打包任务异常: {}", e),
-        ),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -1493,7 +1472,7 @@ pub struct BookmarkRequest {
 pub async fn list_bookmarks(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
     match super::run_db(&state, move |db| db.list_bookmarks(id)).await {
         Ok(pages) => Json(serde_json::json!({ "archive_id": id, "pages": pages })).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -1509,7 +1488,7 @@ pub async fn add_bookmark(
     match super::run_db(&state, move |db| db.add_bookmark(id, payload.page_index)).await {
         Ok(_) => Json(serde_json::json!({ "success": true, "page_index": payload.page_index }))
             .into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -1520,7 +1499,7 @@ pub async fn remove_bookmark(
 ) -> Response {
     match super::run_db(&state, move |db| db.remove_bookmark(id, page_index)).await {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -1538,7 +1517,7 @@ pub async fn set_archive_cover(
     let archive_row = match super::run_db(&state, move |db| db.get_archive(id)).await {
         Ok(Some(a)) => a,
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
-        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => return internal_error(e),
     };
 
     let page_name = if let Some(idx) = payload.page_index {
@@ -1566,10 +1545,10 @@ pub async fn set_archive_cover(
                 return if msg.contains("out of range") {
                     error_response(StatusCode::BAD_REQUEST, &msg)
                 } else {
-                    error_response(StatusCode::INTERNAL_SERVER_ERROR, &msg)
+                    internal_error(msg)
                 };
             }
-            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e),
+            Err(e) => return internal_error(e),
         }
     } else {
         None
@@ -1587,7 +1566,7 @@ pub async fn set_archive_cover(
             let _ = tokio::fs::remove_file(thumb_dir.join("cover.jpg")).await;
             Json(serde_json::json!({ "success": true, "cover_image": page_name })).into_response()
         }
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -1623,7 +1602,7 @@ pub async fn set_remote_cover_url(
             let _ = tokio::fs::remove_file(&covers_file).await;
             Json(serde_json::json!({ "success": true, "remote_cover": url })).into_response()
         }
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 

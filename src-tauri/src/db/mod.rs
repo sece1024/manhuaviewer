@@ -1628,7 +1628,10 @@ impl Database {
             .filter_map(log_and_skip)
             .collect();
 
-        let settings = self.get_settings()?;
+        let mut settings = self.get_settings()?;
+        // 敏感设置不进备份文件：server_token 是口令，server_bind 决定监听面；
+        // 恶意备份导入这两项可清空口令并开 0.0.0.0（见 import_backup 的对应排除）。
+        settings.retain(|key, _| key != "server_token" && key != "server_bind");
 
         Ok(serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
@@ -1789,9 +1792,12 @@ impl Database {
             }
         }
 
-        // Import settings
+        // Import settings（排除敏感项：防恶意备份把 server_bind 设 0.0.0.0 / 清空口令）
         if let Some(settings) = backup["settings"].as_object() {
             for (key, value) in settings {
+                if key == "server_token" || key == "server_bind" {
+                    continue;
+                }
                 if let Some(v) = value.as_str() {
                     tx.execute(
                         "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",

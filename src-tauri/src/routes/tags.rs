@@ -8,7 +8,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::{error_response, run_db};
+use super::{error_response, internal_error, run_db};
 
 #[derive(Deserialize)]
 pub struct TagQuery {
@@ -26,14 +26,14 @@ pub struct AssignTagRequest {
 pub async fn list_tags(State(state): State<Arc<AppState>>) -> Response {
     match run_db(&state, |db| db.list_tags()).await {
         Ok(tags) => Json(tags).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
 pub async fn list_namespaces(State(state): State<Arc<AppState>>) -> Response {
     match run_db(&state, |db| db.list_namespaces()).await {
         Ok(namespaces) => Json(serde_json::json!({ "data": namespaces })).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -61,7 +61,7 @@ pub async fn create_tag(
             }
         }))
         .into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -90,14 +90,14 @@ pub async fn update_tag(
             }
         }))
         .into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
 pub async fn delete_tag(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
     match run_db(&state, move |db| db.delete_tag(id)).await {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -111,7 +111,7 @@ pub async fn assign_tag(
     .await
     {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -121,7 +121,7 @@ pub async fn remove_tag(
 ) -> Response {
     match run_db(&state, move |db| db.remove_tag(archive_id, tag_id)).await {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -147,7 +147,7 @@ pub async fn batch_assign_tag(
         Ok(affected) => {
             Json(serde_json::json!({ "success": true, "affected": affected })).into_response()
         }
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -167,7 +167,7 @@ pub async fn batch_remove_tag(
         Ok(affected) => {
             Json(serde_json::json!({ "success": true, "affected": affected })).into_response()
         }
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -177,6 +177,6 @@ pub async fn get_archive_tags(
 ) -> Response {
     match run_db(&state, move |db| db.get_archive_tags(archive_id)).await {
         Ok(tags) => Json(tags).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }

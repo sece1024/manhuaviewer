@@ -83,10 +83,7 @@ pub async fn update_check() -> Response {
             .into_response()
         }
         Ok(Err(e)) => super::error_response(StatusCode::BAD_GATEWAY, &e.to_string()),
-        Err(e) => super::error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => super::internal_error(e),
     }
 }
 

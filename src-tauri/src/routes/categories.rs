@@ -8,7 +8,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::{error_response, run_db};
+use super::{error_response, internal_error, run_db};
 
 #[derive(Deserialize)]
 pub struct CreateCategory {
@@ -21,7 +21,7 @@ pub struct CreateCategory {
 pub async fn list_categories(State(state): State<Arc<AppState>>) -> Response {
     match run_db(&state, |db| db.list_categories()).await {
         Ok(categories) => Json(categories).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -51,7 +51,7 @@ pub async fn create_category(
             }
         }))
         .into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -82,14 +82,14 @@ pub async fn update_category(
             }
         }))
         .into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
 pub async fn delete_category(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
     match run_db(&state, move |db| db.delete_category(id)).await {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -112,7 +112,7 @@ pub async fn assign_category(
     .await
     {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -126,7 +126,7 @@ pub async fn remove_category(
     .await
     {
         Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -136,7 +136,7 @@ pub async fn get_archive_categories(
 ) -> Response {
     match run_db(&state, move |db| db.get_archive_categories(archive_id)).await {
         Ok(categories) => Json(categories).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -162,7 +162,7 @@ pub async fn batch_assign_category(
         Ok(affected) => {
             Json(serde_json::json!({ "success": true, "affected": affected })).into_response()
         }
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
 
@@ -182,6 +182,6 @@ pub async fn batch_remove_category(
         Ok(affected) => {
             Json(serde_json::json!({ "success": true, "affected": affected })).into_response()
         }
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => internal_error(e),
     }
 }
