@@ -31,7 +31,9 @@ impl ThumbnailGenerator {
             .min(1.0);
         let new_w = ((src_w as f64) * scale).max(1.0) as u32;
         let new_h = ((src_h as f64) * scale).max(1.0) as u32;
-        let thumbnail = img.resize(new_w, new_h, image::imageops::FilterType::Lanczos3);
+        // thumbnail() 是专为“大图快速小图”设计的单趟降采样，比全分辨率 Lanczos3
+        // 重采样快一个量级，视觉差异在 300px 缩略图尺度上不可感知。
+        let thumbnail = img.thumbnail(new_w, new_h);
 
         let mut output = Vec::new();
         thumbnail.write_to(

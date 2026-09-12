@@ -20,6 +20,24 @@ static THUMB_TOUCH: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<i64, std::time::Instant>>,
 > = std::sync::OnceLock::new();
 
+/// 进程内页表缓存：(archive_id) -> (mtime_secs, Arc<页面行>)
+/// 消灭翻页/缩略图热路径里每页请求的两类重复工作：
+/// 压缩包档案的 2 次 DB 查询（get_page_list_mtime + get_pages）、
+/// 文件夹档案的每次 read_dir 全扫 + stat（此前一本 200 页 = O(pages²)）。
+/// 档案 mtime 变化即失效；容量满时逐出任意一项（个人书库规模足够）。
+const PAGE_LIST_CACHE_MAX: usize = 256;
+static PAGE_LIST_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<
+        std::collections::HashMap<i64, (i64, std::sync::Arc<Vec<crate::db::PageRow>>)>,
+    >,
+> = std::sync::OnceLock::new();
+
+fn page_list_cache() -> &'static std::sync::Mutex<
+    std::collections::HashMap<i64, (i64, std::sync::Arc<Vec<crate::db::PageRow>>)>,
+> {
+    PAGE_LIST_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 fn archive_mtime(path: &str) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
@@ -178,29 +196,57 @@ fn to_page_rows(archive_id: i64, list: &[String]) -> Vec<crate::db::PageRow> {
 /// is still valid (compressed archives whose file mtime is unchanged), falling
 /// back to a full archive scan otherwise. Folder archives always scan live.
 /// Runs on a blocking thread and needs `db` for the cache.
+/// Returns an Arc so every hot-path caller shares one page table instead of
+/// cloning (进程内缓存见 PAGE_LIST_CACHE)。
 fn load_page_rows(
     db: &crate::db::Database,
     archive_id: i64,
     archive_path: &str,
     archive_type: &str,
     mtime_secs: i64,
-) -> anyhow::Result<Vec<crate::db::PageRow>> {
+) -> anyhow::Result<std::sync::Arc<Vec<crate::db::PageRow>>> {
+    // 进程内缓存命中（mtime 未变）：跳过 DB 与磁盘扫描
+    {
+        let cache = page_list_cache().lock().unwrap();
+        if let Some((mt, rows)) = cache.get(&archive_id) {
+            if *mt == mtime_secs {
+                return Ok(rows.clone());
+            }
+        }
+    }
+
     let reader = crate::services::archive::create_archive_reader(archive_path, archive_type)?;
-    if is_compressed(archive_type) {
+    let rows = if is_compressed(archive_type) {
         let cached_mtime = db.get_page_list_mtime(archive_id).ok().flatten();
         if cached_mtime == Some(mtime_secs) {
             let cached = db.get_pages(archive_id).unwrap_or_default();
             if !cached.is_empty() {
-                return Ok(cached);
+                cached
+            } else {
+                let list = reader.list_pages()?;
+                let rows = to_page_rows(archive_id, &list);
+                let _ = db.save_pages(archive_id, &rows, mtime_secs);
+                rows
             }
+        } else {
+            let list = reader.list_pages()?;
+            let rows = to_page_rows(archive_id, &list);
+            let _ = db.save_pages(archive_id, &rows, mtime_secs);
+            rows
         }
-        let list = reader.list_pages()?;
-        let rows = to_page_rows(archive_id, &list);
-        let _ = db.save_pages(archive_id, &rows, mtime_secs);
-        Ok(rows)
     } else {
-        Ok(to_page_rows(archive_id, &reader.list_pages()?))
+        to_page_rows(archive_id, &reader.list_pages()?)
+    };
+
+    let arc = std::sync::Arc::new(rows);
+    let mut cache = page_list_cache().lock().unwrap();
+    if !cache.contains_key(&archive_id) && cache.len() >= PAGE_LIST_CACHE_MAX {
+        if let Some(key) = cache.keys().next().copied() {
+            cache.remove(&key);
+        }
     }
+    cache.insert(archive_id, (mtime_secs, arc.clone()));
+    Ok(arc)
 }
 
 fn etag_for_page(id: i64, page_index: i64, mtime: Option<SystemTime>) -> String {
@@ -217,6 +263,19 @@ fn etag_for_cover(id: i64, mtime: Option<SystemTime>, override_key: Option<&str>
         .map(|d| d.as_secs())
         .unwrap_or(0);
     format!("\"c-{}-{}-{}\"", id, secs, override_key.unwrap_or(""))
+}
+
+/// 缩略图目录内的档案 mtime 标记文件：缓存命中时校验它，档案变更即作废整批缩略图。
+const THUMB_ARCHIVE_MARKER: &str = "archive.mtime";
+
+fn read_thumb_archive_marker(dir: &std::path::Path) -> Option<i64> {
+    std::fs::read_to_string(dir.join(THUMB_ARCHIVE_MARKER))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+}
+
+fn write_thumb_archive_marker(dir: &std::path::Path, mtime_secs: i64) {
+    let _ = std::fs::write(dir.join(THUMB_ARCHIVE_MARKER), mtime_secs.to_string());
 }
 
 fn http_date(t: SystemTime) -> Option<String> {
@@ -913,13 +972,37 @@ pub async fn get_page_thumb(
             Err(e) => return internal_error(e),
         };
 
-    let cache_path = thumb_dir.join(format!("{}.jpg", page_index));
+    // 缓存命中路径整体放进阻塞线程（exists/stat/read 都是同步 IO），
+    // 并校验档案 mtime 标记：档案已变更时旧缩略图作废（清目录后走重新生成）。
+    let thumb_dir_cache = thumb_dir.clone();
+    let archive_path_cache = archive_path.clone();
+    let cache_hit =
+        tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, Option<SystemTime>)> {
+            if read_thumb_archive_marker(&thumb_dir_cache)
+                != Some(archive_mtime_secs(&archive_path_cache))
+            {
+                let _ = std::fs::remove_dir_all(&thumb_dir_cache);
+            }
+            let cache_path = thumb_dir_cache.join(format!("{}.jpg", page_index));
+            if !cache_path.exists() {
+                return None;
+            }
+            let file_mtime = std::fs::metadata(&cache_path)
+                .and_then(|m| m.modified())
+                .ok();
+            match std::fs::read(&cache_path) {
+                Ok(data) => Some((data, file_mtime)),
+                Err(e) => {
+                    tracing::warn!("Failed to read thumbnail cache: {}", e);
+                    None
+                }
+            }
+        })
+        .await
+        .unwrap_or(None);
 
-    // 先检查缓存，命中则直接返回
-    if cache_path.exists() {
-        let file_mtime = std::fs::metadata(&cache_path)
-            .and_then(|m| m.modified())
-            .ok();
+    // 缓存命中则直接返回（304 判断与响应装配仍在 async 侧）
+    if let Some((data, file_mtime)) = cache_hit {
         if let (Some(ims), Some(fmt)) = (
             headers
                 .get("if-modified-since")
@@ -937,26 +1020,20 @@ pub async fn get_page_thumb(
                 }
             }
         }
-        match std::fs::read(&cache_path) {
-            Ok(data) => {
-                let mut pairs: Vec<(&'static str, String)> = vec![
-                    ("Content-Type", "image/jpeg".to_string()),
-                    ("Cache-Control", CACHE_CONTROL.to_string()),
-                ];
-                if let Some(lm) = file_mtime.and_then(http_date) {
-                    pairs.push(("Last-Modified", lm));
-                }
-                if let Some(d) =
-                    file_mtime.and_then(|mt| mt.duration_since(std::time::UNIX_EPOCH).ok())
-                {
-                    pairs.push(("ETag", format!("\"thumb-{}-{}\"", id, d.as_secs())));
-                }
-                touch_thumbnail_usage(&state, id).await;
-                return build_response(StatusCode::OK, pairs, data);
+        {
+            let mut pairs: Vec<(&'static str, String)> = vec![
+                ("Content-Type", "image/jpeg".to_string()),
+                ("Cache-Control", CACHE_CONTROL.to_string()),
+            ];
+            if let Some(lm) = file_mtime.and_then(http_date) {
+                pairs.push(("Last-Modified", lm));
             }
-            Err(e) => {
-                tracing::warn!("Failed to read thumbnail cache: {}", e);
+            if let Some(d) = file_mtime.and_then(|mt| mt.duration_since(std::time::UNIX_EPOCH).ok())
+            {
+                pairs.push(("ETag", format!("\"thumb-{}-{}\"", id, d.as_secs())));
             }
+            touch_thumbnail_usage(&state, id).await;
+            return build_response(StatusCode::OK, pairs, data);
         }
     }
 
@@ -986,7 +1063,11 @@ pub async fn get_page_thumb(
         // generate_with_cache 使用 thumb_dir 作为缓存目录；解码失败（如 avif 无解码器）时
         // 降级返回原图 bytes（由系统 WebView 解码），而不是对整页缩略图报 500。
         match thumb_gen.generate_with_cache(&data, &thumb_dir_clone, &page_index.to_string()) {
-            Ok(thumb) => Ok::<_, anyhow::Error>((thumb, "image/jpeg".to_string(), true)),
+            Ok(thumb) => {
+                // 记录档案 mtime 标记：之后缓存命中时据此判定整批缩略图是否仍有效
+                write_thumb_archive_marker(&thumb_dir_clone, mtime_secs);
+                Ok::<_, anyhow::Error>((thumb, "image/jpeg".to_string(), true))
+            }
             Err(e) => {
                 tracing::warn!(
                     "Thumbnail decode failed for archive {} page {}: {}; serving original page",

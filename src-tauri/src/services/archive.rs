@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::is_image_file;
 
@@ -73,11 +73,23 @@ fn archive_signature(path: &str) -> Option<(i64, u64)> {
     Some((mtime, md.len()))
 }
 
-/// 整包解压串行化：并发首访同一档案时只允许一个线程真正解压，
-/// 其余线程在锁内重新检查签名后直接命中缓存。
-fn extract_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+/// 解压互斥：并发首访“同一档案”时只允许一个线程真正整包解压，
+/// 其余线程在锁内重新检查签名后直接命中缓存。不同档案互不阻塞
+/// （此前是全局锁，一个大 RAR 在解压会拖住所有其它档案读页）。
+fn extract_locks() -> &'static Mutex<HashMap<String, Arc<Mutex<()>>>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 取某档案的解压锁（Arc，跨线程共享）；长期运行积累过多时整体重置一次。
+fn archive_extract_lock(path: &str) -> Arc<Mutex<()>> {
+    let mut map = extract_locks().lock().unwrap();
+    if map.len() > 256 {
+        map.clear();
+    }
+    map.entry(path.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
 }
 
 fn read_extract_marker(dir: &Path) -> Option<(i64, u64)> {
@@ -263,7 +275,8 @@ impl RarArchive {
             return Ok(());
         };
 
-        let _guard = extract_lock().lock().unwrap();
+        let lock = archive_extract_lock(&self.path);
+        let _guard = lock.lock().unwrap();
         if read_extract_marker(dir) == Some(sig) {
             return Ok(());
         }
@@ -401,7 +414,8 @@ impl SevenZArchive {
             return Ok(());
         };
 
-        let _guard = extract_lock().lock().unwrap();
+        let lock = archive_extract_lock(&self.path);
+        let _guard = lock.lock().unwrap();
         if read_extract_marker(dir) == Some(sig) {
             return Ok(());
         }
