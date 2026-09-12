@@ -1,17 +1,17 @@
 # AGENTS.md — MangaViewer
 
-Tauri 2.0 desktop app: Rust backend (Axum HTTP server on `127.0.0.1:5002`) + React 19 frontend (CRA). Frontend talks to the backend over REST; in dev the CRA dev server proxies to `:5002`, in prod Tauri loads the built `frontend/build/` and CORS allows `http://127.0.0.1:5002`.
+Tauri 2.0 desktop app: Rust backend (Axum HTTP server on `127.0.0.1:5002`) + React 19 frontend (Vite). Frontend talks to the backend over REST; in dev the Vite dev server proxies to `:5002`, in prod Tauri loads the built `frontend/build/` and CORS allows `http://127.0.0.1:5002`.
 
 ## Commands
 
 ```bash
 # Development
-pnpm tauri dev                 # starts CRA (beforeDevCommand) + Tauri window
-pnpm --filter manhuaviewer-frontend start   # CRA dev server only (backend must run separately)
+pnpm tauri dev                 # starts Vite dev server (beforeDevCommand) + Tauri window
+pnpm --filter manhuaviewer-frontend start   # Vite dev server only (backend must run separately)
 pnpm tauri build               # production build (runs beforeBuildCommand, then bundles)
 
 # Tests
-cd frontend && pnpm test                           # all frontend tests (React Testing Library, CRA)
+cd frontend && pnpm test                           # all frontend tests (React Testing Library, via react-scripts test)
 cd frontend && pnpm test --testPathPattern Library     # single frontend test file (space form, NOT `-- --testPathPattern=X` — pnpm mangles the `=` form)
 cd src-tauri && cargo test                         # all backend tests
 cd src-tauri && cargo test test_name               # single backend test (use full path::name for nested)
@@ -27,7 +27,7 @@ CI (`.github/workflows/ci.yml`) runs on every push/PR to `main`. **CI does NOT r
 ## Architecture
 
 - **Backend** (`src-tauri/src/`): `main.rs` defines `AppState { db: Arc<Mutex<Database>>, data_dir }` and spawns the Axum server. Modules: `routes/` (handlers), `services/` (`archive.rs`, `scanner.rs`, `thumbnail.rs`, `cbz.rs`), `db/` (`mod.rs` = `Database` struct + all SQL queries, `schema.rs` = canonical idempotent schema, `migrations.rs` = legacy-table migration + column additions), `logging.rs` (daily-rotating file logs at `<data_dir>/logs/`, panic hook).
-- **Frontend** (`frontend/src/`): React 19 + React Router v7 (CRA). Pages: `Library`, `Reader`, `History`, `Settings`. Shared hooks in `hooks/`; tests in `__tests__/`; API mocks in `__mocks__/api.js`.
+- **Frontend** (`frontend/src/`): React 19 + React Router v7 (Vite). Pages: `Library`, `Reader`, `History`, `Settings`. Shared hooks in `hooks/`; tests in `__tests__/`; API mocks in `__mocks__/api.js`.
 - **Database**: SQLite via rusqlite, file at `<data_dir>/manhuaviewer.db`. Default `data_dir` is `~/Library/Application Support/MangaViewer/data` on macOS (other platforms via `dirs::data_dir()`). Overridable via the `DATA_DIR` env var (use this for isolated test/dev runs). HTTP port overridable via `PORT` (default `5002`).
 - **Platforms**: macOS, Windows, Linux (Tauri 2.0; Linux build needs `libwebkit2gtk-4.1-dev` etc. — see `CONTRIBUTING.md`).
 - **Two archive types**: `folder` (directory read at request time, no pages in DB) vs compressed (`zip`/`cbz`/`rar`/`cbr`/`7z` — page list cached in DB, files extracted on demand via `tempfile::tempdir()`).
@@ -45,7 +45,7 @@ CI (`.github/workflows/ci.yml`) runs on every push/PR to `main`. **CI does NOT r
 
 ## Testing
 
-Frontend tests live in `frontend/src/__tests__/` and use React Testing Library + CRA's Jest. Every page test must wrap the component in the same providers used by `App.js`: `SettingsProvider`, `TagsProvider`, `ToastProvider`, and `MemoryRouter`. API calls are mocked via `frontend/src/__mocks__/api.js` — Jest auto-resolves `jest.mock('../utils/api')` to this mock. Frontend `package.json` also has a `moduleNameMapper` for `react-router-dom` to work around CRA's bundling.
+Frontend tests live in `frontend/src/__tests__/` and use React Testing Library via react-scripts (CRA's Jest runner). Every page test must wrap the component in the same providers used by `App.js`: `SettingsProvider`, `TagsProvider`, `ToastProvider`, and `MemoryRouter`. API calls are mocked via `frontend/src/__mocks__/api.js` — Jest auto-resolves `jest.mock('../utils/api')` to this mock. Frontend `package.json` also has a `moduleNameMapper` for `react-router-dom` to work around CRA's bundling.
 
 ## Adding a new API route
 
@@ -74,8 +74,8 @@ Versions live in three places and must be kept in sync: `package.json`, `src-tau
 - If `pnpm install` fails with `ERR_PNPM_IGNORED_BUILDS` for a native package, whitelist it via `onlyBuiltDependencies` in pnpm config — the old `allowBuilds` placeholder in `pnpm-workspace.yaml` was removed as invalid (commit `a73c160`).
 - RAR/7Z archives shell out to system binaries (`unrar`, `7z`); ZIP/CBZ are handled natively by the Rust `zip` crate. On macOS install `unrar` + `p7zip` via Homebrew or those archive types fail with a clear error.
 - Tauri uses the system WebView — CSS/JS quirks vary across platforms; test on each target.
-- The CSP in `src-tauri/tauri.conf.json` whitelists `unsafe-inline`/`unsafe-eval` because CRA's inline runtime needs them; don't tighten without testing the dev build.
-- `pnpm tauri dev` already runs `beforeDevCommand` (`pnpm --filter manhuaviewer-frontend start`) — do not start the CRA dev server manually alongside it.
+- The CSP in `src-tauri/tauri.conf.json` allows `unsafe-inline` for the bundled runtime and adds `object-src 'none'`/`base-uri 'none'`/`frame-ancestors 'none'`; only tighten further after testing the dev build.
+- `pnpm tauri dev` already runs `beforeDevCommand` (`pnpm --filter manhuaviewer-frontend start`) — do not start the Vite dev server manually alongside it.
 - `data_dir` and the DB file are created on first run; deleting `manhuaviewer.db` resets state but loses settings/history.
 - App logs to `<data_dir>/logs/manhuaviewer.log.<YYYY-MM-DD>` (daily rotation, 7-day retention, panic hook). Startup failures (DB init, port bind) also show a native error dialog — check the log if the app silently fails to open (esp. Windows, where the console is hidden).
 - `scripts/bump-version.sh` uses `sed -i ''` (macOS syntax). On Linux it needs `sed -i` without the empty-string argument.

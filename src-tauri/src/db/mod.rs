@@ -967,7 +967,7 @@ impl Database {
             "SELECT id, thumbnail_path FROM archives WHERE id IN ({})",
             placeholders
         ))?;
-        let mut evicted: Vec<(i64, String)> = stmt
+        let evicted: Vec<(i64, String)> = stmt
             .query_map(rusqlite::params_from_iter(to_evict.iter()), |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })?

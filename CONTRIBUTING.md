@@ -27,7 +27,7 @@ pnpm tauri dev        # 启动 Tauri 开发模式（热重载）
 | 目录 | 说明 |
 |------|------|
 | `src-tauri/` | Tauri + Rust 后端（Axum + rusqlite） |
-| `frontend/` | React 19 前端（CRA） |
+| `frontend/` | React 19 前端（Vite；Jest 用 react-scripts） |
 
 ## 开发命令
 

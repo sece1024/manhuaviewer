@@ -1133,12 +1133,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .thumbnail-panel {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.75);
+  /* 全屏面板用纯色底：backdrop-filter 在数百缩略图滚动时会逐帧重栅格化（WebKit 掉帧） */
+  background: var(--bg-primary);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 100;
-  backdrop-filter: blur(4px);
 }
 .thumbnail-panel-inner {
   background: var(--bg-secondary);

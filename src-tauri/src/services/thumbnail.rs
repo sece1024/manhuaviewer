@@ -1,5 +1,5 @@
 use anyhow::Result;
-use image::{io::Reader as ImageReader, ImageOutputFormat};
+use image::ImageReader;
 use std::path::Path;
 
 pub struct ThumbnailGenerator {
@@ -36,10 +36,11 @@ impl ThumbnailGenerator {
         let thumbnail = img.thumbnail(new_w, new_h);
 
         let mut output = Vec::new();
-        thumbnail.write_to(
-            &mut std::io::Cursor::new(&mut output),
-            ImageOutputFormat::Jpeg(self.quality),
-        )?;
+        {
+            let mut encoder =
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, self.quality);
+            encoder.encode_image(&thumbnail)?;
+        }
 
         Ok(output)
     }

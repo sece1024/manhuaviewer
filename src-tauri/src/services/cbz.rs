@@ -91,7 +91,7 @@ pub fn pack_folder_to_cbz(folder_path: &str, output_dir: &str) -> Result<String>
     let file = std::fs::File::create(&cbz_path)?;
     let mut zip = zip::ZipWriter::new(file);
     let options =
-        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
     for image_path in &images {
         let file_name = image_path

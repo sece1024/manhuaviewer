@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useContext, createContext } from 'react';
+import React, { useState, useEffect, useCallback, useContext, useMemo, createContext } from 'react';
 import api from '../utils/api';
 
 const SettingsContext = createContext(null);
@@ -52,8 +52,12 @@ export function SettingsProvider({ children }) {
     }
   }, []);
 
+  // 稳定 value 引用：仅 settings/updateSetting 变化时消费者才重渲染，
+  // 避免 App 因无关原因重渲染时把整棵 Library/Reader/Settings 树都带崩。
+  const value = useMemo(() => ({ settings, updateSetting }), [settings, updateSetting]);
+
   return (
-    <SettingsContext.Provider value={{ settings, updateSetting }}>
+    <SettingsContext.Provider value={value}>
       {children}
     </SettingsContext.Provider>
   );
