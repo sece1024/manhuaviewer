@@ -82,15 +82,34 @@ function _setCache(url, data) {
   }
 }
 
+/// 失效匹配：同一端点（可带查询串）及其子路径；不做子串匹配，避免误伤
+/// `/archives/5/pages` 这类看起来“包含”但语义不同的缓存键。
+function _matchesPattern(key, pattern) {
+  return key === pattern || key.startsWith(pattern + '/') || key.startsWith(pattern + '?');
+}
+
 function _invalidate(pattern) {
   _generation += 1; // 使所有 in-flight GET 的缓存回写失效（见 request() 的代数比对）
   for (const key of _cache.keys()) {
-    if (key.includes(pattern)) _cache.delete(key);
+    if (_matchesPattern(key, pattern)) _cache.delete(key);
   }
   // 同步清除仍在途的同 URL 请求：失效后新发起的请求会重新拉取，
   // 而不是复用失效前发出、即将返回的旧结果。
   for (const key of _inflight.keys()) {
-    if (key.includes(pattern)) _inflight.delete(key);
+    if (_matchesPattern(key, pattern)) _inflight.delete(key);
+  }
+}
+
+/// 只失效“端点本身及其查询串”的缓存（不含子路径）。
+/// 用于阅读进度这类只影响列表/卡片、不影响 `/archives/{id}/pages` 等子资源的变化，
+/// 避免翻一次页就清掉整份页面清单与书签缓存。
+function _invalidateQuery(pattern) {
+  _generation += 1;
+  for (const key of _cache.keys()) {
+    if (key === pattern || key.startsWith(pattern + '?')) _cache.delete(key);
+  }
+  for (const key of _inflight.keys()) {
+    if (key === pattern || key.startsWith(pattern + '?')) _inflight.delete(key);
   }
 }
 
@@ -243,20 +262,21 @@ const api = {
     request('/history', { method: 'POST', body: JSON.stringify({ archive_id, page_index, total_pages }) })
       .then(r => {
         _invalidate('/history');
-        // 阅读进度会改变书库列表内容：卡片进度条、“最近阅读”排序、/pages 列表的续读位置
-        _invalidate('/archives');
+        // 阅读进度只影响书库列表内容（卡片进度条、“最近阅读”排序）；
+        // 用查询级失效，避免把 /archives/{id}/pages 与书签缓存一起清掉
+        _invalidateQuery('/archives');
         return r;
       }),
   deleteHistory: (archiveId) =>
     request(`/history/${archiveId}`, { method: 'DELETE' }).then(r => {
       _invalidate('/history');
-      _invalidate('/archives');
+      _invalidateQuery('/archives');
       return r;
     }),
   clearHistory: () =>
     request('/history', { method: 'DELETE' }).then(r => {
       _invalidate('/history');
-      _invalidate('/archives');
+      _invalidateQuery('/archives');
       return r;
     }),
 

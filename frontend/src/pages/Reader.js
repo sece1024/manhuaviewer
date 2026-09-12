@@ -15,62 +15,72 @@ import Modal from '../components/Modal';
 const OVERSCAN = 10; // 窗口上下各多渲染的页数，保证快速滚动时 sentinel 已就位
 const EST_PAGE_HEIGHT = 250; // 未测量页面的估算显示高度（与旧版占位一致）
 
-// 累加 [start, end) 区间页面的预计高度（已测量的用真实值，否则用估算值）
-function sumHeights(start, end, pageHeights) {
-  let total = 0;
-  for (let i = start; i < end; i++) total += pageHeights[i] || EST_PAGE_HEIGHT;
-  return total;
-}
+/// 单个窗口页（memoized）：只有本页的高度/可见性等 props 变化才重渲染，
+/// 其余页面在别的页图片加载后跳过 diff（前缀和变化不再拖累整个窗口）。
+const WindowedPage = React.memo(function WindowedPage({ p, index, inRange, sentinelRef, imgStyle, pageHeight, onImageLoad }) {
+  return (
+    <div
+      ref={sentinelRef}
+      data-idx={index}
+      style={{ width: '100%', minHeight: inRange ? undefined : pageHeight }}
+    >
+      {inRange ? (
+        <img
+          src={p.url}
+          alt={p.filename}
+          loading="lazy"
+          decoding="async"
+          style={imgStyle}
+          onError={(e) => { e.target.style.display = 'none'; }}
+          onLoad={(e) => {
+            // 记录真实渲染高度（宽 100%，高度=容器宽×原始高宽比），供占位与跳页定位使用
+            const img = e.currentTarget;
+            const container = img.parentElement;
+            const cw = container ? container.clientWidth : 0;
+            const nh = img.naturalHeight || 0;
+            const nw = img.naturalWidth || 1;
+            if (cw > 0 && nh > 0) onImageLoad(index, Math.round((cw * nh) / nw));
+          }}
+        />
+      ) : null}
+    </div>
+  );
+});
 
-const LongImageList = React.memo(function LongImageList({ pages, visibleRange, sentinelRef, imgStyle, pageHeights, onImageLoad }) {
+/// 长图虚拟列表：高度来自前缀和（O(1) 取上下 spacer），页节点 memoized。
+function LongImageList({ pages, visibleRange, sentinelRef, imgStyle, prefix, onImageLoad }) {
+  const n = pages.length;
   const start = Math.max(0, visibleRange.start - OVERSCAN);
-  const end = Math.min(pages.length, visibleRange.end + OVERSCAN);
+  const end = Math.min(n, visibleRange.end + OVERSCAN);
 
-  const topSpacer = sumHeights(0, start, pageHeights);
-  const bottomSpacer = sumHeights(end, pages.length, pageHeights);
+  const topSpacer = prefix[start];
+  const bottomSpacer = prefix[n] - prefix[end];
 
-  const windowed = [];
+  const items = [];
   for (let i = start; i < end; i++) {
     const p = pages[i];
-    const inRange = i >= visibleRange.start && i < visibleRange.end;
-    windowed.push(
-      <div
+    items.push(
+      <WindowedPage
         key={p.id}
-        ref={sentinelRef}
-        data-idx={i}
-        style={{ width: '100%', minHeight: inRange ? undefined : (pageHeights[i] || EST_PAGE_HEIGHT) }}
-      >
-        {inRange ? (
-          <img
-            src={p.url}
-            alt={p.filename}
-            loading="lazy"
-            decoding="async"
-            style={imgStyle}
-            onError={(e) => { e.target.style.display = 'none'; }}
-            onLoad={(e) => {
-              // 记录真实渲染高度（宽 100%，高度=容器宽×原始高宽比），供占位与跳页定位使用
-              const img = e.currentTarget;
-              const container = img.parentElement;
-              const cw = container ? container.clientWidth : 0;
-              const nh = img.naturalHeight || 0;
-              const nw = img.naturalWidth || 1;
-              if (cw > 0 && nh > 0) onImageLoad(i, Math.round((cw * nh) / nw));
-            }}
-          />
-        ) : null}
-      </div>
+        p={p}
+        index={i}
+        inRange={i >= visibleRange.start && i < visibleRange.end}
+        sentinelRef={sentinelRef}
+        imgStyle={imgStyle}
+        pageHeight={prefix[i + 1] - prefix[i]}
+        onImageLoad={onImageLoad}
+      />
     );
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', touchAction: 'pan-y', width: '100%' }}>
       {topSpacer > 0 && <div aria-hidden="true" style={{ height: topSpacer, flexShrink: 0 }} />}
-      {windowed}
+      {items}
       {bottomSpacer > 0 && <div aria-hidden="true" style={{ height: bottomSpacer, flexShrink: 0 }} />}
     </div>
   );
-});
+}
 
 export default function Reader() {
   const { archiveId } = useParams();
@@ -123,6 +133,8 @@ export default function Reader() {
   // 长图模式虚拟滚动：追踪可见范围
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 20 });
   const sentinelRefs = useRef({});
+  // 长图模式共享 IntersectionObserver（只创建一次，不随滚动重建）
+  const longObserverRef = useRef(null);
   const activeThumbRef = useRef(null);
   // 需要程序化滚动到的目标页（跳页/缩略图/进入长图/恢复进度）；消费一次后置 null
   const [scrollTarget, setScrollTarget] = useState(null);
@@ -132,13 +144,18 @@ export default function Reader() {
 
   // 稳定的 sentinel ref 回调：从 data-idx 读索引，避免每次渲染产生新函数
   // 导致 React 对所有已挂载元素反复 detach/attach ref。
-  // 返回清理函数（React 19 ref cleanup）：节点卸载时移除映射，避免窗口滑动累积旧节点引用。
+  // 返回清理函数（React 19 ref cleanup）：节点卸载时移除映射并解除观察，
+  // 避免窗口滑动累积旧节点引用/观察器泄漏。
   const setSentinelRef = useCallback((el) => {
     if (el) {
       const idx = Number(el.dataset.idx);
       sentinelRefs.current[idx] = el;
+      longObserverRef.current?.observe(el);
       return () => {
-        if (sentinelRefs.current[idx] === el) delete sentinelRefs.current[idx];
+        if (sentinelRefs.current[idx] === el) {
+          delete sentinelRefs.current[idx];
+          longObserverRef.current?.unobserve(el);
+        }
       };
     }
     return undefined;
@@ -153,6 +170,19 @@ export default function Reader() {
       return { ...prev, [idx]: height };
     });
   }, []);
+
+  // 高度前缀和：pageHeights 变化时重建（O(n)，只发生在图片加载时），
+  // 滚动帧里取任意区间高度都是 O(1)，不再每帧做两次 O(n) 累加。
+  const heightsPrefixRef = useRef(null);
+  const heightsPrefix = useMemo(() => {
+    if (heightsPrefixRef.current && heightsPrefixRef.current.pageHeights === pageHeights) {
+      return heightsPrefixRef.current.prefix;
+    }
+    const p = new Array(pages.length + 1).fill(0);
+    for (let i = 0; i < pages.length; i++) p[i + 1] = p[i] + (pageHeights[i] || EST_PAGE_HEIGHT);
+    heightsPrefixRef.current = { pageHeights, prefix: p };
+    return p;
+  }, [pageHeights, pages.length]);
 
   // url -> index 映射，用于预加载清理，避免 O(pages × 30) 的 findIndex 扫描
   const pageIndexByUrl = useMemo(() => {
@@ -305,25 +335,33 @@ export default function Reader() {
     saveParamsRef.current = { archiveId, currentIndex, pagesLength: pages.length };
   }, [archiveId, currentIndex, pages.length]);
 
+  // 已提交进度指纹：防抖保存与卸载 flush 共用，避免同一值被重复 POST
+  const lastSavedRef = useRef(null);
+  const commitSave = useCallback((aid, index, len) => {
+    if (!Number.isFinite(aid) || aid <= 0 || !Number.isFinite(len) || len <= 0) return;
+    const fingerprint = `${aid}:${index}:${len}`;
+    if (lastSavedRef.current === fingerprint) return;
+    lastSavedRef.current = fingerprint;
+    api.saveHistory(aid, index, len).catch(() => {});
+  }, []);
+
   // 进度保存：仅在状态变化时调度防抖保存；卸载时单独 flush
   useEffect(() => {
     if (!archive || pages.length === 0) return;
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      api.saveHistory(parseInt(archiveId), currentIndex, pages.length).catch(() => {});
+      commitSave(parseInt(archiveId), currentIndex, pages.length);
     }, 1000);
-  }, [currentIndex, archive, pages.length, archiveId]);
+  }, [currentIndex, archive, pages.length, archiveId, commitSave]);
 
-  // 仅在组件卸载时立即保存一次，避免与防抖保存并发
+  // 仅在组件卸载时立即保存一次（指纹去重，避免与刚完成的防抖重复提交）
   useEffect(() => {
     return () => {
       clearTimeout(saveTimerRef.current);
       const { archiveId: aid, currentIndex: ci, pagesLength: pl } = saveParamsRef.current;
-      if (aid && pl > 0) {
-        api.saveHistory(parseInt(aid), ci, pl).catch(() => {});
-      }
+      commitSave(parseInt(aid), ci, pl);
     };
-  }, []);
+  }, [commitSave]);
 
   // 预加载图片（LRU 缓存，最多 12 张 Image 对象）。长图模式页面由 <img> 随滚动加载，
   // 额外 new Image() 只会上双份内存，故长图模式不预载。
@@ -399,10 +437,11 @@ export default function Reader() {
   // eslint-disable-next-line
   }, []);
 
-  // 长图模式虚拟滚动：用 IntersectionObserver 追踪可见图片，
-  // 并据此推导“当前页”currentIndex（滚动 → 状态栏/进度条/防抖保存进度都能跟上）。
+  // 长图模式虚拟滚动：共享 IntersectionObserver 只创建一次（不依赖 visibleRange，
+  // 否则每滚动一帧都要 disconnect + 重新 observe 几十个哨兵）；窗口滑动时新增的
+  // 节点由 setSentinelRef 回调负责 observe，卸载时 unobserve。
   useEffect(() => {
-    if (!longImage || pages.length === 0) return;
+    if (!longImage || pages.length === 0) return undefined;
     const BUFFER = 3;
     const visible = new Set();
     let rafPending = false;
@@ -444,18 +483,17 @@ export default function Reader() {
       }
     }, { root: containerRef.current, rootMargin: '1500px 0px' });
 
-    // 只观察当前渲染窗口内的哨兵（窗口化虚拟滚动后其余页无 DOM 节点可观察）
-    const winStart = Math.max(0, visibleRange.start - OVERSCAN);
-    const winEnd = Math.min(pages.length, visibleRange.end + OVERSCAN);
-    for (let i = winStart; i < winEnd; i++) {
-      const el = sentinelRefs.current[i];
+    longObserverRef.current = observer;
+    // 观察当前已挂载的哨兵（后续随窗口滑动挂载的由 setSentinelRef 补齐）
+    for (const el of Object.values(sentinelRefs.current)) {
       if (el) observer.observe(el);
     }
 
     return () => {
       observer.disconnect();
+      longObserverRef.current = null;
     };
-  }, [longImage, pages, visibleRange]);
+  }, [longImage, pages]);
 
   // 进入长图模式：从当前页继续（含恢复进度后的位置）
   useEffect(() => {
@@ -1029,7 +1067,7 @@ export default function Reader() {
             visibleRange={visibleRange}
             sentinelRef={setSentinelRef}
             imgStyle={imgStyle}
-            pageHeights={pageHeights}
+            prefix={heightsPrefix}
             onImageLoad={handleImageLoad}
           />
         ) : doublePage && doubleLeft && doubleRight ? (
