@@ -26,15 +26,12 @@ static THUMB_TOUCH: std::sync::OnceLock<
 /// 文件夹档案的每次 read_dir 全扫 + stat（此前一本 200 页 = O(pages²)）。
 /// 档案 mtime 变化即失效；容量满时逐出任意一项（个人书库规模足够）。
 const PAGE_LIST_CACHE_MAX: usize = 256;
-static PAGE_LIST_CACHE: std::sync::OnceLock<
-    std::sync::Mutex<
-        std::collections::HashMap<i64, (i64, std::sync::Arc<Vec<crate::db::PageRow>>)>,
-    >,
-> = std::sync::OnceLock::new();
-
-fn page_list_cache() -> &'static std::sync::Mutex<
+type PageListCache = std::sync::Mutex<
     std::collections::HashMap<i64, (i64, std::sync::Arc<Vec<crate::db::PageRow>>)>,
-> {
+>;
+static PAGE_LIST_CACHE: std::sync::OnceLock<PageListCache> = std::sync::OnceLock::new();
+
+fn page_list_cache() -> &'static PageListCache {
     PAGE_LIST_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -1464,7 +1461,7 @@ pub async fn regenerate_titles(State(state): State<Arc<AppState>>) -> Response {
                 (id, new_title)
             })
             .collect();
-        Ok::<usize, rusqlite::Error>(db.update_titles_auto(&entries)?)
+        db.update_titles_auto(&entries)
     })
     .await;
 

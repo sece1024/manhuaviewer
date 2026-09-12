@@ -796,7 +796,7 @@ impl Database {
                 "UPDATE archives SET title = ?1, updated_at = datetime('now') WHERE id = ?2 AND title != ?1",
             )?;
             for (id, title) in entries {
-                changed += stmt.execute((title, id))? as usize;
+                changed += stmt.execute((title, id))?;
             }
         }
         tx.commit()?;
