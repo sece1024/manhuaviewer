@@ -387,8 +387,7 @@ mod tests {
         let (status, raw) = post(port, "/api/scan", &body).await;
         assert_eq!(status, 200, "扫描应成功: {}", raw);
         let json_part = raw.split("\r\n\r\n").nth(1).expect("响应应有 JSON 体");
-        let resp: serde_json::Value =
-            serde_json::from_str(json_part).expect("响应体应为合法 JSON");
+        let resp: serde_json::Value = serde_json::from_str(json_part).expect("响应体应为合法 JSON");
         assert_eq!(
             resp["removed"].as_u64(),
             Some(1),
@@ -401,23 +400,17 @@ mod tests {
         );
 
         // 数据库终态：G 被删，S/D 保留
-        assert!(
-            db_arc
-                .get_archive_by_path(&format!("{root_s}/series/ch1"))
-                .unwrap()
-                .is_some()
-        );
-        assert!(
-            db_arc
-                .get_archive_by_path(&format!("{root_s}/deep/manga.cbz"))
-                .unwrap()
-                .is_some()
-        );
-        assert!(
-            db_arc
-                .get_archive_by_path(&format!("{root_s}/gone.cbz"))
-                .unwrap()
-                .is_none()
-        );
+        assert!(db_arc
+            .get_archive_by_path(&format!("{root_s}/series/ch1"))
+            .unwrap()
+            .is_some());
+        assert!(db_arc
+            .get_archive_by_path(&format!("{root_s}/deep/manga.cbz"))
+            .unwrap()
+            .is_some());
+        assert!(db_arc
+            .get_archive_by_path(&format!("{root_s}/gone.cbz"))
+            .unwrap()
+            .is_none());
     }
 }

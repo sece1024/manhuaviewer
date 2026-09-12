@@ -206,6 +206,7 @@ impl Database {
         let defaults = [
             ("root_dir", ""),
             ("view_mode", "grid"),
+            ("card_density", "normal"),
             ("sort_by", "updated"),
             ("sort_order", "desc"),
             ("reader_fit", "height"),

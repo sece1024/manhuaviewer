@@ -16,7 +16,7 @@ const isTauri = window.__TAURI__ !== undefined;
 
 // 网格卡片：memoized，避免多选切换时整屏重渲染。
 // 所有回调通过 props 传入（父组件 useCallback 稳定引用）。
-const ArchiveCard = React.memo(function ArchiveCard({ a, isSelected, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove }) {
+const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove }) {
   return (
     <div
       className={`archive-card ${selectMode && isSelected ? 'archive-card-selected' : ''}`}
@@ -70,7 +70,25 @@ const ArchiveCard = React.memo(function ArchiveCard({ a, isSelected, selectMode,
           )}
           {a.file_size > 0 && <span>· {formatSize(a.file_size)}</span>}
         </div>
-        {a.tags && a.tags.length > 0 && (
+        {a.tags && a.tags.length > 0 && (compact ? (
+          // 紧凑模式：标签只留色点条带，颜色对应侧栏；悬停/标题提示看全名
+          <div className="archive-card-tagdots">
+            {a.tags.slice(0, 8).map(t => (
+              <span
+                key={t.name}
+                className="tag-dot"
+                style={{ background: t.color }}
+                title={t.namespace ? `${t.namespace}:${t.name}` : t.name}
+              />
+            ))}
+            {a.tags.length > 8 && (
+              <span
+                className="tag-dot tag-dot-more"
+                title={`+${a.tags.length - 8} 个标签`}
+              />
+            )}
+          </div>
+        ) : (
           <div className="archive-card-tags">
             {a.tags.slice(0, 3).map(t => (
               <span key={t.name} className="tag" style={{ background: t.color }}>
@@ -80,7 +98,7 @@ const ArchiveCard = React.memo(function ArchiveCard({ a, isSelected, selectMode,
             ))}
             {a.tags.length > 3 && <span className="tag" style={{ background: 'var(--text-tertiary)' }}>+{a.tags.length - 3}</span>}
           </div>
-        )}
+        ))}
       </div>
     </div>
   );
@@ -201,6 +219,8 @@ export default function Library({ mode = 'library' }) {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [viewMode, setViewMode] = useState(() => settings.view_mode || 'grid');
+  // 网格卡片密度：large | normal | compact（封面优先的视觉密度，仅影响网格布局）
+  const [cardDensity, setCardDensity] = useState(() => settings.card_density || 'normal');
   const [sortBy, setSortBy] = useState(() => settings.sort_by || 'updated');
   const [sortOrder, setSortOrder] = useState(() => settings.sort_order || 'desc');
   const [selectedTag, setSelectedTag] = useState('');
@@ -450,6 +470,11 @@ export default function Library({ mode = 'library' }) {
   const handleViewMode = (mode) => {
     setViewMode(mode);
     updateSetting('view_mode', mode);
+  };
+
+  const handleDensityChange = (density) => {
+    setCardDensity(density);
+    updateSetting('card_density', density);
   };
 
   const handleTagFilter = (tagName) => {
@@ -872,6 +897,14 @@ export default function Library({ mode = 'library' }) {
             <button className={viewMode === 'list' ? 'active' : ''} onClick={() => handleViewMode('list')} title="列表" aria-label="列表视图">☰</button>
           </div>
 
+          {viewMode === 'grid' && (
+            <div className="toggle-group" role="group" aria-label="卡片密度">
+              <button className={cardDensity === 'large' ? 'active' : ''} onClick={() => handleDensityChange('large')} title="大封面" aria-label="大封面">大</button>
+              <button className={cardDensity === 'normal' ? 'active' : ''} onClick={() => handleDensityChange('normal')} title="标准尺寸" aria-label="标准封面">中</button>
+              <button className={cardDensity === 'compact' ? 'active' : ''} onClick={() => handleDensityChange('compact')} title="紧凑（封面优先）" aria-label="紧凑封面">小</button>
+            </div>
+          )}
+
           <button className="btn btn-secondary" onClick={() => setShowSidebar(v => !v)} title="过滤器" aria-label={showSidebar ? '隐藏过滤器' : '显示过滤器'}>
             {showSidebar ? '◁' : '▷'}
           </button>
@@ -942,11 +975,12 @@ export default function Library({ mode = 'library' }) {
             </div>
           </div>
         ) : viewMode === 'grid' ? (
-          <div className="archive-grid">
+          <div className={`archive-grid${cardDensity === 'normal' ? '' : ` density-${cardDensity}`}`}>
             {displayArchives.map(a => (
               <Fragment key={a.id}>
                 <ArchiveCard
                   a={a}
+                  compact={cardDensity === 'compact'}
                   isSelected={selectedIds.has(a.id)}
                   selectMode={selectMode}
                   isExpanded={a._isGroup && expandedGroup === (a._autoGroup ? a._autoKey : `g:${a.id}`)}

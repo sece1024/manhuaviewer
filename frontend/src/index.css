@@ -448,6 +448,42 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   gap: 16px;
 }
 
+/* 网格卡片密度：封面优先的紧凑模式把纵向空间还给封面，
+   "大"封面加大缩略图便于扫封面辨识；"紧凑"精简文字区并折叠标签为色点。 */
+.archive-grid.density-large {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 18px;
+}
+.archive-grid.density-compact {
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 12px;
+}
+.density-compact .archive-card-info { padding: 7px 8px; }
+.density-compact .archive-card-title {
+  -webkit-line-clamp: 1;
+  font-size: 12px;
+  margin-bottom: 3px;
+}
+.density-compact .archive-card-meta { font-size: 11px; }
+
+/* 标签色点条带：紧凑模式用色点代替文字，颜色对应用户标签色；悬停看全名 */
+.archive-card-tagdots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 6px;
+}
+.tag-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.tag-dot-more {
+  background: var(--text-tertiary);
+  opacity: 0.6;
+}
+
 .archive-card {
   cursor: pointer;
   position: relative;
@@ -1524,6 +1560,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   .filter-section { margin-bottom: 0; min-width: max-content; }
 
   .archive-grid { grid-template-columns: repeat(auto-fill, 130px); gap: 10px; }
+  .archive-grid.density-large { grid-template-columns: repeat(auto-fill, 180px); gap: 12px; }
+  .archive-grid.density-compact { grid-template-columns: repeat(auto-fill, 110px); gap: 8px; }
 
   .mobile-bottom-bar {
     display: flex;
@@ -1550,6 +1588,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 @media (max-width: 480px) {
   .main-content { padding: 12px 8px; padding-bottom: 80px; }
   .archive-grid { grid-template-columns: repeat(auto-fill, 110px); gap: 8px; }
+  .archive-grid.density-large { grid-template-columns: repeat(auto-fill, 150px); gap: 10px; }
+  .archive-grid.density-compact { grid-template-columns: repeat(auto-fill, 96px); gap: 6px; }
 }
 
 /* ── 减少动画模式 ── */

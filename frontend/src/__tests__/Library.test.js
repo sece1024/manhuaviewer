@@ -154,3 +154,68 @@ describe('Library 同标题自动合并', () => {
     });
   });
 });
+
+describe('Library 卡片密度', () => {
+  const tagged = {
+    id: 1,
+    title: '测试漫画',
+    archive_type: 'folder',
+    page_count: 10,
+    cover_url: '/api/archives/1/cover',
+    tags: [{ name: '日常', color: '#4a86e8', namespace: '' }],
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getArchives.mockResolvedValue([tagged]);
+    api.getTags.mockResolvedValue([]);
+  });
+
+  test('切换紧凑密度：容器加 density-compact，标签折叠为色点', async () => {
+    const { container } = renderLibrary();
+    await waitFor(() => {
+      expect(screen.getByText('测试漫画')).toBeInTheDocument();
+    });
+    // 标准网格：文字标签可见
+    expect(container.querySelector('.archive-grid')).toBeTruthy();
+    expect(container.querySelector('.archive-card-tags')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('紧凑封面'));
+
+    await waitFor(() => {
+      expect(container.querySelector('.archive-grid.density-compact')).toBeTruthy();
+    });
+    expect(container.querySelector('.archive-card-tags')).toBeNull();
+    expect(container.querySelector('.archive-card-tagdots')).toBeTruthy();
+    expect(api.updateSettings).toHaveBeenCalledWith({ card_density: 'compact' });
+  });
+
+  test('切换大封面并持久化', async () => {
+    const { container } = renderLibrary();
+    await waitFor(() => {
+      expect(screen.getByText('测试漫画')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText('大封面'));
+
+    await waitFor(() => {
+      expect(container.querySelector('.archive-grid.density-large')).toBeTruthy();
+    });
+    expect(api.updateSettings).toHaveBeenCalledWith({ card_density: 'large' });
+  });
+
+  test('密度按钮仅在网格视图显示', async () => {
+    renderLibrary();
+    await waitFor(() => {
+      expect(screen.getByText('测试漫画')).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText('紧凑封面')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('列表视图'));
+    await waitFor(() => {
+      expect(screen.queryByLabelText('紧凑封面')).toBeNull();
+    });
+  });
+});

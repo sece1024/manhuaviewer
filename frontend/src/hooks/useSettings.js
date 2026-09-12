@@ -8,6 +8,7 @@ const LS_FALLBACKS = {
   reader_fit: 'readerFit',
   page_direction: 'pageDirection',
   view_mode: 'viewMode',
+  card_density: 'cardDensity',
   sort_by: 'sortBy',
   sort_order: 'sortOrder',
 };
