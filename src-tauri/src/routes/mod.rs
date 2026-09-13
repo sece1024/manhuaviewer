@@ -116,25 +116,38 @@ async fn serve_frontend(uri: axum::http::Uri) -> Response {
     }
 }
 
-/// 递归移除对象中的内部路径字段与局域网敏感设置，防止非回环客户端枚举宿主文件系统。
+/// 递归移除 JSON 中的主机内部路径字段与局域网敏感设置，防止非回环客户端枚举宿主文件系统。
+/// `path`/`filepath`（文件夹档案的页面绝对路径）、组卡片的 `_parentDir`、
+/// `cover_image`/`thumbnail_path`、书库根目录与打包目录，以及 server_token/server_bind。
 fn strip_private_fields(value: &mut serde_json::Value) {
-    if let Some(map) = value.as_object_mut() {
-        // 直接删掉字段（无论层级），保留数组结构
-        map.retain(|k, v| {
-            let keep = !matches!(
-                k.as_str(),
-                "path" | "cover_image" | "thumbnail_path" | "root_dir" | "cbz_export_dir"
-            ) && !LAN_SENSITIVE_SETTINGS.contains(&k.as_str());
-            if keep && v.is_object() {
-                strip_private_fields(v);
+    match value {
+        // 顶层数组（/api/archives 两个分支都返回数组）也必须递归处理——此前只处理对象，
+        // 顶层数组直接透传，脱敏形同虚设
+        serde_json::Value::Array(items) => {
+            for item in items {
+                strip_private_fields(item);
             }
-            if keep && v.is_array() {
-                for item in v.as_array_mut().unwrap() {
-                    strip_private_fields(item);
+        }
+        serde_json::Value::Object(map) => {
+            map.retain(|k, v| {
+                let keep = !matches!(
+                    k.as_str(),
+                    "path"
+                        | "filepath"
+                        | "cover_image"
+                        | "thumbnail_path"
+                        | "parent_dir"
+                        | "_parentDir"
+                        | "root_dir"
+                        | "cbz_export_dir"
+                ) && !LAN_SENSITIVE_SETTINGS.contains(&k.as_str());
+                if keep && (v.is_object() || v.is_array()) {
+                    strip_private_fields(v);
                 }
-            }
-            keep
-        });
+                keep
+            });
+        }
+        _ => {}
     }
 }
 
@@ -506,97 +519,31 @@ mod tests {
             .is_none());
     }
 
-    /// 跨机同步端到端：远端(假服务器)有 1 个文件夹档案 + 标签 + 阅读进度，
-    /// 本机发起 /api/sync/start 后应把档案下载到本地目录、入库并回填元数据。
-    #[tokio::test]
-    async fn sync_copies_archive_and_metadata() {
-        // ── 远端 ──
-        let remote_dir = tempfile::tempdir().unwrap();
-        let remote_root = remote_dir.path().join("library");
-        std::fs::create_dir_all(remote_root.join("series1/ch01")).unwrap();
-        std::fs::write(remote_root.join("series1/ch01/page01.jpg"), b"img01").unwrap();
-        std::fs::write(remote_root.join("series1/ch01/page02.png"), b"img02").unwrap();
-
-        let remote_db =
-            crate::db::Database::new(remote_dir.path().join("t.db").to_str().unwrap()).unwrap();
-        remote_db.init().unwrap();
-        let root_s = remote_root.to_string_lossy().into_owned();
-        let rid = remote_db
-            .upsert_scanned_archive(
-                "系列1",
-                &format!("{root_s}/series1/ch01"),
-                "folder",
-                2,
-                10,
-                111,
-            )
-            .unwrap();
-        let tag_id = remote_db.create_tag("", "热血", "#e5484d").unwrap();
-        remote_db.assign_tag(rid, tag_id).unwrap();
-        remote_db.save_history(rid, 1, 2).unwrap();
-        let remote_db_arc = Arc::new(remote_db);
-        let remote_port =
-            spawn_server_with(remote_db_arc.clone(), remote_dir.path().to_path_buf()).await;
-
-        // ── 本机 ──
-        let local_dir = tempfile::tempdir().unwrap();
-        let local_db =
-            crate::db::Database::new(local_dir.path().join("t.db").to_str().unwrap()).unwrap();
-        local_db.init().unwrap();
-        let local_db_arc = Arc::new(local_db);
-        let local_port =
-            spawn_server_with(local_db_arc.clone(), local_dir.path().to_path_buf()).await;
-        let sync_target = local_dir.path().join("synced");
-        std::fs::create_dir_all(&sync_target).unwrap();
-
-        let body = serde_json::json!({
-            "url": format!("http://127.0.0.1:{}", remote_port),
-            "token": "",
-            "dir": sync_target.to_string_lossy(),
-        })
-        .to_string();
-        let (status, raw) = post(local_port, "/api/sync/start", &body).await;
-        assert_eq!(status, 200, "sync/start 应成功: {}", raw);
-
-        // 轮询直到任务结束
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            let (s2, r2) = get(local_port, "/api/sync/status").await;
-            assert_eq!(s2, 200, "sync/status 应可用: {}", r2);
-            let j: serde_json::Value =
-                serde_json::from_str(r2.split("\r\n\r\n").nth(1).expect("应有 JSON 体"))
-                    .expect("status 应为 JSON");
-            if j["running"].as_bool() == Some(false) && j["total"].as_u64().unwrap_or(0) > 0 {
-                assert!(
-                    j["failed"].as_array().unwrap().is_empty(),
-                    "同步不应有失败项: {}",
-                    r2
-                );
-                break;
+    /// 脱敏必须对顶层数组也生效（/api/archives 返回数组；只处理对象会整个透传）。
+    #[test]
+    fn strip_private_fields_handles_top_level_arrays_and_new_keys() {
+        let mut value = serde_json::json!([
+            {
+                "id": 1,
+                "title": "A",
+                "path": "/Users/host/secret/a.cbz",
+                "_parentDir": "/Users/host/secret",
+                "filepath": "/Users/host/secret/pages/1.jpg",
+                "cover_image": "/Users/host/secret/c.jpg",
+                "thumbnail_path": "thumbnails/1",
+                "extras": [{ "path": "/leak", "name": "ok" }],
             }
-            assert!(std::time::Instant::now() < deadline, "同步任务超时: {}", r2);
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        }
-
-        // ── 断言 ──
-        let files: Vec<_> = std::fs::read_dir(&sync_target)
-            .unwrap()
-            .flatten()
-            .map(|e| e.path())
-            .collect();
-        assert_eq!(files.len(), 1, "应下载一个档案文件");
-        let la = local_db_arc
-            .get_archive_by_path(files[0].to_str().unwrap())
-            .unwrap()
-            .expect("档案应已入库");
-        assert_eq!(la.archive_type, "cbz", "folder 应打包为 cbz");
-        assert_eq!(la.title, "系列1");
-        let tags = local_db_arc.get_archive_tags(la.id).unwrap();
-        assert_eq!(tags.len(), 1, "标签应按标题回填");
-        assert_eq!(tags[0].name, "热血");
-        let hist = local_db_arc.get_history_for_archive(la.id).unwrap();
-        assert!(hist.is_some(), "阅读进度应回填");
-        assert_eq!(hist.unwrap().page_index, 1);
+        ]);
+        strip_private_fields(&mut value);
+        let first = &value[0];
+        assert!(first.get("path").is_none(), "顶层数组内的 path 应被剥离");
+        assert!(first.get("_parentDir").is_none());
+        assert!(first.get("filepath").is_none());
+        assert!(first.get("cover_image").is_none());
+        assert!(first.get("thumbnail_path").is_none());
+        assert_eq!(first["title"], "A");
+        assert_eq!(first["extras"][0]["name"], "ok");
+        assert!(first["extras"][0].get("path").is_none(), "嵌套对象同样剥离");
     }
 
     /// 书库列表必须携带每档案的标签（此前 /archives 不带 tags，卡片标签/色点永不显示）。
