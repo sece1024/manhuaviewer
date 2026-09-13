@@ -14,7 +14,7 @@ use axum::Json;
 use crate::db::Database;
 
 /// 即便是 GET 也会泄露配置/整库，需口令的 /api 前缀（带前导斜杠）。
-const SENSITIVE_GET_PREFIXES: &[&str] = &["/settings", "/backup", "/config"];
+const SENSITIVE_GET_PREFIXES: &[&str] = &["/settings", "/backup", "/config", "/sync"];
 
 fn is_write_method(m: &Method) -> bool {
     matches!(
@@ -169,7 +169,14 @@ mod tests {
         for p in ["/archives", "/archives/5/pages/2", "/history", "/scan"] {
             assert!(!request_is_sensitive(&Method::GET, p), "{p}");
         }
-        for p in ["/settings", "/backup", "/config"] {
+        for p in [
+            "/settings",
+            "/backup",
+            "/config",
+            "/sync",
+            "/sync/status",
+            "/sync/manifest",
+        ] {
             assert!(request_is_sensitive(&Method::GET, p), "{p}");
         }
     }

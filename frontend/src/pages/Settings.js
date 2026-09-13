@@ -28,6 +28,66 @@ export default function Settings() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const toast = useToast();
 
+  // ── 跨机同步 ──
+  const [syncUrl, setSyncUrl] = useState(settings.sync_remote_url || '');
+  const [syncToken, setSyncToken] = useState(settings.sync_remote_token || '');
+  const [syncDir, setSyncDir] = useState(settings.sync_dir || '');
+  const [syncRunning, setSyncRunning] = useState(false);
+  const [syncInfo, setSyncInfo] = useState({ total: 0, done: 0, current: '', failed: [] });
+  const syncPollRef = useRef(null);
+
+  useEffect(() => {
+    setSyncUrl(settings.sync_remote_url || '');
+    setSyncToken(settings.sync_remote_token || '');
+    setSyncDir(settings.sync_dir || '');
+  }, [settings.sync_remote_url, settings.sync_remote_token, settings.sync_dir]);
+
+  // 卸载时停止轮询
+  useEffect(() => () => { if (syncPollRef.current) clearInterval(syncPollRef.current); }, []);
+
+  const pollSyncStatus = useCallback(async () => {
+    try {
+      const s = await api.syncStatus();
+      setSyncInfo({
+        total: s.total || 0,
+        done: s.done || 0,
+        current: s.current || '',
+        failed: s.failed || [],
+      });
+      if (!s.running) {
+        if (syncPollRef.current) { clearInterval(syncPollRef.current); syncPollRef.current = null; }
+        setSyncRunning(false);
+        api.getStats().then(setStats).catch(() => {}); // 完成后刷新统计
+      }
+    } catch (e) { /* 轮询失败忽略，下一轮再试 */ }
+  }, []);
+
+  const handleSyncStart = async () => {
+    if (syncRunning) return;
+    if (!syncUrl.trim() || !syncDir.trim()) {
+      toast('请填写远端地址和本地同步目录', 'warning');
+      return;
+    }
+    try {
+      await Promise.all([
+        updateSetting('sync_remote_url', syncUrl.trim()),
+        updateSetting('sync_remote_token', syncToken.trim()),
+        updateSetting('sync_dir', syncDir.trim()),
+      ]);
+      await api.syncStart({ url: syncUrl.trim(), token: syncToken.trim(), dir: syncDir.trim() });
+      setSyncRunning(true);
+      setSyncInfo({ total: 0, done: 0, current: '连接远端...', failed: [] });
+      pollSyncStatus();
+      syncPollRef.current = setInterval(pollSyncStatus, 1000);
+    } catch (e) {
+      toast(e.message || '同步启动失败', 'error');
+    }
+  };
+
+  const handleSyncCancel = async () => {
+    try { await api.syncCancel(); } catch (e) { toast(e.message, 'error'); }
+  };
+
   // 检测 Tauri 环境
   const isTauri = window.__TAURI__ !== undefined;
 
@@ -329,6 +389,7 @@ export default function Settings() {
           <a href="#settings-section-tags">标签管理</a>
           <a href="#settings-section-categories">分类管理</a>
           <a href="#settings-section-stats">统计</a>
+          <a href="#settings-section-sync">跨机同步</a>
           <a href="#settings-section-backup">备份与恢复</a>
         </nav>
 
@@ -694,6 +755,77 @@ export default function Settings() {
           <button className="btn btn-sm" onClick={handleCheckUpdate} disabled={checkingUpdate}>
             {checkingUpdate ? '检查中...' : '检查更新'}
           </button>
+        </div>
+      </div>
+
+      {/* 跨机同步：从局域网另一台电脑把整个漫画库复制到本机 */}
+      <div id="settings-section-sync" className="settings-section">
+        <div className="settings-section-title">🔄 跨机同步</div>
+        <div className="settings-row-desc" style={{ marginBottom: 12 }}>
+          把局域网内另一台电脑（同样安装 MangaViewer）的整个漫画库拉到本机：
+          远端需开启局域网模式并设置口令，且两侧都更新到支持同步的版本。
+          逐个下载档案到本地目录并入库，标签/分类/阅读进度按标题回填；同名同大小文件自动跳过（断点续传）。
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input
+              value={syncUrl}
+              onChange={(e) => setSyncUrl(e.target.value)}
+              placeholder="远端地址，如 http://192.168.31.52:5002"
+              style={{ minWidth: 240, flex: 1 }}
+              aria-label="远端地址"
+            />
+            <input
+              value={syncToken}
+              onChange={(e) => setSyncToken(e.target.value)}
+              placeholder="远端访问口令（可选）"
+              style={{ minWidth: 160 }}
+              aria-label="远端口令"
+            />
+            <input
+              value={syncDir}
+              onChange={(e) => setSyncDir(e.target.value)}
+              placeholder="本地同步目录（绝对路径）"
+              style={{ minWidth: 240, flex: 1 }}
+              aria-label="本地同步目录"
+            />
+            <button className="btn btn-sm" onClick={handleSyncStart} disabled={syncRunning}>
+              开始同步
+            </button>
+            {syncRunning && (
+              <button className="btn btn-sm btn-secondary" onClick={handleSyncCancel}>
+                取消
+              </button>
+            )}
+          </div>
+          {syncRunning && (
+            <div style={{ background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', padding: 12 }}>
+              <div style={{ fontSize: 13, marginBottom: 6 }}>
+                {syncInfo.total > 0 ? `已完成 ${syncInfo.done} / ${syncInfo.total}` : '准备中...'}
+                {syncInfo.current && (
+                  <span style={{ color: 'var(--text-secondary)' }}> —— {syncInfo.current}</span>
+                )}
+              </div>
+              {syncInfo.total > 0 && (
+                <div style={{ height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%',
+                    background: 'var(--accent)',
+                    width: `${Math.min(100, (syncInfo.done / syncInfo.total) * 100)}%`,
+                    transition: 'width 0.3s',
+                  }} />
+                </div>
+              )}
+              {syncInfo.failed.length > 0 && (
+                <div style={{ marginTop: 8, fontSize: 12, color: '#e5484d' }}>
+                  失败 {syncInfo.failed.length} 项：
+                  <ul style={{ margin: '4px 0 0 18px' }}>
+                    {syncInfo.failed.slice(0, 5).map((f, i) => <li key={i}>{f}</li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
         </div>

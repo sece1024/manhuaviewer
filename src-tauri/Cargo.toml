@@ -60,3 +60,5 @@ anyhow = "1"
 dirs = "5"
 natord = "1"
 chrono = "0.4"
+# 同步功能：本机后端作为代理向局域网远端拉取清单/下载档案（阻塞式 HTTP 客户端）
+ureq = { version = "2", default-features = false, features = ["tls"] }

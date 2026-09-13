@@ -1072,6 +1072,26 @@ impl Database {
         )
     }
 
+    /// 按 (namespace, name) 幂等获取或创建标签并返回 id（供同步/回放元数据使用）。
+    pub fn get_or_create_tag(&self, namespace: &str, name: &str, color: &str) -> Result<i64> {
+        let conn = self.conn()?;
+        let existing: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM tags WHERE namespace = ? AND name = ?",
+                (namespace, name),
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+        conn.execute(
+            "INSERT INTO tags (namespace, name, color) VALUES (?, ?, ?)",
+            (namespace, name, color),
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
     pub fn remove_tag(&self, archive_id: i64, tag_id: i64) -> Result<usize> {
         self.conn()?.execute(
             "DELETE FROM archive_tags WHERE archive_id = ? AND tag_id = ?",
@@ -1306,6 +1326,30 @@ impl Database {
             "INSERT OR IGNORE INTO archive_categories (archive_id, category_id) VALUES (?, ?)",
             (archive_id, category_id),
         )
+    }
+
+    /// 按 name 幂等获取或创建分类并返回 id（供同步/回放元数据使用）。
+    pub fn get_or_create_category(
+        &self,
+        name: &str,
+        color: &str,
+        pinned: bool,
+        search: &str,
+    ) -> Result<i64> {
+        let conn = self.conn()?;
+        let existing: Option<i64> = conn
+            .query_row("SELECT id FROM categories WHERE name = ?", [name], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+        conn.execute(
+            "INSERT INTO categories (name, color, pinned, search) VALUES (?, ?, ?, ?)",
+            (name, color, pinned as i64, search),
+        )?;
+        Ok(conn.last_insert_rowid())
     }
 
     /// 批量为多个档案分配分类，单事务执行
@@ -1574,17 +1618,18 @@ impl Database {
         let conn = self.conn()?;
 
         let mut stmt = conn.prepare(
-            "SELECT title, path, archive_type, page_count, file_size, cover_image FROM archives",
+            "SELECT id, title, path, archive_type, page_count, file_size, cover_image FROM archives",
         )?;
         let archives: Vec<serde_json::Value> = stmt
             .query_map([], |row| {
                 Ok(serde_json::json!({
-                    "title": row.get::<_, String>(0)?,
-                    "path": row.get::<_, String>(1)?,
-                    "archive_type": row.get::<_, String>(2)?,
-                    "page_count": row.get::<_, i64>(3)?,
-                    "file_size": row.get::<_, i64>(4)?,
-                    "cover_image": row.get::<_, Option<String>>(5)?,
+                    "id": row.get::<_, i64>(0)?,
+                    "title": row.get::<_, String>(1)?,
+                    "path": row.get::<_, String>(2)?,
+                    "archive_type": row.get::<_, String>(3)?,
+                    "page_count": row.get::<_, i64>(4)?,
+                    "file_size": row.get::<_, i64>(5)?,
+                    "cover_image": row.get::<_, Option<String>>(6)?,
                 }))
             })?
             .filter_map(log_and_skip)
@@ -1701,6 +1746,112 @@ impl Database {
             "history": history,
             "bookmarks": bookmarks,
             "settings": settings,
+        }))
+    }
+
+    /// 同步专用清单：只含同步客户端需要且不含主机路径的字段，
+    /// 关联关系一律以 title 为键（跨机路径必然不同）。
+    /// 字段刻意避开 `path` 等被局域网响应脱敏中间件剔除的名字。
+    pub fn sync_manifest(&self) -> Result<serde_json::Value> {
+        let conn = self.conn()?;
+
+        let mut stmt = conn.prepare("SELECT id, title, archive_type, file_size FROM archives")?;
+        let archives: Vec<serde_json::Value> = stmt
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "id": row.get::<_, i64>(0)?,
+                    "title": row.get::<_, String>(1)?,
+                    "archive_type": row.get::<_, String>(2)?,
+                    "file_size": row.get::<_, i64>(3)?,
+                }))
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+
+        let mut stmt = conn.prepare("SELECT id, namespace, name, color FROM tags")?;
+        let tags: Vec<serde_json::Value> = stmt
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "id": row.get::<_, i64>(0)?,
+                    "namespace": row.get::<_, String>(1)?,
+                    "name": row.get::<_, String>(2)?,
+                    "color": row.get::<_, String>(3)?,
+                }))
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+
+        let mut stmt = conn.prepare("SELECT id, name, color, pinned, search FROM categories")?;
+        let categories: Vec<serde_json::Value> = stmt
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "id": row.get::<_, i64>(0)?,
+                    "name": row.get::<_, String>(1)?,
+                    "color": row.get::<_, String>(2)?,
+                    "pinned": row.get::<_, bool>(3)?,
+                    "search": row.get::<_, String>(4)?,
+                }))
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+
+        let mut stmt = conn.prepare(
+            "SELECT a.title, t.namespace, t.name
+             FROM archive_tags at
+             JOIN archives a ON a.id = at.archive_id
+             JOIN tags t ON t.id = at.tag_id
+             ORDER BY a.title, t.namespace, t.name",
+        )?;
+        let archive_tags: Vec<serde_json::Value> = stmt
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "title": row.get::<_, String>(0)?,
+                    "namespace": row.get::<_, String>(1)?,
+                    "name": row.get::<_, String>(2)?,
+                }))
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+
+        let mut stmt = conn.prepare(
+            "SELECT a.title, c.name
+             FROM archive_categories ac
+             JOIN archives a ON a.id = ac.archive_id
+             JOIN categories c ON c.id = ac.category_id
+             ORDER BY a.title, c.name",
+        )?;
+        let archive_categories: Vec<serde_json::Value> = stmt
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "title": row.get::<_, String>(0)?,
+                    "name": row.get::<_, String>(1)?,
+                }))
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+
+        let mut stmt = conn.prepare(
+            "SELECT a.title, h.page_index, h.total_pages
+             FROM history h JOIN archives a ON a.id = h.archive_id",
+        )?;
+        let history: Vec<serde_json::Value> = stmt
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "title": row.get::<_, String>(0)?,
+                    "page_index": row.get::<_, i64>(1)?,
+                    "total_pages": row.get::<_, i64>(2)?,
+                }))
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+
+        Ok(serde_json::json!({
+            "archives": archives,
+            "tags": tags,
+            "categories": categories,
+            "archive_tags": archive_tags,
+            "archive_categories": archive_categories,
+            "history": history,
         }))
     }
 

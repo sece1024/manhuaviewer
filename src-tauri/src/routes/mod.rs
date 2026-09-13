@@ -5,6 +5,7 @@ pub mod history;
 pub mod metadata;
 pub mod opds;
 pub mod settings;
+pub mod sync;
 pub mod tags;
 pub mod update;
 
@@ -282,7 +283,14 @@ pub fn create_router(state: AppState) -> Router {
         .route("/update/check", get(update::update_check))
         // Backup
         .route("/backup", get(settings::export_backup))
-        .route("/restore", post(settings::import_backup));
+        .route("/restore", post(settings::import_backup))
+        // 跨机同步（清单/下载端点；start/status/cancel 见 sync.rs）
+        .route("/sync/manifest", get(sync::sync_manifest))
+        .route("/sync/start", post(sync::sync_start))
+        .route("/sync/status", get(sync::sync_status))
+        .route("/sync/cancel", post(sync::sync_cancel))
+        // 档案原文件下载（同步用，POST 以默认纳入局域网口令保护）
+        .route("/archives/:id/file", post(archives::download_archive_file));
 
     // OPDS routes
     let opds_routes = Router::new()
@@ -496,6 +504,99 @@ mod tests {
             .get_archive_by_path(&format!("{root_s}/gone.cbz"))
             .unwrap()
             .is_none());
+    }
+
+    /// 跨机同步端到端：远端(假服务器)有 1 个文件夹档案 + 标签 + 阅读进度，
+    /// 本机发起 /api/sync/start 后应把档案下载到本地目录、入库并回填元数据。
+    #[tokio::test]
+    async fn sync_copies_archive_and_metadata() {
+        // ── 远端 ──
+        let remote_dir = tempfile::tempdir().unwrap();
+        let remote_root = remote_dir.path().join("library");
+        std::fs::create_dir_all(remote_root.join("series1/ch01")).unwrap();
+        std::fs::write(remote_root.join("series1/ch01/page01.jpg"), b"img01").unwrap();
+        std::fs::write(remote_root.join("series1/ch01/page02.png"), b"img02").unwrap();
+
+        let remote_db =
+            crate::db::Database::new(remote_dir.path().join("t.db").to_str().unwrap()).unwrap();
+        remote_db.init().unwrap();
+        let root_s = remote_root.to_string_lossy().into_owned();
+        let rid = remote_db
+            .upsert_scanned_archive(
+                "系列1",
+                &format!("{root_s}/series1/ch01"),
+                "folder",
+                2,
+                10,
+                111,
+            )
+            .unwrap();
+        let tag_id = remote_db.create_tag("", "热血", "#e5484d").unwrap();
+        remote_db.assign_tag(rid, tag_id).unwrap();
+        remote_db.save_history(rid, 1, 2).unwrap();
+        let remote_db_arc = Arc::new(remote_db);
+        let remote_port =
+            spawn_server_with(remote_db_arc.clone(), remote_dir.path().to_path_buf()).await;
+
+        // ── 本机 ──
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_db =
+            crate::db::Database::new(local_dir.path().join("t.db").to_str().unwrap()).unwrap();
+        local_db.init().unwrap();
+        let local_db_arc = Arc::new(local_db);
+        let local_port =
+            spawn_server_with(local_db_arc.clone(), local_dir.path().to_path_buf()).await;
+        let sync_target = local_dir.path().join("synced");
+        std::fs::create_dir_all(&sync_target).unwrap();
+
+        let body = serde_json::json!({
+            "url": format!("http://127.0.0.1:{}", remote_port),
+            "token": "",
+            "dir": sync_target.to_string_lossy(),
+        })
+        .to_string();
+        let (status, raw) = post(local_port, "/api/sync/start", &body).await;
+        assert_eq!(status, 200, "sync/start 应成功: {}", raw);
+
+        // 轮询直到任务结束
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let (s2, r2) = get(local_port, "/api/sync/status").await;
+            assert_eq!(s2, 200, "sync/status 应可用: {}", r2);
+            let j: serde_json::Value =
+                serde_json::from_str(r2.split("\r\n\r\n").nth(1).expect("应有 JSON 体"))
+                    .expect("status 应为 JSON");
+            if j["running"].as_bool() == Some(false) && j["total"].as_u64().unwrap_or(0) > 0 {
+                assert!(
+                    j["failed"].as_array().unwrap().is_empty(),
+                    "同步不应有失败项: {}",
+                    r2
+                );
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "同步任务超时: {}", r2);
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+
+        // ── 断言 ──
+        let files: Vec<_> = std::fs::read_dir(&sync_target)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(files.len(), 1, "应下载一个档案文件");
+        let la = local_db_arc
+            .get_archive_by_path(files[0].to_str().unwrap())
+            .unwrap()
+            .expect("档案应已入库");
+        assert_eq!(la.archive_type, "cbz", "folder 应打包为 cbz");
+        assert_eq!(la.title, "系列1");
+        let tags = local_db_arc.get_archive_tags(la.id).unwrap();
+        assert_eq!(tags.len(), 1, "标签应按标题回填");
+        assert_eq!(tags[0].name, "热血");
+        let hist = local_db_arc.get_history_for_archive(la.id).unwrap();
+        assert!(hist.is_some(), "阅读进度应回填");
+        assert_eq!(hist.unwrap().page_index, 1);
     }
 
     /// 书库列表必须携带每档案的标签（此前 /archives 不带 tags，卡片标签/色点永不显示）。

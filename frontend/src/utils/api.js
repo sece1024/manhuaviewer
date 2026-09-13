@@ -117,9 +117,11 @@ async function request(url, options = {}) {
   const method = (options.method || 'GET').toUpperCase();
   const isIdempotent = method === 'GET';
   const maxAttempts = isIdempotent ? MAX_RETRIES : 1;
+  // 显式跳过缓存（如轮询进度接口），同时不与其他 GET 做 inflight 去重
+  const noCache = options.cache === false;
 
   // GET 请求：检查缓存 + in-flight dedup
-  if (isIdempotent && _isCacheable(url, options)) {
+  if (isIdempotent && !noCache && _isCacheable(url, options)) {
     const cached = _getCached(url);
     if (cached !== null) return cached;
 
@@ -279,6 +281,11 @@ const api = {
       _invalidateQuery('/archives');
       return r;
     }),
+
+  // 跨机同步（详见“设置 → 同步”）
+  syncStart: (payload) => request('/sync/start', { method: 'POST', body: JSON.stringify(payload) }),
+  syncStatus: () => request('/sync/status', { cache: false }),
+  syncCancel: () => request('/sync/cancel', { method: 'POST' }),
 
   // Tags
   getTags: (params = {}) => {

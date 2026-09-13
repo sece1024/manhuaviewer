@@ -48,6 +48,39 @@ fn collect_images(folder: &Path) -> Result<Vec<std::path::PathBuf>> {
     Ok(images)
 }
 
+/// 将文件夹中的图片打包为临时 CBZ 文件（供流式下载/同步），
+/// 使用 Stored 方式（不压缩），与 pack_folder_to_cbz 同样的收集/排序逻辑。
+/// 返回的 NamedTempFile 用 `keep()` 转成持久路径后交给调用方流式回传；
+/// 若不 keep，drop 时自动删除。
+pub fn pack_folder_to_tempfile(folder_path: &str) -> Result<tempfile::NamedTempFile> {
+    let images = collect_images(Path::new(folder_path))?;
+
+    let mut file = tempfile::Builder::new()
+        .prefix("mv-sync-")
+        .suffix(".cbz")
+        .tempfile()?;
+    {
+        let mut zip = zip::ZipWriter::new(&mut file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        for image_path in &images {
+            let file_name = image_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let data = std::fs::read(image_path)?;
+            zip.start_file(&file_name, options)?;
+            zip.write_all(&data)?;
+        }
+        zip.finish()?;
+    }
+    file.flush()?;
+    file.reopen()?; // 位置指针回到 0，便于以只读句柄流式送出
+    Ok(file)
+}
+
 /// 将文件夹中的图片打包为 CBZ 文件（同步，应在 spawn_blocking 中调用）
 ///
 /// - `folder_path`: 漫画文件夹的绝对路径

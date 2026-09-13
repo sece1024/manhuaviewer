@@ -1146,6 +1146,105 @@ pub async fn get_page_thumb(
     }
 }
 
+/// 下载原始档案文件（跨机同步/迁移用）：压缩包直接流式回传原文件字节，
+/// 文件夹就地打成临时 CBZ 后流式回传。
+/// 用 POST 路由——局域网下写操作一律需要口令，避免未授权设备整包拉走漫画文件。
+pub async fn download_archive_file(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Response {
+    let (archive_path, archive_type) =
+        match super::run_db(&state, move |db| db.get_archive(id)).await {
+            Ok(Some(a)) => (a.path, a.archive_type),
+            Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
+            Err(e) => return internal_error(e),
+        };
+
+    if is_compressed(&archive_type) {
+        // 压缩包：直接流式回传原文件（不解包、不重打包）
+        match tokio::fs::File::open(&archive_path).await {
+            Ok(file) => {
+                let base = std::path::Path::new(&archive_path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| format!("archive_{}.{}", id, archive_type));
+                let stream = tokio_util::io::ReaderStream::new(file);
+                build_response(
+                    StatusCode::OK,
+                    vec![
+                        ("Content-Type", "application/octet-stream".to_string()),
+                        ("Content-Disposition", safe_content_disposition(&base)),
+                        ("Cache-Control", "no-store".to_string()),
+                    ],
+                    axum::body::Body::from_stream(stream),
+                )
+            }
+            Err(e) => internal_error(e),
+        }
+    } else {
+        // 文件夹：阻塞打包到临时 CBZ，再流式回传；临时文件延迟清理
+        let folder_path = archive_path.clone();
+        // 文件名在移到闭包前先算好
+        let base = std::path::Path::new(&folder_path)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("archive_{}.cbz", id));
+        let filename = format!("{}.cbz", base.trim_end_matches('/'));
+        let sync_tmp = state.data_dir.join("sync_tmp");
+        let packed = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+            std::fs::create_dir_all(&sync_tmp)?;
+            let tmp = crate::services::cbz::pack_folder_to_tempfile(&folder_path)?;
+            // keep() 转成持久路径（不 drop 自动删除），由下面的延迟清理负责
+            let (_, path) = tmp.keep().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            Ok(path.to_string_lossy().into_owned())
+        })
+        .await;
+
+        match packed {
+            Ok(Ok(temp_path)) => {
+                match tokio::fs::File::open(&temp_path).await {
+                    Ok(file) => {
+                        let stream = tokio_util::io::ReaderStream::new(file);
+                        // 回传完成后延迟清理临时文件（客户端可能中断，无法在流结束回调里删除）
+                        let cleanup = temp_path.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+                            let _ = tokio::fs::remove_file(&cleanup).await;
+                        });
+                        build_response(
+                            StatusCode::OK,
+                            vec![
+                                ("Content-Type", "application/octet-stream".to_string()),
+                                ("Content-Disposition", safe_content_disposition(&filename)),
+                                ("Cache-Control", "no-store".to_string()),
+                            ],
+                            axum::body::Body::from_stream(stream),
+                        )
+                    }
+                    Err(e) => internal_error(e),
+                }
+            }
+            Ok(Err(e)) => internal_error(e),
+            Err(e) => internal_error(e),
+        }
+    }
+}
+
+/// 用于 Content-Disposition filename 的安全转义：拒绝引号、反斜杠与控制字符。
+fn safe_content_disposition(name: &str) -> String {
+    let clean: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '"' | '\\') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    format!("attachment; filename=\"{}\"", clean)
+}
+
 pub async fn open_file(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<OpenFileRequest>,
