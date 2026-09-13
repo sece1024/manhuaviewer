@@ -109,6 +109,8 @@ export default function Reader() {
   const [overlayText, setOverlayText] = useState('');
   const overlayTimer = useRef(null);
   const [imageLoaded, setImageLoaded] = useState(false);
+  // 双页模式：两页图全部就绪后再淡入，消除开关双页/翻页时的闪白或生硬跳变
+  const [doubleLoaded, setDoubleLoaded] = useState(false);
   // 当前档案的书签页码集合
   const [bookmarks, setBookmarks] = useState(() => new Set());
   // 远程封面 URL 弹窗
@@ -202,13 +204,19 @@ export default function Reader() {
   // —— 阅读偏好持久化 ——
   // 双页/长图/翻页方向跨会话记忆：服务端设置到达前不写回，避免首帧误写
   const prefsReadyRef = useRef(false);
+  // 窄窗口判定镜像到 ref，供偏好恢复等回调读取最新值
+  const containerTooNarrowRef = useRef(containerTooNarrow);
+  useEffect(() => { containerTooNarrowRef.current = containerTooNarrow; }, [containerTooNarrow]);
   useEffect(() => {
     if (settings.reader_double !== undefined) {
       prefsReadyRef.current = true;
-      setDoublePage(settings.reader_double === '1');
+      // 恢复双页时强制关闭长图（互斥）；窗口过窄时不恢复双页，避免“开了关不掉”
+      const restoreDouble = settings.reader_double === '1' && !containerTooNarrowRef.current;
+      setDoublePage(restoreDouble);
+      if (restoreDouble) setLongImage(false);
     }
     if (settings.reader_long !== undefined) {
-      setLongImage(settings.reader_long === '1');
+      setLongImage(settings.reader_long === '1' && settings.reader_double !== '1');
     }
   }, [settings.reader_double, settings.reader_long]);
 
@@ -578,6 +586,7 @@ export default function Reader() {
     setScale(1);
     setTranslate({ x: 0, y: 0 });
     setImageLoaded(false);
+    setDoubleLoaded(false);
     // 长图模式下让滚动容器跟随到目标页（scrollTarget effect 内消费）
     setScrollTarget(newIndex);
     showOverlay(`${newIndex + 1} / ${pages.length}`);
@@ -970,11 +979,11 @@ export default function Reader() {
         <button className="btn btn-secondary btn-icon" onClick={goPrev} aria-label="上一页">‹</button>
         <button className="btn btn-secondary btn-icon" onClick={goNext} aria-label="下一页">›</button>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, opacity: containerTooNarrow || longImage ? 0.5 : 1 }}
-          title={containerTooNarrow ? '窗口宽度不足，无法使用双页模式' : longImage ? '请先关闭长图模式' : ''}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, opacity: (containerTooNarrow || longImage) && !doublePage ? 0.5 : 1 }}
+          title={!doublePage && containerTooNarrow ? '窗口宽度不足，无法使用双页模式' : !doublePage && longImage ? '请先关闭长图模式' : ''}>
           <input type="checkbox" checked={doublePage}
-            disabled={containerTooNarrow || longImage}
-            onChange={(e) => setDoublePage(e.target.checked)}
+            disabled={!doublePage && (containerTooNarrow || longImage)}
+            onChange={(e) => { setDoublePage(e.target.checked); if (e.target.checked) setLongImage(false); }}
             aria-label="启用双页模式" /> 双页
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, opacity: doublePage ? 0.5 : 1 }}
@@ -1079,8 +1088,9 @@ export default function Reader() {
                 alt={p.filename}
                 className="reader-image"
                 decoding="async"
-                style={imgStyle}
                 draggable={false}
+                style={{ ...imgStyle, opacity: doubleLoaded ? 1 : 0, transition: 'opacity 0.25s ease' }}
+                onLoad={() => setDoubleLoaded(true)}
               />
             ))}
           </div>

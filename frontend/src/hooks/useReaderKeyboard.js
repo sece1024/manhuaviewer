@@ -58,7 +58,9 @@ export default function useReaderKeyboard({
       case 'ArrowDown': if (!longImage) goNext(); break;
       case ' ': if (!longImage) { e.preventDefault(); goNext(); } break;
       case 'd': case 'D':
-        if (!e.ctrlKey && !doublePageDisabled) {
+        // 关闭双页任何时候都允许；仅“开启”受窗口宽度/长图模式限制——
+        // 否则在窄窗口（containerTooNarrow）或长图模式下开启后，D 会被同一条件锁死，退不出来。
+        if (!e.ctrlKey && (doublePage || !doublePageDisabled)) {
           setDoublePage(v => {
             if (!v) setLongImage(false); // 开启双页时关闭长图
             return !v;

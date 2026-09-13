@@ -61,6 +61,24 @@ describe('useReaderKeyboard', () => {
     expect(defaultProps.setDoublePage).toHaveBeenCalled();
   });
 
+  test('窄窗口/长图下仍可用 D 键关闭双页（否则开启后永远退不出）', () => {
+    const props = { ...defaultProps, doublePage: true, doublePageDisabled: true };
+    renderHook(() => useReaderKeyboard(props));
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'D' }));
+    });
+    expect(defaultProps.setDoublePage).toHaveBeenCalled();
+  });
+
+  test('窄窗口/长图下 D 键不能新开启双页', () => {
+    const props = { ...defaultProps, doublePage: false, doublePageDisabled: true };
+    renderHook(() => useReaderKeyboard(props));
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'd' }));
+    });
+    expect(defaultProps.setDoublePage).not.toHaveBeenCalled();
+  });
+
   test('L 键切换长图模式', () => {
     renderHook(() => useReaderKeyboard(defaultProps));
     act(() => {
