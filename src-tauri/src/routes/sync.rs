@@ -102,17 +102,19 @@ fn local_filename(title: &str, archive_type: &str, dir: &Path, size: i64) -> Str
     };
     let ext = extension_for(archive_type);
     let mut candidate = format!("{base}.{ext}");
-    let mut i = 2u32;
-    while dir.join(&candidate).is_file() {
-        // 同名同大小视为已同步（断点续传）
-        if std::fs::metadata(dir.join(&candidate))
-            .map(|m| m.len() as i64 == size)
-            .unwrap_or(false)
-        {
-            break;
+    if size > 0 {
+        let mut i = 2u32;
+        while dir.join(&candidate).is_file() {
+            // 同名同大小视为已同步（断点续传）
+            if std::fs::metadata(dir.join(&candidate))
+                .map(|m| m.len() as i64 == size)
+                .unwrap_or(false)
+            {
+                break;
+            }
+            candidate = format!("{base}_{i}.{ext}");
+            i += 1;
         }
-        candidate = format!("{base}_{i}.{ext}");
-        i += 1;
     }
     candidate
 }
