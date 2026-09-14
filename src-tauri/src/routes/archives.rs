@@ -39,7 +39,7 @@ fn archive_mtime(path: &str) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
-fn archive_mtime_secs(path: &str) -> i64 {
+pub(crate) fn archive_mtime_secs(path: &str) -> i64 {
     archive_mtime(path)
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64)
@@ -195,7 +195,8 @@ fn to_page_rows(archive_id: i64, list: &[String]) -> Vec<crate::db::PageRow> {
 /// Runs on a blocking thread and needs `db` for the cache.
 /// Returns an Arc so every hot-path caller shares one page table instead of
 /// cloning (进程内缓存见 PAGE_LIST_CACHE)。
-fn load_page_rows(
+/// 亦被 OPDS 档案详情复用，避免其每次都重开压缩包/重列目录。
+pub(crate) fn load_page_rows(
     db: &crate::db::Database,
     archive_id: i64,
     archive_path: &str,
@@ -644,7 +645,11 @@ pub async fn merge_archives(
 
 /// 下载远程图片到本地缓存文件（幂等：已有文件则直接返回其内容）。
 /// 用系统 curl（桌面端均有），避免为单次下载引入 HTTP 依赖。
+/// 目标地址必须通过出站白名单（拒绝回环/未指定/链路本地），防止 SSRF。
 fn remote_cover_bytes(id: i64, url: &str, covers_dir: &std::path::Path) -> anyhow::Result<Vec<u8>> {
+    if !super::validate_outbound_url(url) {
+        anyhow::bail!("拒绝下载远程封面：仅允许 http(s) 的局域网/公网地址");
+    }
     std::fs::create_dir_all(covers_dir)?;
     let dest = covers_dir.join(format!("{}.img", id));
     if !dest.is_file() {
@@ -1798,9 +1803,11 @@ pub async fn set_remote_cover_url(
         .map(|u| u.trim().to_string())
         .filter(|u| !u.is_empty());
     if let Some(u) = &url {
-        let is_http = u.starts_with("http://") || u.starts_with("https://");
-        if !is_http {
-            return error_response(StatusCode::BAD_REQUEST, "仅支持 http/https 图片地址");
+        if !super::validate_outbound_url(u) {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "仅支持 http(s) 的局域网/公网图片地址（拒绝本机/回环/链路本地）",
+            );
         }
     }
 

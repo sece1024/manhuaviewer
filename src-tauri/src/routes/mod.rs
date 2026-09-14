@@ -34,6 +34,46 @@ pub fn internal_error(err: impl std::fmt::Display) -> Response {
 /// 局域网（非回环）环境下敏感的设置项：不出现在备份/恢复与 API 响应里。
 pub(crate) const LAN_SENSITIVE_SETTINGS: &[&str] = &["server_token", "server_bind"];
 
+/// 出站 URL 目标合法性：同步的本意是“局域网内另一台相同软件”、远端封面只是下载
+/// 图片，因此只放行 http(s) 的私网/普通公网地址，拒绝回环、未指定、链路本地与组播
+/// ——防止本机后端被当成 SSRF 跳板访问本机自身或内网无关服务。
+/// 跨机同步（sync.rs）与远程封面 URL（archives.rs）共用。
+pub(crate) fn validate_outbound_url(url: &str) -> bool {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return false;
+    }
+    let rest = url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let hostname = host
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(host)
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+
+    fn allowed(ip: std::net::IpAddr) -> bool {
+        if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
+            return false;
+        }
+        match ip {
+            std::net::IpAddr::V4(v4) => !v4.is_link_local(),
+            std::net::IpAddr::V6(v6) => !v6.is_unicast_link_local(),
+        }
+    }
+
+    if let Ok(ip) = hostname.parse::<std::net::IpAddr>() {
+        return allowed(ip);
+    }
+    // 主机名：解析全部地址，任一允许即视为合法（LAN 常用主机名）
+    use std::net::ToSocketAddrs;
+    match (hostname, 80u16).to_socket_addrs() {
+        Ok(addrs) => addrs.map(|a| a.ip()).any(allowed),
+        Err(_) => false,
+    }
+}
+
 /// Run a blocking closure against the DB pool off the async runtime.
 ///
 /// All rusqlite calls are synchronous and must not run on the Tokio worker

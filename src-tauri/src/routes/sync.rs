@@ -132,43 +132,9 @@ fn local_filename(title: &str, archive_type: &str, dir: &Path, size: i64) -> Str
 
 // ── 远端 HTTP（阻塞式，运行在 spawn_blocking）──
 
-/// 同步目标合法性：同步的本意是“局域网内另一台相同软件”，
-/// 因此只放行私网/普通公网地址，拒绝回环、未指定、链路本地与组播——
-/// 防止本机后端被当成 SSRF 跳板访问本机自身或内网无关服务。
+/// 同步目标合法性：见 `super::validate_outbound_url`（拒绝回环/本机/链路本地）。
 fn validate_sync_url(url: &str) -> bool {
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return false;
-    }
-    let rest = url
-        .trim_start_matches("http://")
-        .trim_start_matches("https://");
-    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let hostname = host
-        .rsplit_once(':')
-        .map(|(h, _)| h)
-        .unwrap_or(host)
-        .trim_start_matches('[')
-        .trim_end_matches(']');
-
-    fn allowed(ip: std::net::IpAddr) -> bool {
-        if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
-            return false;
-        }
-        match ip {
-            std::net::IpAddr::V4(v4) => !v4.is_link_local(),
-            std::net::IpAddr::V6(v6) => !v6.is_unicast_link_local(),
-        }
-    }
-
-    if let Ok(ip) = hostname.parse::<std::net::IpAddr>() {
-        return allowed(ip);
-    }
-    // 主机名：解析全部地址，任一允许即视为合法（LAN 常用主机名）
-    use std::net::ToSocketAddrs;
-    match (hostname, 80u16).to_socket_addrs() {
-        Ok(addrs) => addrs.map(|a| a.ip()).any(allowed),
-        Err(_) => false,
-    }
+    super::validate_outbound_url(url)
 }
 
 fn base_url(url: &str) -> String {
