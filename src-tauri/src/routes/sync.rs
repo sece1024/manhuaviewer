@@ -29,8 +29,12 @@ fn current_job() -> &'static Mutex<Option<Arc<SyncJob>>> {
 pub struct SyncJob {
     running: AtomicBool,
     cancel: AtomicBool,
+    /// 计划工作量（新增+更新，不含已同步）
     total: AtomicUsize,
     done: AtomicUsize,
+    new_count: AtomicUsize,
+    changed_count: AtomicUsize,
+    skipped: AtomicUsize,
     current: Mutex<String>,
     failed: Mutex<Vec<String>>,
 }
@@ -42,6 +46,9 @@ impl SyncJob {
             cancel: AtomicBool::new(false),
             total: AtomicUsize::new(0),
             done: AtomicUsize::new(0),
+            new_count: AtomicUsize::new(0),
+            changed_count: AtomicUsize::new(0),
+            skipped: AtomicUsize::new(0),
             current: Mutex::new(String::new()),
             failed: Mutex::new(Vec::new()),
         })
@@ -52,6 +59,9 @@ impl SyncJob {
             "running": self.running.load(Ordering::SeqCst),
             "total": self.total.load(Ordering::SeqCst),
             "done": self.done.load(Ordering::SeqCst),
+            "new": self.new_count.load(Ordering::SeqCst),
+            "changed": self.changed_count.load(Ordering::SeqCst),
+            "skipped": self.skipped.load(Ordering::SeqCst),
             "current": self.current.lock().unwrap().clone(),
             "failed": self.failed.lock().unwrap().clone(),
         })
@@ -66,6 +76,7 @@ struct ManifestArchive {
     title: String,
     #[serde(rename = "archive_type")]
     archive_type: String,
+    page_count: i64,
     file_size: i64,
 }
 
@@ -79,8 +90,11 @@ fn extension_for(archive_type: &str) -> &'static str {
     }
 }
 
-/// 由标题生成安全的本地文件名：清掉路径分隔符/非法字符，冲突时追加 _2、_3…
-fn local_filename(title: &str, archive_type: &str, dir: &Path, size: i64) -> String {
+/// 由标题生成安全的本地文件名：清掉路径分隔符/非法字符、规避 Windows 保留名。
+/// `occurrence` 是同一标题在远端清单里的第几次出现（0 起）：同名多次出现时
+/// 追加 `_2/_3` 后缀，避免两本不同漫画互相覆盖；单次出现固定用 `{title}.{ext}`，
+/// “内容有变化”时下载会覆盖同名文件（覆盖更新语义）。
+fn sync_filename(title: &str, archive_type: &str, occurrence: usize) -> String {
     let base: String = title
         .chars()
         .map(|c| {
@@ -96,38 +110,94 @@ fn local_filename(title: &str, archive_type: &str, dir: &Path, size: i64) -> Str
         .take(120)
         .collect();
     let base = if base.is_empty() {
-        "archive".to_string()
+        "archive"
     } else {
-        base
+        base.as_str()
     };
     // Windows 保留设备名（CON/PRN/AUX/NUL/COM*/LPT*）与尾随点/空格：加下划线前缀避免落盘失败
     const RESERVED: &[&str] = &[
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
         "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
-    let stem = base.split('.').next().unwrap_or(&base).to_ascii_uppercase();
+    let stem = base.split('.').next().unwrap_or(base).to_ascii_uppercase();
     let base = if RESERVED.contains(&stem.as_str()) || base.ends_with('.') || base.ends_with(' ') {
         format!("_{}", base.trim_end_matches(['.', ' ']))
     } else {
-        base
+        base.to_string()
     };
     let ext = extension_for(archive_type);
-    let mut candidate = format!("{base}.{ext}");
-    if size > 0 {
-        let mut i = 2u32;
-        while dir.join(&candidate).is_file() {
-            // 同名同大小视为已同步（断点续传）
-            if std::fs::metadata(dir.join(&candidate))
-                .map(|m| m.len() as i64 == size)
-                .unwrap_or(false)
-            {
-                break;
-            }
-            candidate = format!("{base}_{i}.{ext}");
-            i += 1;
-        }
+    if occurrence == 0 {
+        format!("{base}.{ext}")
+    } else {
+        format!("{base}_{}.{ext}", occurrence + 1)
     }
-    candidate
+}
+
+/// 计划条目：远端档案 + 落到本地的文件名 + 对比结论。
+struct PlanItem {
+    archive: ManifestArchive,
+    filename: String,
+    status: PlanStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlanStatus {
+    /// 本地没有 → 下载
+    New,
+    /// 本地同名存在但大小/页数不一致 → 下载覆盖（覆盖更新）
+    Changed,
+    /// 本地同名且一致 → 跳过
+    UpToDate,
+}
+
+/// 把远端清单与本地目录/本地库比对，产出同步计划。
+/// 压缩包按文件大小判变化；文件夹档案远端 file_size 恒 0，按本地库同名档案的
+/// page_count 与远端 page_count 判变化。
+fn build_plan(db: &crate::db::Database, entries: &[ManifestArchive], dir: &Path) -> Vec<PlanItem> {
+    // 统计同标题出现次数，决定 _2/_3 后缀
+    let mut used: HashMap<String, usize> = HashMap::new();
+    let mut plan = Vec::with_capacity(entries.len());
+    for e in entries {
+        let occurrence = {
+            let n = used.entry(e.title.clone()).or_default();
+            let occ = *n;
+            *n += 1;
+            occ
+        };
+        let filename = sync_filename(&e.title, &e.archive_type, occurrence);
+        let path = dir.join(&filename);
+
+        let status = if !path.is_file() {
+            PlanStatus::New
+        } else if e.archive_type != "folder" {
+            // 压缩包：本地文件大小一致判“已同步”，不一致判“变化”
+            let same_size = std::fs::metadata(&path)
+                .map(|m| m.len() as i64 == e.file_size)
+                .unwrap_or(false);
+            if same_size {
+                PlanStatus::UpToDate
+            } else {
+                PlanStatus::Changed
+            }
+        } else {
+            // 文件夹：远端打包成 cbz 后大小与原目录无关（Windows 目录 size 甚至非 0），
+            // 统一用本地同路径档案的页数与远端 page_count 对比
+            let local = path
+                .to_str()
+                .and_then(|p| db.get_archive_by_path(p).ok().flatten());
+            match local {
+                Some(a) if a.page_count == e.page_count => PlanStatus::UpToDate,
+                _ => PlanStatus::Changed,
+            }
+        };
+
+        plan.push(PlanItem {
+            archive: e.clone(),
+            filename,
+            status,
+        });
+    }
+    plan
 }
 
 // ── 远端 HTTP（阻塞式，运行在 spawn_blocking）──
@@ -205,9 +275,6 @@ fn register_local(
     let path_str = path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("本地路径非 UTF-8"))?;
-    if let Some(existing) = db.get_archive_by_path(path_str)? {
-        return Ok(existing.id);
-    }
     // folder 已在远端打包为 cbz
     let archive_type = if entry.archive_type == "folder" {
         "cbz"
@@ -375,37 +442,38 @@ fn run_sync_job(
             }
         }
 
-        for entry in &entries {
+        // 对比：计算同步计划（新增/更新/跳过），job total 只统计真正要做的工作
+        let plan = build_plan(&db, &entries, &sync_dir);
+        let work: Vec<&PlanItem> = plan
+            .iter()
+            .filter(|p| p.status != PlanStatus::UpToDate)
+            .collect();
+        let new_count = work.iter().filter(|p| p.status == PlanStatus::New).count();
+        let changed_count = work.len() - new_count;
+        let skipped = plan.len() - work.len();
+        job.new_count.store(new_count, Ordering::SeqCst);
+        job.changed_count.store(changed_count, Ordering::SeqCst);
+        job.skipped.store(skipped, Ordering::SeqCst);
+        job.total.store(work.len(), Ordering::SeqCst);
+
+        for item in work {
             if job.cancel.load(Ordering::SeqCst) {
                 break;
             }
-            *job.current.lock().unwrap() = entry.title.clone();
+            *job.current.lock().unwrap() = item.archive.title.clone();
+            let local_path = sync_dir.join(&item.filename);
 
-            let filename = local_filename(
-                &entry.title,
-                &entry.archive_type,
-                &sync_dir,
-                entry.file_size,
-            );
-            let local_path = sync_dir.join(&filename);
-            let already = local_path.is_file()
-                && entry.file_size > 0
-                && std::fs::metadata(&local_path)
-                    .map(|m| m.len() as i64 == entry.file_size)
-                    .unwrap_or(false);
-
+            // New/Changed 都真实下载（Changed 覆盖同名文件 = 覆盖更新）
             let outcome: anyhow::Result<i64> = (|| {
-                if !already {
-                    download_archive(&url, &token, entry.id, &local_path)?;
-                }
-                register_local(&db, entry, &local_path)
+                download_archive(&url, &token, item.archive.id, &local_path)?;
+                register_local(&db, &item.archive, &local_path)
             })();
             match outcome {
                 Ok(local_id) => {
                     apply_metadata(
                         &db,
                         local_id,
-                        &entry.title,
+                        &item.archive.title,
                         &tag_ids_by_title,
                         &category_ids_by_title,
                         &history_by_title,
@@ -415,7 +483,7 @@ fn run_sync_job(
                     job.failed
                         .lock()
                         .unwrap()
-                        .push(format!("{}: {}", entry.title, e));
+                        .push(format!("{}: {}", item.archive.title, e));
                 }
             }
             job.done.fetch_add(1, Ordering::SeqCst);
@@ -446,6 +514,59 @@ pub struct SyncStartRequest {
 pub async fn sync_manifest(State(state): State<Arc<AppState>>) -> Response {
     match super::run_db(&state, |db| db.sync_manifest()).await {
         Ok(manifest) => Json(manifest).into_response(),
+        Err(e) => internal_error(e),
+    }
+}
+
+/// 对比预览：拉取远端清单并与本地目录/本地库比对，返回差异统计与标题列表，
+/// 不下载任何文件。用户确认后再调 /sync/start 只同步差异项。
+pub async fn sync_plan(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<SyncStartRequest>,
+) -> Response {
+    let url = payload.url.trim().to_string();
+    let dir = payload.dir.trim().to_string();
+    if !validate_sync_url(&url) || dir.is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "url 必须为 http(s):// 的局域网地址（拒绝回环/本机/链路本地）且必须指定本地目录",
+        );
+    }
+    if !std::path::Path::new(&dir).is_absolute() {
+        return error_response(StatusCode::BAD_REQUEST, "本地目录必须为绝对路径");
+    }
+
+    let db = state.db.clone();
+    let token = payload.token.unwrap_or_default();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        let manifest = fetch_manifest(&url, &token)?;
+        let entries: Vec<ManifestArchive> = serde_json::from_value(
+            manifest
+                .get("archives")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )?;
+        let plan = build_plan(&db, &entries, Path::new(&dir));
+        let (mut new, mut changed, mut up_to_date) = (Vec::new(), Vec::new(), Vec::new());
+        for item in plan {
+            match item.status {
+                PlanStatus::New => new.push(item.archive.title),
+                PlanStatus::Changed => changed.push(item.archive.title),
+                PlanStatus::UpToDate => up_to_date.push(item.archive.title),
+            }
+        }
+        Ok(serde_json::json!({
+            "total": entries.len(),
+            "new": new,
+            "changed": changed,
+            "up_to_date": up_to_date,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(plan)) => Json(plan).into_response(),
+        Ok(Err(e)) => error_response(StatusCode::BAD_GATEWAY, &e.to_string()),
         Err(e) => internal_error(e),
     }
 }
@@ -491,7 +612,7 @@ pub async fn sync_status() -> Response {
         .unwrap()
         .as_ref()
         .map(|j| j.to_json())
-        .unwrap_or(serde_json::json!({ "running": false, "total": 0, "done": 0, "current": "", "failed": [] }));
+        .unwrap_or(serde_json::json!({ "running": false, "total": 0, "done": 0, "new": 0, "changed": 0, "skipped": 0, "current": "", "failed": [] }));
     Json(json).into_response()
 }
 
@@ -545,12 +666,56 @@ mod tests {
     }
 
     #[test]
-    fn local_filename_sanitizes_and_avoids_windows_reserved_names() {
-        let dir = Path::new("/tmp/synctest");
-        assert_eq!(local_filename("海贼王", "cbz", dir, 0), "海贼王.cbz");
-        assert_eq!(local_filename("CON", "cbz", dir, 0), "_CON.cbz");
-        assert_eq!(local_filename("NUL", "folder", dir, 0), "_NUL.cbz");
-        assert_eq!(local_filename("a/b:c*?", "rar", dir, 0), "a_b_c__.rar");
+    fn sync_filename_sanitizes_and_avoids_windows_reserved_names() {
+        assert_eq!(sync_filename("海贼王", "cbz", 0), "海贼王.cbz");
+        assert_eq!(sync_filename("CON", "cbz", 0), "_CON.cbz");
+        assert_eq!(sync_filename("NUL", "folder", 0), "_NUL.cbz");
+        assert_eq!(sync_filename("a/b:c*?", "rar", 0), "a_b_c__.rar");
+        // 同名出现多次：第 0 次用原名，之后加 _N 后缀避免互相覆盖
+        assert_eq!(sync_filename("海贼王", "cbz", 0), "海贼王.cbz");
+        assert_eq!(sync_filename("海贼王", "cbz", 1), "海贼王_2.cbz");
+        assert_eq!(sync_filename("海贼王", "cbz", 2), "海贼王_3.cbz");
+    }
+
+    /// 计划分类：新增 / 更新（同名不同大小）/ 已最新（同名同大小）。
+    #[test]
+    fn build_plan_classifies_new_changed_up_to_date() {
+        let dir = tempfile::tempdir().unwrap();
+        // 已存在两个档案文件：已同步.cbz(100)/变化.cbz(10)
+        std::fs::write(dir.path().join("已同步.cbz"), vec![0u8; 100]).unwrap();
+        std::fs::write(dir.path().join("变化.cbz"), vec![0u8; 10]).unwrap();
+
+        let db = crate::db::Database::new(dir.path().join("t.db").to_str().unwrap()).unwrap();
+        db.init().unwrap();
+
+        let entries = vec![
+            ManifestArchive {
+                id: 1,
+                title: "新增".into(),
+                archive_type: "cbz".into(),
+                page_count: 1,
+                file_size: 50,
+            },
+            ManifestArchive {
+                id: 2,
+                title: "已同步".into(),
+                archive_type: "cbz".into(),
+                page_count: 1,
+                file_size: 100,
+            },
+            ManifestArchive {
+                id: 3,
+                title: "变化".into(),
+                archive_type: "cbz".into(),
+                page_count: 1,
+                file_size: 200,
+            },
+        ];
+        let plan = build_plan(&db, &entries, dir.path());
+        assert_eq!(plan.len(), 3);
+        assert_eq!(plan[0].status, PlanStatus::New);
+        assert_eq!(plan[1].status, PlanStatus::UpToDate);
+        assert_eq!(plan[2].status, PlanStatus::Changed);
     }
 
     /// 同步任务端到端：远端有 1 个文件夹档案 + 标签 + 进度，
@@ -609,6 +774,13 @@ mod tests {
             "不应有失败项: {:?}",
             *job.failed.lock().unwrap()
         );
+        assert_eq!(
+            job.new_count.load(Ordering::SeqCst),
+            1,
+            "首次同步应为新增 1"
+        );
+        assert_eq!(job.changed_count.load(Ordering::SeqCst), 0);
+        assert_eq!(job.skipped.load(Ordering::SeqCst), 0);
 
         let files: Vec<_> = std::fs::read_dir(&sync_dir)
             .unwrap()
@@ -628,5 +800,118 @@ mod tests {
         let hist = local_db.get_history_for_archive(la.id).unwrap();
         assert!(hist.is_some(), "阅读进度应回填");
         assert_eq!(hist.unwrap().page_index, 1);
+    }
+
+    /// 覆盖更新：首次同步 → 重跑应全跳过（不产生 _2 副本）；远端内容变化
+    /// （页数变化）→ 重跑应覆盖同名文件并原地更新页数，仍是一条记录。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sync_job_resync_skips_then_overwrites_changed() {
+        // ── 远端（挂载后需要能再改盘 + 改库）──
+        let remote_dir = tempfile::tempdir().unwrap();
+        let remote_root = remote_dir.path().join("library");
+        std::fs::create_dir_all(remote_root.join("series1/ch01")).unwrap();
+        std::fs::write(remote_root.join("series1/ch01/page01.jpg"), b"img01").unwrap();
+        std::fs::write(remote_root.join("series1/ch01/page02.png"), b"img02").unwrap();
+        let remote_db = Arc::new(
+            crate::db::Database::new(remote_dir.path().join("r.db").to_str().unwrap()).unwrap(),
+        );
+        remote_db.init().unwrap();
+        let root_s = remote_root.to_string_lossy().into_owned();
+        let rid = remote_db
+            .upsert_scanned_archive(
+                "系列1",
+                &format!("{root_s}/series1/ch01"),
+                "folder",
+                2,
+                10,
+                111,
+            )
+            .unwrap();
+        let remote_port = spawn_remote(remote_db.clone(), remote_dir.path().to_path_buf()).await;
+
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_db = Arc::new(
+            crate::db::Database::new(local_dir.path().join("l.db").to_str().unwrap()).unwrap(),
+        );
+        local_db.init().unwrap();
+        let sync_dir = local_dir.path().join("synced");
+        std::fs::create_dir_all(&sync_dir).unwrap();
+        let url = format!("http://127.0.0.1:{remote_port}");
+
+        // 第一次同步：新增 1
+        let job1 = SyncJob::new();
+        run_sync_job(
+            local_db.clone(),
+            local_dir.path().to_path_buf(),
+            job1.clone(),
+            url.clone(),
+            String::new(),
+            sync_dir.to_string_lossy().into_owned(),
+        );
+        assert_eq!(job1.new_count.load(Ordering::SeqCst), 1);
+        assert!(
+            job1.failed.lock().unwrap().is_empty(),
+            "首次同步不应失败: {:?}",
+            *job1.failed.lock().unwrap()
+        );
+
+        // 直接重跑：全部已最新 → 跳过，文件数不变
+        let job2 = SyncJob::new();
+        run_sync_job(
+            local_db.clone(),
+            local_dir.path().to_path_buf(),
+            job2.clone(),
+            url.clone(),
+            String::new(),
+            sync_dir.to_string_lossy().into_owned(),
+        );
+        assert_eq!(job2.skipped.load(Ordering::SeqCst), 1, "重跑应全部跳过");
+        assert_eq!(
+            std::fs::read_dir(&sync_dir).unwrap().count(),
+            1,
+            "不应产生 _2 副本"
+        );
+
+        // 远端内容变化：磁盘加一页 + 库页数更新（模拟新增一话后重新扫描）
+        std::fs::write(remote_root.join("series1/ch01/page03.webp"), b"img03").unwrap();
+        remote_db
+            .upsert_scanned_archive(
+                "系列1",
+                &format!("{root_s}/series1/ch01"),
+                "folder",
+                3,
+                10,
+                222,
+            )
+            .unwrap();
+        let _ = rid;
+
+        // 第三次同步：判定 Changed → 覆盖同名文件，原地更新页数，仍只有一条记录
+        let job3 = SyncJob::new();
+        run_sync_job(
+            local_db.clone(),
+            local_dir.path().to_path_buf(),
+            job3.clone(),
+            url.clone(),
+            String::new(),
+            sync_dir.to_string_lossy().into_owned(),
+        );
+        assert_eq!(job3.changed_count.load(Ordering::SeqCst), 1, "应判定为更新");
+        assert!(
+            job3.failed.lock().unwrap().is_empty(),
+            "更新不应失败: {:?}",
+            *job3.failed.lock().unwrap()
+        );
+        let files: Vec<_> = std::fs::read_dir(&sync_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(files.len(), 1, "覆盖更新后仍只有一条文件");
+        let la = local_db
+            .get_archive_by_path(files[0].to_str().unwrap())
+            .unwrap()
+            .expect("档案应存在");
+        assert_eq!(la.page_count, 3, "页数应随覆盖更新刷新");
     }
 }

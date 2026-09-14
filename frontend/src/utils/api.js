@@ -284,6 +284,7 @@ const api = {
 
   // 跨机同步（详见“设置 → 同步”）
   syncStart: (payload) => request('/sync/start', { method: 'POST', body: JSON.stringify(payload) }),
+  syncPlan: (payload) => request('/sync/plan', { method: 'POST', body: JSON.stringify(payload) }),
   syncStatus: () => request('/sync/status', { cache: false }),
   syncCancel: () => request('/sync/cancel', { method: 'POST' }),
 

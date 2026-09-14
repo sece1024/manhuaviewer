@@ -1755,14 +1755,16 @@ impl Database {
     pub fn sync_manifest(&self) -> Result<serde_json::Value> {
         let conn = self.conn()?;
 
-        let mut stmt = conn.prepare("SELECT id, title, archive_type, file_size FROM archives")?;
+        let mut stmt =
+            conn.prepare("SELECT id, title, archive_type, page_count, file_size FROM archives")?;
         let archives: Vec<serde_json::Value> = stmt
             .query_map([], |row| {
                 Ok(serde_json::json!({
                     "id": row.get::<_, i64>(0)?,
                     "title": row.get::<_, String>(1)?,
                     "archive_type": row.get::<_, String>(2)?,
-                    "file_size": row.get::<_, i64>(3)?,
+                    "page_count": row.get::<_, i64>(3)?,
+                    "file_size": row.get::<_, i64>(4)?,
                 }))
             })?
             .filter_map(log_and_skip)

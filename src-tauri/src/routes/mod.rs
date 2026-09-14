@@ -338,8 +338,9 @@ pub fn create_router(state: AppState) -> Router {
         // Backup
         .route("/backup", get(settings::export_backup))
         .route("/restore", post(settings::import_backup))
-        // 跨机同步（清单/下载端点；start/status/cancel 见 sync.rs）
+        // 跨机同步（清单/下载端点；plan/start/status/cancel 见 sync.rs）
         .route("/sync/manifest", get(sync::sync_manifest))
+        .route("/sync/plan", post(sync::sync_plan))
         .route("/sync/start", post(sync::sync_start))
         .route("/sync/status", get(sync::sync_status))
         .route("/sync/cancel", post(sync::sync_cancel))

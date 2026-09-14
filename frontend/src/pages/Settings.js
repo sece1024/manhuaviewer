@@ -34,7 +34,9 @@ export default function Settings() {
   const [syncToken, setSyncToken] = useState(settings.sync_remote_token || '');
   const [syncDir, setSyncDir] = useState(settings.sync_dir || '');
   const [syncRunning, setSyncRunning] = useState(false);
-  const [syncInfo, setSyncInfo] = useState({ total: 0, done: 0, current: '', failed: [] });
+  const [syncInfo, setSyncInfo] = useState({ total: 0, done: 0, new: 0, changed: 0, skipped: 0, current: '', failed: [] });
+  const [syncPlanResult, setSyncPlanResult] = useState(null); // {new:[],changed:[],up_to_date:[],total}
+  const [planLoading, setPlanLoading] = useState(false);
   const syncPollRef = useRef(null);
 
   useEffect(() => {
@@ -61,6 +63,9 @@ export default function Settings() {
       setSyncInfo({
         total: s.total || 0,
         done: s.done || 0,
+        new: s.new || 0,
+        changed: s.changed || 0,
+        skipped: s.skipped || 0,
         current: s.current || '',
         failed: s.failed || [],
       });
@@ -71,6 +76,25 @@ export default function Settings() {
       }
     } catch (e) { /* 轮询失败忽略，下一轮再试 */ }
   }, []);
+
+  // 对比预览：只拉清单与本地比对，不下载
+  const handleSyncCompare = async () => {
+    if (planLoading || syncRunning) return;
+    if (!syncUrl.trim() || !syncDir.trim()) {
+      toast('请填写远端地址和本地同步目录', 'warning');
+      return;
+    }
+    setPlanLoading(true);
+    setSyncPlanResult(null);
+    try {
+      const plan = await api.syncPlan({ url: syncUrl.trim(), token: syncToken.trim(), dir: syncDir.trim() });
+      setSyncPlanResult(plan);
+    } catch (e) {
+      toast(e.message || '对比失败', 'error');
+    } finally {
+      setPlanLoading(false);
+    }
+  };
 
   const handleSyncStart = async () => {
     if (syncRunning) return;
@@ -86,7 +110,7 @@ export default function Settings() {
       ]);
       await api.syncStart({ url: syncUrl.trim(), token: syncToken.trim(), dir: syncDir.trim() });
       setSyncRunning(true);
-      setSyncInfo({ total: 0, done: 0, current: '连接远端...', failed: [] });
+      setSyncInfo({ total: 0, done: 0, new: 0, changed: 0, skipped: 0, current: '连接远端...', failed: [] });
       pollSyncStatus();
       syncPollRef.current = setInterval(pollSyncStatus, 1000);
     } catch (e) {
@@ -830,16 +854,67 @@ export default function Settings() {
             <button className="btn btn-sm" onClick={handleSyncStart} disabled={syncRunning}>
               开始同步
             </button>
+            <button className="btn btn-sm btn-secondary" onClick={handleSyncCompare} disabled={syncRunning || planLoading}>
+              {planLoading ? '对比中...' : '对比'}
+            </button>
             {syncRunning && (
               <button className="btn btn-sm btn-secondary" onClick={handleSyncCancel}>
                 取消
               </button>
             )}
           </div>
+
+          {/* 对比预览：只显示差异，不下载 */}
+          {syncPlanResult && !syncRunning && (
+            <div style={{ background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', padding: 12, fontSize: 13 }}>
+              <div style={{ marginBottom: 6 }}>
+                <strong>对比结果</strong>（共 {syncPlanResult.total} 本）：
+                新增 <strong style={{ color: 'var(--accent)' }}>{syncPlanResult.new.length}</strong>
+                {' · '}更新 <strong style={{ color: '#e5a93d' }}>{syncPlanResult.changed.length}</strong>
+                {' · '}已最新 <strong>{syncPlanResult.up_to_date.length}</strong>
+                {' '}<span style={{ color: 'var(--text-tertiary)' }}>（开始同步只会处理新增与更新）</span>
+              </div>
+              {(syncPlanResult.new.length > 0 || syncPlanResult.changed.length > 0) && (
+                <details>
+                  <summary style={{ cursor: 'pointer', color: 'var(--text-secondary)' }}>
+                    查看差异列表（新增 {syncPlanResult.new.length} · 更新 {syncPlanResult.changed.length}）
+                  </summary>
+                  <div style={{ display: 'flex', gap: 24, marginTop: 8 }}>
+                    {syncPlanResult.new.length > 0 && (
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>新增</div>
+                        <div style={{ maxHeight: 160, overflow: 'auto' }}>
+                          {syncPlanResult.new.map((t, i) => (
+                            <div key={`n${i}`} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {syncPlanResult.changed.length > 0 && (
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>更新</div>
+                        <div style={{ maxHeight: 160, overflow: 'auto' }}>
+                          {syncPlanResult.changed.map((t, i) => (
+                            <div key={`c${i}`} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </details>
+              )}
+              {(syncPlanResult.new.length + syncPlanResult.changed.length) === 0 && (
+                <div style={{ color: 'var(--text-secondary)' }}>没有需要同步的内容 🎉</div>
+              )}
+            </div>
+          )}
+
           {syncRunning && (
             <div style={{ background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', padding: 12 }}>
               <div style={{ fontSize: 13, marginBottom: 6 }}>
-                {syncInfo.total > 0 ? `已完成 ${syncInfo.done} / ${syncInfo.total}` : '准备中...'}
+                {syncInfo.total > 0
+                  ? `已完成 ${syncInfo.done} / ${syncInfo.total}（新增 ${syncInfo.new} · 更新 ${syncInfo.changed} · 跳过 ${syncInfo.skipped}）`
+                  : '准备中...'}
                 {syncInfo.current && (
                   <span style={{ color: 'var(--text-secondary)' }}> —— {syncInfo.current}</span>
                 )}
