@@ -83,14 +83,18 @@ pub(crate) fn peer_is_loopback(req: &Request) -> bool {
         .unwrap_or(true)
 }
 
-async fn configured_token(db: &Database) -> String {
-    db.get_setting("server_token").unwrap_or_default()
+/// 读取当前局域网口令。rusqlite 是同步 I/O，必须 offload 到阻塞线程，
+/// 否则每个局域网敏感请求都会在 Tokio worker 上阻塞式取池连接（池可能空转等待 busy_timeout）。
+async fn configured_token(db: Arc<Database>) -> String {
+    tokio::task::spawn_blocking(move || db.get_setting("server_token").unwrap_or_default())
+        .await
+        .unwrap_or_default()
 }
 
 /// 决策（只依赖 owned、Send 数据，可在 await 间安全持有）。
 /// 返回 true=放行；false=需要口令但缺失（调用方回 401）。
 async fn sensitive_allowed(
-    db: &Database,
+    db: Arc<Database>,
     method: &Method,
     api_path: &str,
     authz: Option<&str>,
@@ -132,7 +136,7 @@ pub async fn lan_guard_core(db: Arc<Database>, req: Request, next: Next) -> Resp
     let qtoken = extract_query_token(query.as_deref());
 
     let allowed = sensitive_allowed(
-        &db,
+        db,
         &method,
         &api_path,
         authz,

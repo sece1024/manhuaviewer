@@ -168,9 +168,14 @@ pub async fn archive_detail(State(state): State<Arc<AppState>>, Path(id): Path<i
             }
         };
 
-    let result = tokio::task::spawn_blocking(move || {
-        let reader = crate::services::archive::create_archive_reader(&archive_path, &archive_type)?;
-        reader.list_pages()
+    // 复用 /api/archives/:id/pages 的页表缓存（进程内 + pages 表），
+    // 避免每次请求都重开压缩包/重列目录（此前 unrar/7z 每请求起一次子进程）。
+    let result = tokio::task::spawn_blocking({
+        let db = state.db.clone();
+        move || {
+            let mtime = crate::routes::archives::archive_mtime_secs(&archive_path);
+            crate::routes::archives::load_page_rows(&db, id, &archive_path, &archive_type, mtime)
+        }
     })
     .await;
 
@@ -178,13 +183,13 @@ pub async fn archive_detail(State(state): State<Arc<AppState>>, Path(id): Path<i
         Ok(Ok(pages)) => {
             let mut entries = String::new();
 
-            for (i, page_name) in pages.iter().enumerate() {
-                let filename = std::path::Path::new(page_name)
+            for (i, page) in pages.iter().enumerate() {
+                let filename = std::path::Path::new(&page.filepath)
                     .file_name()
                     .unwrap_or_default()
                     .to_string_lossy();
                 // 按真实扩展名给出 image type（此前硬编码 image/jpeg，PNG/WebP/AVIF 均错标）
-                let image_type = mime_guess::from_path(page_name)
+                let image_type = mime_guess::from_path(&page.filepath)
                     .first()
                     .map(|m| m.to_string())
                     .unwrap_or_else(|| "application/octet-stream".to_string());
