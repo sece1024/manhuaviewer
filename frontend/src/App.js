@@ -25,6 +25,9 @@ function AppContent() {
 
   useEffect(() => { setSidebarOpen(false); }, [location.pathname]);
 
+  // 阅读器全屏沉浸：底部导航在 reader 路由下隐藏（工具栏自带"← 返回书库"）
+  const isReader = location.pathname.startsWith('/reader/');
+
   useEffect(() => {
     const mainEl = document.querySelector('.main-content');
     if (mainEl) mainEl.scrollTop = 0;
@@ -82,6 +85,28 @@ function AppContent() {
           </Routes>
         </Suspense>
       </main>
+
+      {/* 移动端底部导航：仅 ≤768px 显示（CSS），reader 路由下隐藏保持沉浸 */}
+      {!isReader && (
+        <nav className="mobile-bottom-bar" aria-label="主导航">
+          <NavLink to="/" end>
+            <span className="nav-icon">📚</span>
+            <span>书库</span>
+          </NavLink>
+          <NavLink to="/collection">
+            <span className="nav-icon">📦</span>
+            <span>文件夹</span>
+          </NavLink>
+          <NavLink to="/history">
+            <span className="nav-icon">📖</span>
+            <span>历史</span>
+          </NavLink>
+          <NavLink to="/settings">
+            <span className="nav-icon">⚙️</span>
+            <span>设置</span>
+          </NavLink>
+        </nav>
+      )}
     </div>
   );
 }
