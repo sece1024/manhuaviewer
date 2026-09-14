@@ -1,6 +1,6 @@
 use crate::AppState;
 use axum::{
-    extract::State,
+    extract::{Request, State},
     response::{IntoResponse, Response},
     Json,
 };
@@ -68,10 +68,9 @@ pub async fn get_stats(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-/// 本机局域网可达的 IPv4 地址 + 服务端口，供设置页/侧边栏展示"手机/平板访问地址"。
-/// 枚举全部非回环、非链路本地的 IPv4（含多网卡/VPN），私有网段优先排序。
-pub async fn lan_ip() -> Response {
-    let ips: Vec<String> = if_addrs::get_if_addrs()
+/// 枚举本机非回环、非链路本地的 IPv4（含多网卡/VPN），私有网段（RFC1918）优先排序。
+fn enumerate_lan_ipv4() -> Vec<String> {
+    if_addrs::get_if_addrs()
         .map(|ifaces| {
             let mut seen = std::collections::BTreeSet::new();
             for i in &ifaces {
@@ -82,7 +81,6 @@ pub async fn lan_ip() -> Response {
                 }
             }
             let mut v: Vec<String> = seen.iter().map(|ip| ip.to_string()).collect();
-            // 私有网段（RFC1918）优先：它们才是局域网可达的常规地址
             v.sort_by_key(|ip| {
                 let first = ip
                     .split('.')
@@ -98,14 +96,41 @@ pub async fn lan_ip() -> Response {
             });
             v
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// 本机局域网可达的 IPv4 地址 + 服务端口，供设置页/侧边栏展示"手机/平板访问地址"。
+/// 只对回环客户端（本机桌面端或本机浏览器）返回网卡地址：手机/平板等局域网设备
+/// 打开页面时拿不到宿主 IP——它们本就是通过该地址连进来的，无需展示，也避免向局域网广播主机网络布局。
+pub async fn lan_ip(req: Request) -> Response {
+    let is_loopback = crate::routes::auth::peer_is_loopback(&req);
+    let ips = if is_loopback {
+        enumerate_lan_ipv4()
+    } else {
+        Vec::new()
+    };
 
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(5002);
 
-    Json(serde_json::json!({ "ipv4": ips, "port": port })).into_response()
+    Json(serde_json::json!({ "ipv4": ips, "port": port, "loopback": is_loopback })).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 枚举到的地址必须是合法 IPv4 且不含回环/链路本地。
+    #[test]
+    fn enumerate_lan_ipv4_filters_loopback_and_link_local() {
+        for ip in enumerate_lan_ipv4() {
+            let parsed: std::net::Ipv4Addr = ip.parse().expect("应为合法 IPv4");
+            assert!(!parsed.is_loopback(), "{ip} 不应是回环");
+            assert!(!parsed.is_link_local(), "{ip} 不应是链路本地");
+        }
+    }
 }
 
 pub async fn export_backup(State(state): State<Arc<AppState>>) -> Response {
