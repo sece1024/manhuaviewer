@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useContext, createContext, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useContext, createContext, useRef, useMemo } from 'react';
 import api from '../utils/api';
 
 const TagsContext = createContext(null);
@@ -29,8 +29,12 @@ export function TagsProvider({ children }) {
     }
   }, [reload]);
 
+  // memo 保证 context value 稳定：与 useSettings 一致，避免 Provider 因无关
+  // 重渲染而连带重渲染所有消费方（Library/Settings/Reader）。
+  const value = useMemo(() => ({ tags, loaded, reload }), [tags, loaded, reload]);
+
   return (
-    <TagsContext.Provider value={{ tags, loaded, reload }}>
+    <TagsContext.Provider value={value}>
       {children}
     </TagsContext.Provider>
   );

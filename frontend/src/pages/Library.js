@@ -773,6 +773,12 @@ export default function Library({ mode = 'library' }) {
   // 标签多时才显示搜索框（>10 才有意义）
   const showTagSearch = tags.length > 10;
 
+  // 分类排序（置顶优先）：排序在渲染体里裸跑会随每次搜索/选择/密度切换重排数组
+  const sortedCategories = useMemo(
+    () => [...categories].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)),
+    [categories]
+  );
+
   // Welcome screen — 仅漫画库模式下，无漫画时显示
   if (!isCollection && archives.length === 0) {
     return (
@@ -810,7 +816,7 @@ export default function Library({ mode = 'library' }) {
           {categories.length > 0 && (
             <div className="filter-section">
               <div className="filter-section-title">分类</div>
-              {[...categories].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)).map(c => (
+              {sortedCategories.map(c => (
                 <div
                   key={c.id}
                   className={`filter-tag ${selectedCategory === c.id ? 'active' : ''}`}
