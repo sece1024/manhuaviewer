@@ -10,6 +10,7 @@ export default function Settings() {
   const { settings, updateSetting } = useSettings();
   const { tags, reload: reloadTags } = useTags();
   const [stats, setStats] = useState(null);
+  const [lanInfo, setLanInfo] = useState(null);
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#6366f1');
   const [categories, setCategories] = useState([]);
@@ -44,6 +45,15 @@ export default function Settings() {
 
   // 卸载时停止轮询
   useEffect(() => () => { if (syncPollRef.current) clearInterval(syncPollRef.current); }, []);
+
+  // 本机局域网 IPv4：展示"手机/平板访问地址"
+  useEffect(() => {
+    let cancelled = false;
+    api.getLanIps()
+      .then(info => { if (!cancelled) setLanInfo(info); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const pollSyncStatus = useCallback(async () => {
     try {
@@ -532,6 +542,31 @@ export default function Settings() {
             <option value="127.0.0.1">仅本机</option>
             <option value="0.0.0.0">局域网（重启生效）</option>
           </select>
+        </div>
+        <div className="settings-row">
+          <div>
+            <div className="settings-row-label">访问地址</div>
+            <div className="settings-row-desc">
+              手机/平板浏览器打开以下地址（需切到「局域网」并重启应用后生效；本机地址为 http://127.0.0.1:{lanInfo?.port || 5002}/）
+            </div>
+            {lanInfo && lanInfo.ipv4.length > 0 ? (
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {lanInfo.ipv4.map(ip => (
+                  <a
+                    key={ip}
+                    href={`http://${ip}:${lanInfo.port}/`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ fontFamily: 'monospace', fontSize: 13, color: 'var(--accent)', wordBreak: 'break-all' }}
+                  >
+                    http://{ip}:{lanInfo.port}/
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <div style={{ marginTop: 6, fontSize: 13, opacity: 0.8 }}>未检测到局域网地址（可能未连接网络）</div>
+            )}
+          </div>
         </div>
         <div className="settings-row">
           <div>

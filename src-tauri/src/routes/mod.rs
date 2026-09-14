@@ -332,6 +332,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/config", get(settings::get_config))
         .route("/config", put(settings::update_config))
         .route("/stats", get(settings::get_stats))
+        .route("/lan-ip", get(settings::lan_ip))
         .route("/metadata/search", get(metadata::search))
         .route("/update/check", get(update::update_check))
         // Backup

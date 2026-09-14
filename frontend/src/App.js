@@ -3,8 +3,10 @@ import { BrowserRouter as Router, Routes, Route, NavLink, useLocation } from 're
 import Library from './pages/Library';
 import { ToastProvider } from './components/Toast';
 import { SettingsProvider } from './hooks/useSettings';
+import useSettings from './hooks/useSettings';
 import { TagsProvider } from './hooks/useTags';
 import ErrorBoundary from './components/ErrorBoundary';
+import api from './utils/api';
 
 // 非首屏页面按需加载，减小首屏 bundle
 const Reader = lazy(() => import('./pages/Reader'));
@@ -22,6 +24,22 @@ function AppContent() {
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
+  const { settings } = useSettings();
+  const [lanUrls, setLanUrls] = useState([]);
+
+  // 局域网模式（server_bind=0.0.0.0）开启后，在侧边栏常驻显示本机可访问地址
+  useEffect(() => {
+    let cancelled = false;
+    api.getLanIps()
+      .then(info => {
+        if (cancelled) return;
+        setLanUrls((info?.ipv4 || []).map(ip => `http://${ip}:${info.port}/`));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const lanActive = settings.server_bind === '0.0.0.0';
 
   useEffect(() => { setSidebarOpen(false); }, [location.pathname]);
 
@@ -71,6 +89,20 @@ function AppContent() {
             <option value="dark">🌙 深色</option>
             <option value="eye-care">🌿 护眼</option>
           </select>
+          {lanActive && lanUrls.length > 0 && (
+            <a
+              href={lanUrls[0]}
+              target="_blank"
+              rel="noreferrer"
+              title="局域网访问地址（手机/平板浏览器打开）"
+              style={{
+                display: 'block', marginTop: 8, fontSize: 11, fontFamily: 'monospace',
+                color: 'var(--accent)', wordBreak: 'break-all', textDecoration: 'none',
+              }}
+            >
+              🌐 {lanUrls[0]}
+            </a>
+          )}
         </div>
       </aside>
 

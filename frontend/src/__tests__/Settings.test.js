@@ -34,6 +34,7 @@ describe('Settings 页面', () => {
     api.getCategories.mockResolvedValue([
       { id: 1, name: '动作', color: '#00ff00', pinned: 0, archive_count: 5 },
     ]);
+    api.getLanIps.mockResolvedValue({ ipv4: [], port: 5002 });
   });
 
   test('加载并显示统计数据', async () => {
