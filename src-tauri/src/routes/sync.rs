@@ -253,6 +253,7 @@ fn download_archive(
     id: i64,
     local_path: &Path,
     fallback_mtime: i64,
+    cancel: &AtomicBool,
 ) -> anyhow::Result<()> {
     let req = authorized(
         ureq::post(&format!("{}/api/archives/{}/file", base_url(url), id)),
@@ -270,11 +271,24 @@ fn download_archive(
         .or_else(|| (fallback_mtime > 0).then_some(fallback_mtime));
     let mut reader = resp.into_reader();
 
-    // 原子写：先写 .part 再 rename，避免半截文件被当成“已同步”
+    // 原子写：先写 .part 再 rename，避免半截文件被当成“已同步”。
+    // 分块拷贝，每块后检查取消——取消立即中断并删除 .part，不留残留。
     let part = local_path.with_extension("part");
-    {
+    let write_result: anyhow::Result<()> = (|| {
         let mut out = std::fs::File::create(&part)?;
-        std::io::copy(&mut reader, &mut out)?;
+        let mut buf = vec![0u8; 256 * 1024];
+        loop {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(anyhow::Error::new(SyncCancelled));
+            }
+            let n = reader
+                .read(&mut buf)
+                .map_err(|e| anyhow::anyhow!("读取下载流失败: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            out.write_all(&buf[..n])?;
+        }
         out.flush()?;
         // 落地前恢复源 mtime，让本机文件时间与主机一致（register_local 读到的 file_mtime 亦然）
         if let Some(secs) = source_mtime.filter(|s| *s > 0) {
@@ -284,9 +298,33 @@ fn download_archive(
                     std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64),
                 ));
         }
-    }
+        Ok(())
+    })();
+    write_result?;
     std::fs::rename(&part, local_path)?;
     Ok(())
+}
+
+/// 取消信号：任务被用户取消时返回的错误，不计入失败列表。
+#[derive(Debug)]
+struct SyncCancelled;
+impl std::fmt::Display for SyncCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "同步已取消")
+    }
+}
+impl std::error::Error for SyncCancelled {}
+
+/// 清理同步目录里的 .part 残留（上次中断留下的半截文件）。
+fn cleanup_part_files(dir: &Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() && p.extension().and_then(|x| x.to_str()) == Some("part") {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
 }
 
 // ── 本地入库与元数据回填 ──
@@ -378,6 +416,8 @@ fn run_sync_job(
     let result = (|| -> anyhow::Result<()> {
         cleanup_sync_tmp(&data_dir);
         std::fs::create_dir_all(&sync_dir)?;
+        // 清掉上次中断残留的 .part 半截文件
+        cleanup_part_files(&sync_dir);
 
         let manifest = fetch_manifest(&url, &token)?;
         let entries: Vec<ManifestArchive> = serde_json::from_value(
@@ -495,6 +535,7 @@ fn run_sync_job(
                     item.archive.id,
                     &local_path,
                     item.archive.file_mtime,
+                    &job.cancel,
                 )?;
                 register_local(&db, &item.archive, &local_path)
             })();
@@ -510,6 +551,12 @@ fn run_sync_job(
                     );
                 }
                 Err(e) => {
+                    // 用户取消：中断当前条目（.part 已删除），静默结束，不计入失败
+                    if e.downcast_ref::<SyncCancelled>().is_some() {
+                        *job.current.lock().unwrap() =
+                            "已取消，下次同步将只补未完成部分".to_string();
+                        break;
+                    }
                     job.failed
                         .lock()
                         .unwrap()
@@ -528,6 +575,8 @@ fn run_sync_job(
             .unwrap()
             .push_str(&format!(" —— 同步失败: {e}"));
     }
+    // 兜底清理：无论正常结束还是取消，都不留 .part 残留
+    cleanup_part_files(&sync_dir);
     job.running.store(false, Ordering::SeqCst);
     job.cancel.store(false, Ordering::SeqCst);
 }
@@ -1026,5 +1075,88 @@ mod tests {
             )
             .unwrap();
         assert_eq!(fm, t_secs, "库里 file_mtime 应为源 mtime");
+    }
+
+    /// 取消：下载中被取消 → 立即中断当前条目，无 .part 残留、不算失败、不计数。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sync_job_cancel_stops_download_cleanly() {
+        use axum::extract::Path as AxumPath;
+        use axum::http::StatusCode as HttpStatus;
+        use axum::routing::{get, post};
+
+        // 慢速 /file：睡 400ms 再返回，保证下载请求已发出但数据未到齐时取消能落在“下载中”
+        async fn slow_file(_: AxumPath<i64>) -> axum::response::Response {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            let body = vec![0u8; 8 * 1024 * 1024];
+            (
+                HttpStatus::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                body,
+            )
+                .into_response()
+        }
+
+        let remote_dir = tempfile::tempdir().unwrap();
+        let remote_db = Arc::new(
+            crate::db::Database::new(remote_dir.path().join("r.db").to_str().unwrap()).unwrap(),
+        );
+        remote_db.init().unwrap();
+        remote_db
+            .upsert_scanned_archive("慢速", "/fake/slow.zip", "zip", 100, 8 * 1024 * 1024, 1)
+            .unwrap();
+        let state = crate::AppState {
+            db: remote_db.clone(),
+            data_dir: remote_dir.path().to_path_buf(),
+            last_thumb_eviction: Arc::new(std::sync::Mutex::new(None)),
+        };
+        let app = axum::Router::new()
+            .route(
+                "/api/sync/manifest",
+                get(crate::routes::sync::sync_manifest),
+            )
+            .route("/api/archives/:id/file", post(slow_file))
+            .with_state(Arc::new(state));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let remote_port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_db = Arc::new(
+            crate::db::Database::new(local_dir.path().join("l.db").to_str().unwrap()).unwrap(),
+        );
+        local_db.init().unwrap();
+        let sync_dir = local_dir.path().join("synced");
+        std::fs::create_dir_all(&sync_dir).unwrap();
+        let job = SyncJob::new();
+
+        // 120ms 后置取消：manifest/计划早已完成，下载正卡在慢 handler 的 sleep 上
+        let cancel_job = job.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            cancel_job.cancel.store(true, Ordering::SeqCst);
+        });
+        run_sync_job(
+            local_db.clone(),
+            local_dir.path().to_path_buf(),
+            job.clone(),
+            format!("http://127.0.0.1:{remote_port}"),
+            String::new(),
+            sync_dir.to_string_lossy().into_owned(),
+        );
+
+        assert!(!job.running.load(Ordering::SeqCst), "任务应已结束");
+        assert!(
+            job.failed.lock().unwrap().is_empty(),
+            "取消不应计入失败: {:?}",
+            *job.failed.lock().unwrap()
+        );
+        assert_eq!(job.done.load(Ordering::SeqCst), 0, "被取消的条目不应计数");
+        assert_eq!(
+            std::fs::read_dir(&sync_dir).unwrap().count(),
+            0,
+            "不应残留 .part 或半截文件"
+        );
     }
 }
