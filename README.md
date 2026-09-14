@@ -6,7 +6,7 @@
 
 - 📚 **漫画库** — 封面卡片网格 / 列表视图切换，按标签、分类、名称筛选
 - 📖 **阅读器** — 单页/双页/长图模式，RTL/LTR 翻页方向，适应高度/宽度/原始大小
-- 📦 **压缩包支持** — ZIP/CBZ/RAR/CBR 直接浏览，无需解压
+- 📦 **压缩包支持** — ZIP/CBZ/RAR/CBR/7Z 直接浏览，无需解压
 - 📦 **CBZ 归档** — 将漫画文件夹打包为 CBZ 格式
 - 🏷️ **命名空间标签** — 支持 `artist:name`、`series:name` 格式
 - 📂 **分类系统** — 动态/静态分类，支持置顶
@@ -17,6 +17,7 @@
 - 📱 **移动端适配** — 响应式布局，触摸手势（缩放/双击/滑动翻页）
 - ⌨️ **快捷键** — 完整键盘操作；支持游戏手柄/USB 翻页器与鼠标侧键翻页
 - 🏠 **局域网模式** — 设置内开启后手机/平板浏览器与 OPDS 阅读器均可访问
+- 🔄 **跨机同步** — 从局域网内另一台 MangaViewer 整库拉取档案（含标签/分类/进度），支持断点续传与任务取消
 - 🔄 **增量扫描** — 扫描根目录：跳过未变化档案、清理已删除档案（支持定时自动备份）
 - 🖥️ **跨平台应用** — macOS, Windows, Linux（基于 Tauri 2.0）
 
@@ -76,7 +77,7 @@ src-tauri/                          # Tauri + Rust 后端
     │   ├── mod.rs                  # Database 结构体 + 全部 SQL 查询
     │   ├── schema.rs               # 幂等建表 SQL
     │   └── migrations.rs           # 旧版数据表迁移 + 列补充
-    ├── routes/                     # Axum 路由（archives/tags/categories/history/settings/opds）
+    ├── routes/                     # Axum 路由（archives/tags/categories/history/settings/sync/opds）
     └── services/                   # 业务逻辑（archive/scanner/thumbnail/cbz）
 
 frontend/
@@ -113,6 +114,8 @@ frontend/
 | `/api/metadata/search` | GET | Bangumi 元数据搜索（?q=） |
 | `/api/update/check` | GET | 检查 GitHub Releases 更新 |
 | `/api/archives/batch-delete` | POST | 批量删除档案 |
+| `/api/archives/regenerate-titles` | POST | 按文件名重新生成标题 |
+| `/api/archives/:id/file` | POST | 下载档案原文件（跨机同步用） |
 | `/api/archives/pack-cbz` | POST | 将文件夹打包为 CBZ |
 | `/api/open` | POST | 直接打开文件/文件夹路径 |
 | `/api/scan` | POST | 扫描目录 |
@@ -141,6 +144,10 @@ frontend/
 | `/api/stats` | GET | 数据库统计 |
 | `/api/backup` | GET | 导出备份 |
 | `/api/restore` | POST | 导入备份 |
+| `/api/sync/manifest` | GET | 跨机同步：远端清单（标题/类型/大小 + 标签/分类/进度） |
+| `/api/sync/start` | POST | 跨机同步：启动同步任务（url + token + dir） |
+| `/api/sync/status` | GET | 跨机同步：任务进度 |
+| `/api/sync/cancel` | POST | 跨机同步：取消任务 |
 | `/opds/` | GET | OPDS 根目录 |
 | `/opds/catalog` | GET | OPDS 全部档案 |
 | `/opds/archive/:id` | GET | OPDS 档案详情 |
@@ -148,6 +155,7 @@ frontend/
 | `/opds/tags` | GET | OPDS 标签目录 |
 | `/opds/tag/:tag_id` | GET | OPDS 标签下的档案 |
 | `/opds/categories` | GET | OPDS 分类目录 |
+| `/opds/category/:id` | GET | OPDS 分类下的档案 |
 
 ## 📄 License
 

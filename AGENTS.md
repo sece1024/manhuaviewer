@@ -22,7 +22,7 @@ pnpm format:check              # cargo fmt --manifest-path src-tauri/Cargo.toml 
 pnpm format                    # cargo fmt (auto-fix)
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every push/PR to `main`. **CI does NOT run frontend tests** — only `pnpm --filter manhuaviewer-frontend build` (compile + ESLint). Frontend tests must be verified locally. Rust CI runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`. Run these locally before pushing.
+CI (`.github/workflows/ci.yml`) runs on every push/PR to `main`. It runs `pnpm --filter manhuaviewer-frontend build` (compile + ESLint) **and frontend tests** (`cd frontend && pnpm test`). Rust CI runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`. Run these locally before pushing.
 
 ## Architecture
 

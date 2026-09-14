@@ -63,7 +63,7 @@ chore: 移除 Electron 相关代码
 
 | Job | 内容 |
 |-----|------|
-| **frontend** | `pnpm build`（编译 + ESLint） |
+| **frontend** | `pnpm --filter manhuaviewer-frontend build`（编译 + ESLint）+ `cd frontend && pnpm test`（前端测试） |
 | **rust** | `cargo fmt --check` + `cargo clippy -D warnings` + `cargo test` |
 
 请在提交前确保本地通过这些检查。
@@ -116,8 +116,8 @@ pnpm tauri build
 
 # 2. 提交并打标签
 git add -A
-git commit -m "chore: release v3.1.0"
-git tag v3.1.0
+git commit -m "chore: release v3.4.4"
+git tag v3.4.4
 git push origin main --tags
 ```
 
@@ -141,7 +141,7 @@ git push origin main --tags
 
 - 发布前务必同步三处版本号（`tauri.conf.json`、`Cargo.toml`、`package.json`）
 - Release 默认为草稿状态，需要手动确认发布
-- 构建使用 [tauri-apps/tauri-action@v0](https://github.com/nicegui-org/tauri-action)，配置详见 `release.yml`
+- 构建使用 [tauri-apps/tauri-action@v0](https://github.com/tauri-apps/tauri-action)，配置详见 `release.yml`
 - macOS 构建暂不包含代码签名，用户首次打开需在"系统设置 > 隐私与安全性"中允许
 
 ## 日志与启动问题排查
