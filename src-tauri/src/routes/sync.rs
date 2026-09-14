@@ -78,6 +78,8 @@ struct ManifestArchive {
     archive_type: String,
     page_count: i64,
     file_size: i64,
+    /// 远端档案 mtime（秒），配合 /file 的 X-Source-Mtime 头把原始时间带回本机
+    file_mtime: i64,
 }
 
 fn extension_for(archive_type: &str) -> &'static str {
@@ -245,7 +247,13 @@ fn fetch_manifest(url: &str, token: &str) -> anyhow::Result<serde_json::Value> {
     Ok(serde_json::from_str(&body)?)
 }
 
-fn download_archive(url: &str, token: &str, id: i64, local_path: &Path) -> anyhow::Result<()> {
+fn download_archive(
+    url: &str,
+    token: &str,
+    id: i64,
+    local_path: &Path,
+    fallback_mtime: i64,
+) -> anyhow::Result<()> {
     let req = authorized(
         ureq::post(&format!("{}/api/archives/{}/file", base_url(url), id)),
         token,
@@ -254,13 +262,29 @@ fn download_archive(url: &str, token: &str, id: i64, local_path: &Path) -> anyho
     let resp = req
         .call()
         .map_err(|e| anyhow::anyhow!("下载档案 {id} 失败: {e}"))?;
+    // 远端原始 mtime（秒）：优先用响应头；旧版远端没有该头时回退到清单里的 file_mtime
+    let source_mtime = resp
+        .header("X-Source-Mtime")
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|s| *s > 0)
+        .or_else(|| (fallback_mtime > 0).then_some(fallback_mtime));
     let mut reader = resp.into_reader();
 
     // 原子写：先写 .part 再 rename，避免半截文件被当成“已同步”
     let part = local_path.with_extension("part");
-    let mut out = std::fs::File::create(&part)?;
-    std::io::copy(&mut reader, &mut out)?;
-    out.flush()?;
+    {
+        let mut out = std::fs::File::create(&part)?;
+        std::io::copy(&mut reader, &mut out)?;
+        out.flush()?;
+        // 落地前恢复源 mtime，让本机文件时间与主机一致（register_local 读到的 file_mtime 亦然）
+        if let Some(secs) = source_mtime.filter(|s| *s > 0) {
+            use std::fs::FileTimes;
+            let _ =
+                out.set_times(FileTimes::new().set_modified(
+                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64),
+                ));
+        }
+    }
     std::fs::rename(&part, local_path)?;
     Ok(())
 }
@@ -465,7 +489,13 @@ fn run_sync_job(
 
             // New/Changed 都真实下载（Changed 覆盖同名文件 = 覆盖更新）
             let outcome: anyhow::Result<i64> = (|| {
-                download_archive(&url, &token, item.archive.id, &local_path)?;
+                download_archive(
+                    &url,
+                    &token,
+                    item.archive.id,
+                    &local_path,
+                    item.archive.file_mtime,
+                )?;
                 register_local(&db, &item.archive, &local_path)
             })();
             match outcome {
@@ -695,6 +725,7 @@ mod tests {
                 archive_type: "cbz".into(),
                 page_count: 1,
                 file_size: 50,
+                file_mtime: 0,
             },
             ManifestArchive {
                 id: 2,
@@ -702,6 +733,7 @@ mod tests {
                 archive_type: "cbz".into(),
                 page_count: 1,
                 file_size: 100,
+                file_mtime: 0,
             },
             ManifestArchive {
                 id: 3,
@@ -709,6 +741,7 @@ mod tests {
                 archive_type: "cbz".into(),
                 page_count: 1,
                 file_size: 200,
+                file_mtime: 0,
             },
         ];
         let plan = build_plan(&db, &entries, dir.path());
@@ -913,5 +946,85 @@ mod tests {
             .unwrap()
             .expect("档案应存在");
         assert_eq!(la.page_count, 3, "页数应随覆盖更新刷新");
+    }
+
+    /// 时间信息保留：远端压缩包 mtime=T → 同步后本机文件 mtime 与库里 file_mtime 都等于 T。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sync_job_preserves_source_mtime() {
+        let remote_dir = tempfile::tempdir().unwrap();
+        let zip_path = remote_dir.path().join("sample.zip");
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            zw.start_file("p1.jpg", opts).unwrap();
+            std::io::Write::write_all(&mut zw, b"img1").unwrap();
+            zw.start_file("p2.png", opts).unwrap();
+            std::io::Write::write_all(&mut zw, b"img2").unwrap();
+            zw.finish().unwrap();
+        }
+        let t_secs: i64 = 1_700_000_000;
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(t_secs as u64);
+        {
+            let f = std::fs::File::open(&zip_path).unwrap();
+            f.set_times(std::fs::FileTimes::new().set_modified(t))
+                .unwrap();
+        }
+
+        let remote_db = Arc::new(
+            crate::db::Database::new(remote_dir.path().join("r.db").to_str().unwrap()).unwrap(),
+        );
+        remote_db.init().unwrap();
+        let zs = zip_path.to_string_lossy().into_owned();
+        remote_db
+            .upsert_scanned_archive("样本", &zs, "zip", 2, 8, t_secs)
+            .unwrap();
+        let remote_port = spawn_remote(remote_db.clone(), remote_dir.path().to_path_buf()).await;
+
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_db = Arc::new(
+            crate::db::Database::new(local_dir.path().join("l.db").to_str().unwrap()).unwrap(),
+        );
+        local_db.init().unwrap();
+        let sync_dir = local_dir.path().join("synced");
+        std::fs::create_dir_all(&sync_dir).unwrap();
+        let job = SyncJob::new();
+        run_sync_job(
+            local_db.clone(),
+            local_dir.path().to_path_buf(),
+            job.clone(),
+            format!("http://127.0.0.1:{remote_port}"),
+            String::new(),
+            sync_dir.to_string_lossy().into_owned(),
+        );
+
+        assert!(
+            job.failed.lock().unwrap().is_empty(),
+            "同步不应失败: {:?}",
+            *job.failed.lock().unwrap()
+        );
+        let files: Vec<_> = std::fs::read_dir(&sync_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(files.len(), 1);
+        let got = std::fs::metadata(&files[0])
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert_eq!(got, t_secs, "本机文件 mtime 应等于源 mtime");
+        let conn = local_db.conn_for_test().unwrap();
+        let fm: i64 = conn
+            .query_row(
+                "SELECT file_mtime FROM archives WHERE path = ?1",
+                [files[0].to_str().unwrap()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fm, t_secs, "库里 file_mtime 应为源 mtime");
     }
 }

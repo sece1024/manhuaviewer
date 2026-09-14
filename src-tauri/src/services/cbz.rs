@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use chrono::{Datelike, Timelike};
 use std::io::Write;
 use std::path::Path;
 
@@ -61,7 +62,7 @@ pub fn pack_folder_to_tempfile(folder_path: &str) -> Result<tempfile::NamedTempF
         .tempfile()?;
     {
         let mut zip = zip::ZipWriter::new(&mut file);
-        let options = zip::write::SimpleFileOptions::default()
+        let base_options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
 
         for image_path in &images {
@@ -71,6 +72,25 @@ pub fn pack_folder_to_tempfile(folder_path: &str) -> Result<tempfile::NamedTempF
                 .to_string_lossy()
                 .to_string();
             let data = std::fs::read(image_path)?;
+            // 把源图片的 mtime 写进 zip 条目，同步后时间信息得以保留
+            // （zip 2.x 的 DateTime 只支持 1980..=2107，出界/失败则用默认时间）
+            let options = std::fs::metadata(image_path)
+                .and_then(|m| m.modified())
+                .ok()
+                .map(chrono::DateTime::<chrono::Utc>::from)
+                .and_then(|dt| {
+                    zip::DateTime::from_date_and_time(
+                        dt.year().max(1980) as u16,
+                        dt.month() as u8,
+                        dt.day() as u8,
+                        dt.hour() as u8,
+                        dt.minute() as u8,
+                        dt.second() as u8,
+                    )
+                    .ok()
+                })
+                .map(|dt| base_options.last_modified_time(dt))
+                .unwrap_or(base_options);
             zip.start_file(&file_name, options)?;
             zip.write_all(&data)?;
         }
@@ -190,6 +210,33 @@ mod tests {
         let file = std::fs::File::open(&cbz).unwrap();
         let archive = zip::ZipArchive::new(file).unwrap();
         assert_eq!(archive.len(), 2); // 只有 2 张图片，txt 被过滤
+    }
+
+    /// 打包必须把源图片的 mtime 写进 zip 条目（同步时间信息保留的根基）。
+    #[test]
+    fn test_pack_tempfile_preserves_entry_mtime() {
+        let dir = TempDir::new().unwrap();
+        let img = dir.path().join("page01.jpg");
+        std::fs::write(&img, b"fake-jpg-data").unwrap();
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        {
+            let f = std::fs::File::open(&img).unwrap();
+            f.set_times(std::fs::FileTimes::new().set_modified(t))
+                .unwrap();
+        }
+
+        let tmp = pack_folder_to_tempfile(dir.path().to_str().unwrap()).unwrap();
+        let mut archive = zip::ZipArchive::new(tmp.reopen().unwrap()).unwrap();
+        assert_eq!(archive.len(), 1);
+        let zf = archive.by_index(0).unwrap();
+        let dt = zf.last_modified().expect("条目应带时间");
+        let expect = chrono::DateTime::<chrono::Utc>::from(t);
+        assert_eq!(dt.year(), expect.year().max(1980) as u16);
+        assert_eq!(dt.month(), expect.month() as u8);
+        assert_eq!(dt.day(), expect.day() as u8);
+        assert_eq!(dt.hour(), expect.hour() as u8);
+        assert_eq!(dt.minute(), expect.minute() as u8);
+        assert_eq!(dt.second(), expect.second() as u8);
     }
 
     #[test]

@@ -1166,7 +1166,8 @@ pub async fn download_archive_file(
         };
 
     if is_compressed(&archive_type) {
-        // 压缩包：直接流式回传原文件（不解包、不重打包）
+        // 压缩包：直接流式回传原文件（不解包、不重打包），源文件 mtime 随响应头带回
+        let source_mtime = archive_mtime_secs(&archive_path);
         match tokio::fs::File::open(&archive_path).await {
             Ok(file) => {
                 let base = std::path::Path::new(&archive_path)
@@ -1180,6 +1181,7 @@ pub async fn download_archive_file(
                         ("Content-Type", "application/octet-stream".to_string()),
                         ("Content-Disposition", safe_content_disposition(&base)),
                         ("Cache-Control", "no-store".to_string()),
+                        ("X-Source-Mtime", source_mtime.to_string()),
                     ],
                     axum::body::Body::from_stream(stream),
                 )
@@ -1189,6 +1191,8 @@ pub async fn download_archive_file(
     } else {
         // 文件夹：阻塞打包到临时 CBZ，再流式回传；临时文件延迟清理
         let folder_path = archive_path.clone();
+        // 目录本身 mtime（秒）随响应头带回，本机下载后据此恢复
+        let source_mtime = archive_mtime_secs(&archive_path);
         // 文件名在移到闭包前先算好
         let base = std::path::Path::new(&folder_path)
             .file_name()
@@ -1222,6 +1226,7 @@ pub async fn download_archive_file(
                                 ("Content-Type", "application/octet-stream".to_string()),
                                 ("Content-Disposition", safe_content_disposition(&filename)),
                                 ("Cache-Control", "no-store".to_string()),
+                                ("X-Source-Mtime", source_mtime.to_string()),
                             ],
                             axum::body::Body::from_stream(stream),
                         )
