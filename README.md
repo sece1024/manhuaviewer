@@ -142,6 +142,7 @@ frontend/
 | `/api/settings` | GET/PUT | 获取 / 更新设置 |
 | `/api/config` | GET/PUT | 根目录配置 |
 | `/api/stats` | GET | 数据库统计 |
+| `/api/lan-ip` | GET | 本机局域网可达 IPv4 + 端口（设置页展示访问地址） |
 | `/api/backup` | GET | 导出备份 |
 | `/api/restore` | POST | 导入备份 |
 | `/api/sync/manifest` | GET | 跨机同步：远端清单（标题/类型/大小 + 标签/分类/进度） |

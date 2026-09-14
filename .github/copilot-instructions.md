@@ -55,7 +55,7 @@ Tauri 2.0 desktop app: Rust backend spawns an Axum HTTP server on port 5002; Rea
 
 ## Testing
 
-Frontend tests live in `frontend/src/__tests__/` (React Testing Library + `react-scripts test`). Page-level tests must wrap the component in the same providers as `App.js`: `SettingsProvider`, `TagsProvider`, `ToastProvider`, and `MemoryRouter`. API calls are mocked via `frontend/src/__mocks__/api.js`, auto-resolved by `jest.mock('../utils/api')`. `frontend/package.json` carries a `moduleNameMapper` for `react-router-dom` to work around ESM bundling — don't remove it.
+Frontend tests live in `frontend/src/__tests__/` (React Testing Library + `react-scripts test`). Page-level tests must wrap the component in the same providers as `App.js`: `SettingsProvider`, `TagsProvider`, `ToastProvider`, and `MemoryRouter`. API calls are mocked with `jest.mock('../utils/api')` (no factory) — Jest automocks the real module, so every method is a `jest.fn()` and each test sets return values in `beforeEach` via `api.xxx.mockResolvedValue(...)`. (`frontend/src/__mocks__/api.js` is dead code for this relative-path mock.) `frontend/package.json` carries a `moduleNameMapper` for `react-router-dom` to work around ESM bundling — don't remove it.
 
 Backend tests are inline `#[cfg(test)]` modules. Prefer testing pure helpers; tests that need a DB should point `DATA_DIR` at a temp directory.
 

@@ -45,7 +45,7 @@ CI (`.github/workflows/ci.yml`) runs on every push/PR to `main`. It runs `pnpm -
 
 ## Testing
 
-Frontend tests live in `frontend/src/__tests__/` and use React Testing Library via react-scripts (CRA's Jest runner). Every page test must wrap the component in the same providers used by `App.js`: `SettingsProvider`, `TagsProvider`, `ToastProvider`, and `MemoryRouter`. API calls are mocked via `frontend/src/__mocks__/api.js` — Jest auto-resolves `jest.mock('../utils/api')` to this mock. Frontend `package.json` also has a `moduleNameMapper` for `react-router-dom` to work around CRA's bundling.
+Frontend tests live in `frontend/src/__tests__/` and use React Testing Library via react-scripts (CRA's Jest runner). Every page test must wrap the component in the same providers used by `App.js`: `SettingsProvider`, `TagsProvider`, `ToastProvider`, and `MemoryRouter`. Tests mock the API with `jest.mock('../utils/api')` (no factory), so Jest **automocks** the real module — every method becomes a `jest.fn()` and each test sets return values in `beforeEach` via `api.xxx.mockResolvedValue(...)`. (`frontend/src/__mocks__/api.js` is NOT picked up for this relative-path mock and is dead code.) Frontend `package.json` also has a `moduleNameMapper` for `react-router-dom` to work around CRA's bundling.
 
 ## Adding a new API route
 
