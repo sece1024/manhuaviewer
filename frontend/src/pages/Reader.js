@@ -109,8 +109,12 @@ export default function Reader() {
   const [overlayText, setOverlayText] = useState('');
   const overlayTimer = useRef(null);
   const [imageLoaded, setImageLoaded] = useState(false);
+  // 单页加载失败：隐藏破图并显示占位（否则 spinner 永久转圈）
+  const [imageFailed, setImageFailed] = useState(false);
   // 双页模式：两页图全部就绪后再淡入，消除开关双页/翻页时的闪白或生硬跳变
   const [doubleLoaded, setDoubleLoaded] = useState(false);
+  // 双页加载失败同理
+  const [doubleFailed, setDoubleFailed] = useState(false);
   // 当前档案的书签页码集合
   const [bookmarks, setBookmarks] = useState(() => new Set());
   // 远程封面 URL 弹窗
@@ -281,6 +285,7 @@ export default function Reader() {
     setRotation(0);
     setTranslate({ x: 0, y: 0 });
     setImageLoaded(false);
+    setImageFailed(false);
     sentinelRefs.current = {}; // 释放旧书 DOM 节点引用
     async function load() {
       try {
@@ -586,7 +591,9 @@ export default function Reader() {
     setScale(1);
     setTranslate({ x: 0, y: 0 });
     setImageLoaded(false);
+    setImageFailed(false);
     setDoubleLoaded(false);
+    setDoubleFailed(false);
     // 长图模式下让滚动容器跟随到目标页（scrollTarget effect 内消费）
     setScrollTarget(newIndex);
     showOverlay(`${newIndex + 1} / ${pages.length}`);
@@ -1081,6 +1088,11 @@ export default function Reader() {
           />
         ) : doublePage && doubleLeft && doubleRight ? (
           <div style={{ display: 'flex', gap: 4, height: '100%', alignItems: 'center' }}>
+            {doubleFailed && (
+              <div className="reader-page-loading">
+                <div className="reader-page-error">图片加载失败</div>
+              </div>
+            )}
             {[doubleLeft, doubleRight].map((p) => (
               <img
                 key={p.id}
@@ -1089,8 +1101,9 @@ export default function Reader() {
                 className="reader-image"
                 decoding="async"
                 draggable={false}
-                style={{ ...imgStyle, opacity: doubleLoaded ? 1 : 0, transition: 'opacity 0.25s ease' }}
+                style={{ ...imgStyle, opacity: doubleLoaded && !doubleFailed ? 1 : 0, transition: 'opacity 0.25s ease' }}
                 onLoad={() => setDoubleLoaded(true)}
+                onError={() => { setDoubleLoaded(true); setDoubleFailed(true); }}
               />
             ))}
           </div>
@@ -1101,14 +1114,20 @@ export default function Reader() {
                 <div className="reader-page-spinner" />
               </div>
             )}
+            {imageFailed && (
+              <div className="reader-page-loading">
+                <div className="reader-page-error">图片加载失败</div>
+              </div>
+            )}
             <img
               src={pages[currentIndex]?.url}
               alt={pages[currentIndex]?.filename}
               className="reader-image"
               decoding="async"
-              style={{ ...imgStyle, opacity: imageLoaded ? 1 : 0, transition: 'opacity 0.2s ease' }}
+              style={{ ...imgStyle, opacity: imageLoaded && !imageFailed ? 1 : 0, transition: 'opacity 0.2s ease' }}
               draggable={false}
               onLoad={() => setImageLoaded(true)}
+              onError={() => { setImageLoaded(true); setImageFailed(true); }}
             />
           </div>
         )}

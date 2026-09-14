@@ -1082,6 +1082,15 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   animation: spin 0.8s linear infinite;
 }
 
+/* 图片加载失败占位：隐藏破图，替代永久转圈 */
+.reader-page-error {
+  color: var(--text-secondary, var(--muted));
+  font-size: 14px;
+  padding: 8px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
