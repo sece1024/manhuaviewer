@@ -20,6 +20,38 @@ fn opds_response(xml: String) -> Response {
         .into_response()
 }
 
+/// 给 OPDS 报文里所有站内链接（`href="/opds...`、`href="/api/...`）统一追加 `?token=`。
+/// 口令模式下客户端会以 XML 里的 href 原样发起后续请求（翻页、页面图片），不加 token
+/// 会被 401 拦截，OPDS 阅读器将无法翻页/看图。在最终 XML 上做一次轻量文本改写。
+pub(crate) fn append_token_to_links(xml: &str, token: &str) -> String {
+    if token.is_empty() {
+        return xml.to_string();
+    }
+    let needle: &str = "href=\"/";
+    let qs = format!("?token={}", token);
+    let mut out = String::with_capacity(xml.len() + 64);
+    let mut rest = xml;
+    while let Some(pos) = rest.find(needle) {
+        out.push_str(&rest[..pos + needle.len()]);
+        rest = &rest[pos + needle.len()..];
+        match rest.find('"') {
+            Some(end) => {
+                out.push_str(&rest[..end]);
+                out.push_str(&qs);
+                out.push('"');
+                rest = &rest[end + 1..];
+            }
+            None => {
+                // 未闭合的引号：原样收尾，避免破坏报文
+                out.push_str(rest);
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 #[derive(Deserialize)]
 pub struct OpdsQuery {
     pub page: Option<i64>,

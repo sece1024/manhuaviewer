@@ -162,6 +162,12 @@ async function _doFetch(url, options, maxAttempts) {
         ...(options.body ? { body: options.body } : {}),
       });
       if (!res.ok) {
+        // 401 = 局域网口令缺失/错误：让 App 弹出口令输入（桌面端回环请求不会 401）
+        if (res.status === 401) {
+          try {
+            window.dispatchEvent(new CustomEvent('mv:auth-required'));
+          } catch (e) { /* 忽略 */ }
+        }
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);
       }

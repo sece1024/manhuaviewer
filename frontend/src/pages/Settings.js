@@ -596,6 +596,16 @@ export default function Settings() {
                       http://{ip}:{lanInfo.port}/
                     </a>
                   ))}
+                  {lanTokenSetting && (
+                    <a
+                      href={`http://${lanInfo.ipv4[0]}:${lanInfo.port}/opds?token=${lanTokenSetting}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ fontFamily: 'monospace', fontSize: 13, color: 'var(--text-secondary)', wordBreak: 'break-all' }}
+                    >
+                      OPDS（含口令）: http://{lanInfo.ipv4[0]}:{lanInfo.port}/opds?token=…
+                    </a>
+                  )}
                 </div>
               ) : (
                 <div style={{ marginTop: 6, fontSize: 13, opacity: 0.8 }}>未检测到局域网地址（可能未连接网络）</div>
@@ -607,10 +617,10 @@ export default function Settings() {
           <div>
             <div className="settings-row-label">局域网访问口令 {lanTokenSetting ? '🔒' : ''}</div>
             <div className="settings-row-desc">
-              开启后，局域网里的写操作与备份/设置需携带该口令；本机使用不受影响。清空=关闭鉴权
+              开启后，局域网对书库的<b>读写、阅读历史与 OPDS</b> 都需携带该口令；本机使用不受影响。清空=关闭鉴权
               <br />
               <span style={{ color: 'var(--text-tertiary)' }}>
-                注意：口令<b>不保护内容读取</b>——同网段设备仍可打开书库、逐页下载漫画与阅读历史（含 OPDS）。完全私密请保持「仅本机」。
+                OPDS 阅读器请在地址后追加 <code>?token={'{口令}'}</code>；局域网浏览器会弹出口令输入框。
               </span>
             </div>
             {lanTokenSetting && (

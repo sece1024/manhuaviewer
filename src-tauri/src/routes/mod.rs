@@ -212,6 +212,49 @@ fn strip_private_fields(value: &mut serde_json::Value) {
     }
 }
 
+/// OPDS 报文里的站内链接透传口令：非回环 + 配置了口令时，把 XML 中所有
+/// `href="/opds…/href="/api…` 追加 `?token=…`，否则客户端按 href 发起的后续请求会 401。
+async fn opds_rewrite_token_links(
+    db: std::sync::Arc<crate::db::Database>,
+    req: Request,
+    next: Next,
+) -> Response {
+    // 回环判定必须在把 req 交给 next 之前取（req 会被 move）
+    let is_loopback = crate::routes::auth::peer_is_loopback(&req);
+    let resp = next.run(req).await;
+    // 只处理 OPDS XML（401 的 JSON 错误响应、SPA/静态文件直接透传）
+    let is_atom = resp
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.starts_with("application/atom+xml"))
+        .unwrap_or(false);
+    if !is_atom {
+        return resp;
+    }
+    if is_loopback {
+        return resp; // 桌面端本机 OPDS 请求无需口令
+    }
+    let token = crate::routes::auth::current_token(db).await;
+    if token.is_empty() {
+        return resp;
+    }
+    let (mut parts, body) = resp.into_parts();
+    let bytes = match axum::body::to_bytes(body, 16 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return Response::from_parts(parts, axum::body::Body::empty()),
+    };
+    let rewritten =
+        crate::routes::opds::append_token_to_links(&String::from_utf8_lossy(&bytes), &token);
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+    if let Ok(len_header) = axum::http::HeaderValue::from_str(&rewritten.len().to_string()) {
+        parts
+            .headers
+            .insert(axum::http::header::CONTENT_LENGTH, len_header);
+    }
+    Response::from_parts(parts, axum::body::Body::from(rewritten))
+}
+
 /// 非回环请求的 JSON 响应脱敏：剥离主机路径等内部字段。
 /// 只在响应确为 application/json 时解析改写（图片/XML 等二进制体直接透传）。
 async fn redact_lan_paths(req: Request, next: Next) -> Response {
@@ -380,11 +423,18 @@ pub fn create_router(state: AppState) -> Router {
         .route("/category/:id", get(opds::category_archives));
 
     // 可配置局域网鉴权：关闭(server_token 为空)时与旧行为一致；开启后回环本机放行、
-    // 局域网敏感请求(写 + settings/backup/config)需口令。DB Arc 在 build 期克隆进闭包。
+    // 局域网一切请求（读 + 写 + OPDS）都需口令。DB Arc 在 build 期克隆进闭包。
     let auth_db = state.db.clone();
     let auth_layer = middleware::from_fn(move |req: Request, next: Next| {
         let db = auth_db.clone();
         async move { auth::lan_guard_core(db, req, next).await }
+    });
+
+    // OPDS 链接透传口令：必须在鉴权之后跑（此时请求已通过校验），改写响应 XML
+    let opds_db = state.db.clone();
+    let opds_layer = middleware::from_fn(move |req: Request, next: Next| {
+        let db = opds_db.clone();
+        async move { opds_rewrite_token_links(db, req, next).await }
     });
 
     Router::new()
@@ -396,6 +446,8 @@ pub fn create_router(state: AppState) -> Router {
         .layer(cors)
         // 非回环 JSON 响应脱敏（在鉴权之后、静态资源兜底之外）
         .layer(middleware::from_fn(redact_lan_paths))
+        // OPDS XML 站内链接透传口令（口令模式下阅读器才能继续翻页/取图）
+        .layer(opds_layer)
         .fallback(serve_frontend)
         .with_state(Arc::new(state))
 }

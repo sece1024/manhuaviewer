@@ -6,34 +6,12 @@
 use std::sync::Arc;
 
 use axum::extract::{ConnectInfo, Request};
-use axum::http::{Method, StatusCode};
+use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
 use crate::db::Database;
-
-/// 即便是 GET 也会泄露配置/整库，需口令的 /api 前缀（带前导斜杠）。
-const SENSITIVE_GET_PREFIXES: &[&str] = &["/settings", "/backup", "/config", "/sync"];
-
-fn is_write_method(m: &Method) -> bool {
-    matches!(
-        *m,
-        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
-    )
-}
-
-/// 敏感判定：写操作一律敏感；GET 命中 settings/backup/config 前缀也敏感。
-/// `path` 为带前导 `/`、已剥 `/api` 前缀的形式（如 `/scan`、`/settings`）。
-pub fn request_is_sensitive(m: &Method, path: &str) -> bool {
-    if is_write_method(m) {
-        return true;
-    }
-    let first = path.trim_start_matches('/').split('/').next().unwrap_or("");
-    SENSITIVE_GET_PREFIXES
-        .iter()
-        .any(|p| first == p.trim_start_matches('/'))
-}
 
 /// 恒定时间字符串比较：长度不一致直接短路，长度一致时按位异或累计，
 /// 避免侧信道（现实威胁低，成本可忽略）。
@@ -83,51 +61,37 @@ pub(crate) fn peer_is_loopback(req: &Request) -> bool {
         .unwrap_or(true)
 }
 
-/// 读取当前局域网口令。rusqlite 是同步 I/O，必须 offload 到阻塞线程，
-/// 否则每个局域网敏感请求都会在 Tokio worker 上阻塞式取池连接（池可能空转等待 busy_timeout）。
-async fn configured_token(db: Arc<Database>) -> String {
+/// 决策（纯判定，便于单测）：
+/// - 回环本机始终放行（防锁死桌面端）；
+/// - 未配置口令：局域网全部开放（保持旧行为）；
+/// - 配置了口令：局域网一切请求（读 + 写 + OPDS）都需口令——书库内容、逐页
+///   图片与阅读历史对同网段设备同样受保护。
+pub fn request_allowed(
+    expected_token: &str,
+    authz: Option<&str>,
+    query_token: Option<&str>,
+    is_loopback: bool,
+) -> bool {
+    if is_loopback {
+        return true;
+    }
+    if expected_token.is_empty() {
+        return true;
+    }
+    token_authorized(authz, query_token, expected_token)
+}
+
+/// 读取当前局域网口令（供守卫与 OPDS 链接透传共用）。rusqlite 是同步 I/O，
+/// 必须 offload 到阻塞线程，否则每个请求都会在 Tokio worker 上阻塞式取池连接。
+pub(crate) async fn current_token(db: Arc<Database>) -> String {
     tokio::task::spawn_blocking(move || db.get_setting("server_token").unwrap_or_default())
         .await
         .unwrap_or_default()
 }
 
-/// 决策（只依赖 owned、Send 数据，可在 await 间安全持有）。
-/// 返回 true=放行；false=需要口令但缺失（调用方回 401）。
-async fn sensitive_allowed(
-    db: Arc<Database>,
-    method: &Method,
-    api_path: &str,
-    authz: Option<&str>,
-    query_token: Option<&str>,
-    is_loopback: bool,
-) -> bool {
-    if !request_is_sensitive(method, api_path) {
-        return true;
-    }
-    if is_loopback {
-        return true;
-    }
-    let expected = configured_token(db).await;
-    if expected.is_empty() {
-        return true;
-    }
-    token_authorized(authz, query_token, &expected)
-}
-
-fn strip_api(path: &str) -> String {
-    let stripped = path.strip_prefix("/api").unwrap_or(path);
-    if stripped.is_empty() || !stripped.starts_with('/') {
-        format!("/{stripped}")
-    } else {
-        stripped.to_string()
-    }
-}
-
 /// 统一守卫核心，供 from_fn 闭包包装。先同步克隆需要的字段，再 await DB，
 /// 避免在 Future（需 Send）中持有 &Request。
 pub async fn lan_guard_core(db: Arc<Database>, req: Request, next: Next) -> Response {
-    let method = req.method().clone();
-    let api_path = strip_api(req.uri().path());
     let headers = req.headers().clone();
     let query = req.uri().query().map(|s| s.to_string());
     let is_loopback = peer_is_loopback(&req);
@@ -135,15 +99,8 @@ pub async fn lan_guard_core(db: Arc<Database>, req: Request, next: Next) -> Resp
     let authz = headers.get("authorization").and_then(|v| v.to_str().ok());
     let qtoken = extract_query_token(query.as_deref());
 
-    let allowed = sensitive_allowed(
-        db,
-        &method,
-        &api_path,
-        authz,
-        qtoken.as_deref(),
-        is_loopback,
-    )
-    .await;
+    let expected = current_token(db).await;
+    let allowed = request_allowed(&expected, authz, qtoken.as_deref(), is_loopback);
     if allowed {
         next.run(req).await
     } else {
@@ -160,29 +117,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn writes_are_sensitive() {
-        for m in [Method::POST, Method::PUT, Method::DELETE] {
-            for p in ["/scan", "/open", "/restore", "/archives/5", "/merge"] {
-                assert!(request_is_sensitive(&m, p), "{m} {p}");
-            }
+    fn configured_token_guards_everything_on_lan() {
+        // 配置口令后：读（含 OPDS）、写、全部路径都需要口令
+        for p in [
+            "/archives",
+            "/archives/5/pages/2",
+            "/history",
+            "/opds",
+            "/opds/catalog",
+            "/settings",
+        ] {
+            assert!(
+                !request_allowed("sec1", None, None, false),
+                "GET {p} 无口令应拒"
+            );
+            assert!(
+                request_allowed("sec1", Some("Bearer sec1"), None, false),
+                "GET {p} Bearer 应放行"
+            );
+            assert!(
+                request_allowed("sec1", None, Some("sec1"), false),
+                "GET {p} ?token= 应放行"
+            );
         }
+        // 写操作同样需要口令
+        assert!(!request_allowed("sec1", None, None, false));
+        assert!(request_allowed("sec1", Some("Bearer sec1"), None, false));
     }
 
     #[test]
-    fn gets_open_except_sensitive_prefixes() {
-        for p in ["/archives", "/archives/5/pages/2", "/history", "/scan"] {
-            assert!(!request_is_sensitive(&Method::GET, p), "{p}");
-        }
-        for p in [
-            "/settings",
-            "/backup",
-            "/config",
-            "/sync",
-            "/sync/status",
-            "/sync/manifest",
-        ] {
-            assert!(request_is_sensitive(&Method::GET, p), "{p}");
-        }
+    fn loopback_always_allowed_even_with_token() {
+        // 回环本机放行：桌面端不会因口令缺失被锁死
+        assert!(request_allowed("sec1", None, None, true));
+        assert!(request_allowed("sec1", Some("wrong"), None, true));
+    }
+
+    #[test]
+    fn no_token_keeps_legacy_open_access() {
+        // 未配置口令：局域网完全开放（读、写、设置均为旧行为）
+        assert!(request_allowed("", None, None, false));
+        assert!(request_allowed("", None, None, false));
     }
 
     #[test]

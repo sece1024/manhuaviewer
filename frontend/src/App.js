@@ -6,6 +6,7 @@ import { SettingsProvider } from './hooks/useSettings';
 import useSettings from './hooks/useSettings';
 import { TagsProvider } from './hooks/useTags';
 import ErrorBoundary from './components/ErrorBoundary';
+import Modal from './components/Modal';
 import api, { localStorageGet, localStorageSet } from './utils/api';
 
 // 非首屏页面按需加载，减小首屏 bundle
@@ -27,6 +28,23 @@ function AppContent() {
   const location = useLocation();
   const { settings } = useSettings();
   const [lanUrls, setLanUrls] = useState([]);
+  // 局域网口令登录弹窗：api.js 在任何请求收到 401 时派发事件（桌面端回环不会 401）
+  const [tokenOpen, setTokenOpen] = useState(false);
+  const [tokenInput, setTokenInput] = useState('');
+
+  useEffect(() => {
+    const onAuthRequired = () => setTokenOpen(true);
+    window.addEventListener('mv:auth-required', onAuthRequired);
+    return () => window.removeEventListener('mv:auth-required', onAuthRequired);
+  }, []);
+
+  const handleTokenSubmit = () => {
+    const token = tokenInput.trim();
+    if (!token) return;
+    api.setServerToken(token);
+    // 刷新使所有请求带上 Authorization 头，并重置缓存/页面状态
+    window.location.reload();
+  };
 
   // 局域网模式（server_bind=0.0.0.0）开启后，在侧边栏常驻显示本机可访问地址
   useEffect(() => {
@@ -139,6 +157,30 @@ function AppContent() {
             <span>设置</span>
           </NavLink>
         </nav>
+      )}
+
+      {/* 局域网口令登录：配置了口令后，LAN 端一切请求（读+写）都返回 401 触发 */}
+      {tokenOpen && (
+        <Modal onClose={() => setTokenOpen(false)} ariaLabel="局域网访问口令">
+          <div style={{ minWidth: 320 }}>
+            <h3 style={{ marginBottom: 8 }}>🔒 需要局域网访问口令</h3>
+            <div className="settings-row-desc" style={{ marginBottom: 12 }}>
+              该服务配置了访问口令，书库读写、历史与 OPDS 都需要它。输入口令后自动刷新（本机桌面端不受影响，无需输入）。
+            </div>
+            <input
+              type="password"
+              value={tokenInput}
+              onChange={e => setTokenInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleTokenSubmit()}
+              placeholder="访问口令"
+              autoFocus
+              style={{ width: '100%' }}
+            />
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button className="btn btn-primary" onClick={handleTokenSubmit} disabled={!tokenInput.trim()}>保存并刷新</button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   );
