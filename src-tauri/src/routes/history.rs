@@ -7,7 +7,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::{internal_error, run_db};
+use super::{db_json, internal_error, run_db};
 
 #[derive(Deserialize)]
 pub struct SaveHistory {
@@ -104,8 +104,9 @@ pub async fn delete_history(
 }
 
 pub async fn clear_history(State(state): State<Arc<AppState>>) -> Response {
-    match run_db(&state, |db| db.clear_history()).await {
-        Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
-        Err(e) => internal_error(e),
-    }
+    db_json(&state, |db| {
+        db.clear_history()
+            .map(|n| serde_json::json!({ "deleted": n }))
+    })
+    .await
 }

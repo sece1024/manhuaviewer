@@ -101,6 +101,12 @@ pub(crate) fn validate_outbound_url(url: &str) -> bool {
 /// threads; this offloads them to a blocking thread. The connection pool
 /// (inside `Database`) handles concurrency, so handlers no longer serialize
 /// on a single global mutex.
+/// 把 BlockingError（任务 panic / 取消）映射进 rusqlite 的错误空间。
+/// `run_db` 与 `db_json` 共用：两者都只关心“DB 调用失败”，不区分错误来源。
+fn blocking_error(e: tokio::task::JoinError) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+}
+
 pub async fn run_db<T, F>(state: &Arc<AppState>, f: F) -> Result<T, rusqlite::Error>
 where
     F: FnOnce(&crate::db::Database) -> rusqlite::Result<T> + Send + 'static,
@@ -109,7 +115,24 @@ where
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || f(&db))
         .await
-        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+        .map_err(blocking_error)?
+}
+
+/// 薄 handler 的统一收尾：把 `run_db` 的结果直接序列化为 JSON 响应，
+/// 失败时统一走 `internal_error`（细节进日志，客户端只收通用消息）。
+///
+/// 收录的 handler 都是同一个形状——查询结果本身就是响应体，不需要后处理。
+/// 需要改形状（包一层 `{"data": …}`、附加字段、按结果给不同状态码）的 handler
+/// 仍然手写 match，不要为了统一而扭曲语义。
+pub async fn db_json<T, F>(state: &Arc<AppState>, f: F) -> Response
+where
+    T: serde::Serialize + Send + 'static,
+    F: FnOnce(&crate::db::Database) -> rusqlite::Result<T> + Send + 'static,
+{
+    match run_db(state, f).await {
+        Ok(value) => Json(value).into_response(),
+        Err(e) => internal_error(e),
+    }
 }
 
 /// 局域网模式的前端：把 `frontend/build` 在编译期内嵌进二进制，由 HTTP 直接提供 SPA

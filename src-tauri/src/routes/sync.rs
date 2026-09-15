@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use super::{error_response, internal_error};
+use super::{db_json, error_response, internal_error};
 
 /// 单任务并发：重复 start 会返回 409。
 static CURRENT_JOB: OnceLock<Mutex<Option<Arc<SyncJob>>>> = OnceLock::new();
@@ -352,12 +352,7 @@ fn register_local(
         anyhow::bail!("下载的档案没有可读页面，跳过: {}", entry.title);
     }
     let file_size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
-    let file_mtime = std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let file_mtime = crate::services::fs_ext::mtime_secs(path);
     db.upsert_scanned_archive(
         &entry.title,
         path_str,
@@ -591,10 +586,7 @@ pub struct SyncStartRequest {
 }
 
 pub async fn sync_manifest(State(state): State<Arc<AppState>>) -> Response {
-    match super::run_db(&state, |db| db.sync_manifest()).await {
-        Ok(manifest) => Json(manifest).into_response(),
-        Err(e) => internal_error(e),
-    }
+    db_json(&state, |db| db.sync_manifest()).await
 }
 
 /// 对比预览：拉取远端清单并与本地目录/本地库比对，返回差异统计与标题列表，

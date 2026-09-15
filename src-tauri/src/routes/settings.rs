@@ -7,7 +7,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::{internal_error, run_db};
+use super::{db_json, internal_error, run_db};
 
 #[derive(Deserialize)]
 pub struct UpdateSettings {
@@ -22,10 +22,7 @@ pub struct UpdateConfig {
 }
 
 pub async fn get_settings(State(state): State<Arc<AppState>>) -> Response {
-    match run_db(&state, |db| db.get_settings()).await {
-        Ok(settings) => Json(settings).into_response(),
-        Err(e) => internal_error(e),
-    }
+    db_json(&state, |db| db.get_settings()).await
 }
 
 pub async fn update_settings(
@@ -62,10 +59,7 @@ pub async fn update_config(
 }
 
 pub async fn get_stats(State(state): State<Arc<AppState>>) -> Response {
-    match run_db(&state, |db| db.get_stats()).await {
-        Ok(stats) => Json(stats).into_response(),
-        Err(e) => internal_error(e),
-    }
+    db_json(&state, |db| db.get_stats()).await
 }
 
 /// 枚举本机非回环、非链路本地的 IPv4（含多网卡/VPN），私有网段（RFC1918）优先排序。
@@ -118,6 +112,20 @@ pub async fn lan_ip(req: Request) -> Response {
     Json(serde_json::json!({ "ipv4": ips, "port": port, "loopback": is_loopback })).into_response()
 }
 
+pub async fn export_backup(State(state): State<Arc<AppState>>) -> Response {
+    db_json(&state, |db| db.export_backup()).await
+}
+
+pub async fn import_backup(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<serde_json::Value>,
+) -> Response {
+    match run_db(&state, move |db| db.import_backup(&payload)).await {
+        Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
+        Err(e) => internal_error(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,22 +138,5 @@ mod tests {
             assert!(!parsed.is_loopback(), "{ip} 不应是回环");
             assert!(!parsed.is_link_local(), "{ip} 不应是链路本地");
         }
-    }
-}
-
-pub async fn export_backup(State(state): State<Arc<AppState>>) -> Response {
-    match run_db(&state, |db| db.export_backup()).await {
-        Ok(backup) => Json(backup).into_response(),
-        Err(e) => internal_error(e),
-    }
-}
-
-pub async fn import_backup(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<serde_json::Value>,
-) -> Response {
-    match run_db(&state, move |db| db.import_backup(&payload)).await {
-        Ok(_) => Json(serde_json::json!({ "success": true })).into_response(),
-        Err(e) => internal_error(e),
     }
 }

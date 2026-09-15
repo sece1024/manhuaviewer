@@ -40,10 +40,7 @@ fn archive_mtime(path: &str) -> Option<SystemTime> {
 }
 
 pub(crate) fn archive_mtime_secs(path: &str) -> i64 {
-    archive_mtime(path)
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    crate::services::fs_ext::mtime_secs(std::path::Path::new(path))
 }
 
 fn is_compressed(archive_type: &str) -> bool {
@@ -1706,12 +1703,7 @@ pub async fn list_cbz_files(State(state): State<Arc<AppState>>) -> Response {
             })
             .filter_map(|e| {
                 let metadata = e.metadata().ok()?;
-                let mtime = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
+                let mtime = crate::services::fs_ext::mtime_secs(&e.path());
                 Some(serde_json::json!({
                     "name": e.file_name().to_string_lossy(),
                     "path": e.path().to_string_lossy(),

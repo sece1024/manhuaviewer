@@ -52,6 +52,13 @@ fn archive_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArchiveRow> {
     })
 }
 
+/// 同 `archive_row`，额外读取第 12 列 `remote_cover`。
+fn archive_row_with_remote_cover(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(ArchiveRow, Option<String>)> {
+    Ok((archive_row(row)?, row.get(11)?))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveRow {
     pub id: i64,
@@ -80,11 +87,6 @@ fn order_expr_for(sort: &str) -> &'static str {
         "random" => "RANDOM()",
         _ => "a.updated_at",
     }
-}
-
-/// 曾为"最近阅读"排序 LEFT JOIN history；引入 last_read_at 冗余列后不再需要 JOIN。
-fn history_join_for(_sort: &str) -> &'static str {
-    ""
 }
 
 /// 写操作的轻量忙重试：busy_timeout 之后仍可能与另一个连接的长事务（扫描/批量导入）
@@ -238,21 +240,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at FROM archives WHERE id = ?"
         )?;
-        let mut rows = stmt.query_map([id], |row| {
-            Ok(ArchiveRow {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                path: row.get(2)?,
-                archive_type: row.get(3)?,
-                page_count: row.get(4)?,
-                cover_image: row.get(5)?,
-                file_size: row.get(6)?,
-                thumbnail_path: row.get(7)?,
-                group_id: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
-            })
-        })?;
+        let mut rows = stmt.query_map([id], archive_row)?;
 
         match rows.next() {
             Some(row) => Ok(Some(row?)),
@@ -269,24 +257,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at, remote_cover FROM archives WHERE id = ?"
         )?;
-        let mut rows = stmt.query_map([id], |row| {
-            Ok((
-                ArchiveRow {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    path: row.get(2)?,
-                    archive_type: row.get(3)?,
-                    page_count: row.get(4)?,
-                    cover_image: row.get(5)?,
-                    file_size: row.get(6)?,
-                    thumbnail_path: row.get(7)?,
-                    group_id: row.get(8)?,
-                    created_at: row.get(9)?,
-                    updated_at: row.get(10)?,
-                },
-                row.get::<_, Option<String>>(11)?,
-            ))
-        })?;
+        let mut rows = stmt.query_map([id], archive_row_with_remote_cover)?;
 
         match rows.next() {
             Some(row) => Ok(Some(row?)),
@@ -300,21 +271,7 @@ impl Database {
             "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at FROM archives WHERE path = ?"
         )?;
 
-        let mut rows = stmt.query_map([path], |row| {
-            Ok(ArchiveRow {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                path: row.get(2)?,
-                archive_type: row.get(3)?,
-                page_count: row.get(4)?,
-                cover_image: row.get(5)?,
-                file_size: row.get(6)?,
-                thumbnail_path: row.get(7)?,
-                group_id: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
-            })
-        })?;
+        let mut rows = stmt.query_map([path], archive_row)?;
 
         match rows.next() {
             Some(row) => Ok(Some(row?)),
@@ -392,12 +349,11 @@ impl Database {
             Self::build_archive_filters(&conn, search, tag, category_id)?;
 
         let order_clause = order_expr_for(sort);
-        let history_join = history_join_for(sort);
         let direction = if order == "asc" { "ASC" } else { "DESC" };
 
         let sql = format!(
-            "SELECT {} FROM archives a{} {} {} ORDER BY {} {} LIMIT ? OFFSET ?",
-            ARCHIVE_COLUMNS, history_join, join_clause, where_clause, order_clause, direction
+            "SELECT {} FROM archives a {} {} ORDER BY {} {} LIMIT ? OFFSET ?",
+            ARCHIVE_COLUMNS, join_clause, where_clause, order_clause, direction
         );
 
         params.push(Box::new(limit));
@@ -441,12 +397,11 @@ impl Database {
         where_clause.push_str(read_clause);
 
         let order_clause = order_expr_for(sort);
-        let history_join = history_join_for(sort);
         let direction = if order == "asc" { "ASC" } else { "DESC" };
 
         let sql = format!(
-            "SELECT {} FROM archives a{} {} {} ORDER BY {} {}",
-            ARCHIVE_COLUMNS, history_join, join_clause, where_clause, order_clause, direction
+            "SELECT {} FROM archives a {} {} ORDER BY {} {}",
+            ARCHIVE_COLUMNS, join_clause, where_clause, order_clause, direction
         );
 
         let mut stmt = conn.prepare(&sql)?;
@@ -573,21 +528,7 @@ impl Database {
         )?;
 
         let archives = stmt
-            .query_map(rusqlite::params![tag_id, limit, offset], |row| {
-                Ok(ArchiveRow {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    path: row.get(2)?,
-                    archive_type: row.get(3)?,
-                    page_count: row.get(4)?,
-                    cover_image: row.get(5)?,
-                    file_size: row.get(6)?,
-                    thumbnail_path: row.get(7)?,
-                    group_id: row.get(8)?,
-                    created_at: row.get(9)?,
-                    updated_at: row.get(10)?,
-                })
-            })?
+            .query_map(rusqlite::params![tag_id, limit, offset], archive_row)?
             .filter_map(log_and_skip)
             .collect();
 
@@ -821,21 +762,7 @@ impl Database {
         )?;
 
         let archives = stmt
-            .query_map([group_id], |row| {
-                Ok(ArchiveRow {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    path: row.get(2)?,
-                    archive_type: row.get(3)?,
-                    page_count: row.get(4)?,
-                    cover_image: row.get(5)?,
-                    file_size: row.get(6)?,
-                    thumbnail_path: row.get(7)?,
-                    group_id: row.get(8)?,
-                    created_at: row.get(9)?,
-                    updated_at: row.get(10)?,
-                })
-            })?
+            .query_map([group_id], archive_row)?
             .filter_map(log_and_skip)
             .collect();
 
@@ -851,21 +778,7 @@ impl Database {
         )?;
 
         let archives = stmt
-            .query_map([title], |row| {
-                Ok(ArchiveRow {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    path: row.get(2)?,
-                    archive_type: row.get(3)?,
-                    page_count: row.get(4)?,
-                    cover_image: row.get(5)?,
-                    file_size: row.get(6)?,
-                    thumbnail_path: row.get(7)?,
-                    group_id: row.get(8)?,
-                    created_at: row.get(9)?,
-                    updated_at: row.get(10)?,
-                })
-            })?
+            .query_map([title], archive_row)?
             .filter_map(log_and_skip)
             .collect();
 

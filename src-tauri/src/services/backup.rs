@@ -60,10 +60,7 @@ pub fn list_backup_files(dir: &Path) -> Vec<PathBuf> {
 fn newest_backup_mtime(dir: &Path) -> Option<i64> {
     list_backup_files(dir)
         .iter()
-        .filter_map(|p| p.metadata().ok())
-        .filter_map(|m| m.modified().ok())
-        .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
+        .map(|p| super::fs_ext::mtime_secs(p))
         .max()
 }
 

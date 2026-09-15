@@ -8,7 +8,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::{error_response, internal_error, run_db};
+use super::{db_json, error_response, internal_error, run_db};
 
 #[derive(Deserialize)]
 pub struct TagQuery {
@@ -24,10 +24,7 @@ pub struct AssignTagRequest {
 }
 
 pub async fn list_tags(State(state): State<Arc<AppState>>) -> Response {
-    match run_db(&state, |db| db.list_tags()).await {
-        Ok(tags) => Json(tags).into_response(),
-        Err(e) => internal_error(e),
-    }
+    db_json(&state, |db| db.list_tags()).await
 }
 
 pub async fn list_namespaces(State(state): State<Arc<AppState>>) -> Response {
@@ -175,8 +172,5 @@ pub async fn get_archive_tags(
     State(state): State<Arc<AppState>>,
     Path(archive_id): Path<i64>,
 ) -> Response {
-    match run_db(&state, move |db| db.get_archive_tags(archive_id)).await {
-        Ok(tags) => Json(tags).into_response(),
-        Err(e) => internal_error(e),
-    }
+    db_json(&state, move |db| db.get_archive_tags(archive_id)).await
 }

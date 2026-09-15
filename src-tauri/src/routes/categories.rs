@@ -8,7 +8,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::{error_response, internal_error, run_db};
+use super::{db_json, error_response, internal_error, run_db};
 
 #[derive(Deserialize)]
 pub struct CreateCategory {
@@ -19,10 +19,7 @@ pub struct CreateCategory {
 }
 
 pub async fn list_categories(State(state): State<Arc<AppState>>) -> Response {
-    match run_db(&state, |db| db.list_categories()).await {
-        Ok(categories) => Json(categories).into_response(),
-        Err(e) => internal_error(e),
-    }
+    db_json(&state, |db| db.list_categories()).await
 }
 
 pub async fn create_category(
@@ -134,10 +131,7 @@ pub async fn get_archive_categories(
     State(state): State<Arc<AppState>>,
     Path(archive_id): Path<i64>,
 ) -> Response {
-    match run_db(&state, move |db| db.get_archive_categories(archive_id)).await {
-        Ok(categories) => Json(categories).into_response(),
-        Err(e) => internal_error(e),
-    }
+    db_json(&state, move |db| db.get_archive_categories(archive_id)).await
 }
 
 #[derive(Deserialize)]

@@ -2,6 +2,7 @@ pub mod archive;
 pub mod backup;
 pub mod cbz;
 pub mod cleanup;
+pub mod fs_ext;
 pub mod metadata;
 pub mod scanner;
 pub mod thumbnail;
