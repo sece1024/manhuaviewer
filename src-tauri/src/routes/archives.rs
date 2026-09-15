@@ -751,7 +751,9 @@ pub async fn get_cover(
         } else {
             reader.get_cover()?
         };
-        match crate::services::thumbnail::ThumbnailGenerator::default().generate(&cover) {
+        match crate::services::thumbnail::with_generation_permit(|| {
+            crate::services::thumbnail::ThumbnailGenerator::default().generate(&cover)
+        }) {
             Ok(thumb) => {
                 std::fs::create_dir_all(&thumb_dir)?;
                 // 原子写（tmp+rename）：并发请求同时生成时，读取方永远拿不到半截 jpg
@@ -1083,7 +1085,10 @@ pub async fn get_page_thumb(
         let thumb_gen = crate::services::thumbnail::ThumbnailGenerator::default();
         // generate_with_cache 使用 thumb_dir 作为缓存目录；解码失败（如 avif 无解码器）时
         // 降级返回原图 bytes（由系统 WebView 解码），而不是对整页缩略图报 500。
-        match thumb_gen.generate_with_cache(&data, &thumb_dir_clone, &page_index.to_string()) {
+        // 阻塞获取全局生成许可：面板/网格并发 miss 的解码被限制在 4 路以内。
+        match crate::services::thumbnail::with_generation_permit(|| {
+            thumb_gen.generate_with_cache(&data, &thumb_dir_clone, &page_index.to_string())
+        }) {
             Ok(thumb) => {
                 // 记录档案 mtime 标记：之后缓存命中时据此判定整批缩略图是否仍有效
                 write_thumb_archive_marker(&thumb_dir_clone, mtime_secs);

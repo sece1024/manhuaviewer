@@ -1,6 +1,32 @@
 use anyhow::Result;
 use image::ImageReader;
 use std::path::Path;
+use std::sync::{Condvar, Mutex, OnceLock};
+
+/// 全局缩略图生成并发上限：打开缩略图面板/书库网格瞬间会有数十上百个 miss 请求，
+/// 每个都要“解压一页 + 全分辨率解码 + 重编码 JPEG”，不加节制会瞬间把 CPU/内存打满。
+const MAX_CONCURRENT_GENERATIONS: usize = 4;
+
+/// 在生成许可内运行 f（阻塞获取，最多 MAX_CONCURRENT_GENERATIONS 个并发解码）。
+/// 手写计数信号量（Mutex+Condvar），避免依赖 std::sync::Semaphore 的版本要求。
+pub fn with_generation_permit<T>(f: impl FnOnce() -> T) -> T {
+    static STATE: OnceLock<(Mutex<usize>, Condvar)> = OnceLock::new();
+    let (lock, cv) = STATE.get_or_init(|| (Mutex::new(0), Condvar::new()));
+
+    let mut count = lock.lock().unwrap();
+    while *count >= MAX_CONCURRENT_GENERATIONS {
+        count = cv.wait(count).unwrap();
+    }
+    *count += 1;
+    drop(count);
+
+    let result = f();
+
+    let mut count = lock.lock().unwrap();
+    *count -= 1;
+    cv.notify_one();
+    result
+}
 
 pub struct ThumbnailGenerator {
     width: u32,

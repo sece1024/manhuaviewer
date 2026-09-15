@@ -1291,7 +1291,7 @@ export default function Reader() {
                   className={`thumbnail-item ${i === currentIndex ? 'active' : ''}`}
                   onClick={() => { goPage(i); setShowThumbnails(false); }}
                 >
-                  <img src={p.thumb_url || p.url} alt={p.filename} loading="lazy" />
+                  <img src={p.thumb_url || p.url} alt={p.filename} loading="lazy" decoding="async" />
                   <div className="page-num">{i + 1}{bookmarks.has(i) ? ' ⭐' : ''}</div>
                 </div>
               ))}

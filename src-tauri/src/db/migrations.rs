@@ -125,6 +125,13 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_archives_last_read_at ON archives(last_read_at)",
         [],
     )?;
+    // “最近阅读”默认排序的表达式索引：大书库下 ORDER BY COALESCE(last_read_at, updated_at)
+    // 直接命中索引，避免每页请求整库 filesort。表达式必须与查询逐位一致（表别名无碍）。
+    // 只在此处创建：旧库升级时 last_read_at 列要到上面的迁移才存在，schema.rs 里建会失败。
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_archives_last_read_sort ON archives(COALESCE(last_read_at, updated_at) DESC)",
+        [],
+    )?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_archives_title_nocase ON archives(title COLLATE NOCASE)",
         [],

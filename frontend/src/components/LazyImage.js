@@ -80,6 +80,7 @@ const LazyImage = React.memo(function LazyImage({ src, alt, className, style, on
               src={src}
               alt={alt}
               loading="lazy"
+              decoding="async"
               onLoad={() => setLoaded(true)}
               onError={() => setError(true)}
               style={{
