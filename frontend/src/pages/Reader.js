@@ -111,7 +111,8 @@ export default function Reader() {
   const [imageLoaded, setImageLoaded] = useState(false);
   // 单页加载失败：隐藏破图并显示占位（否则 spinner 永久转圈）
   const [imageFailed, setImageFailed] = useState(false);
-  // 双页模式：两页图全部就绪后再淡入，消除开关双页/翻页时的闪白或生硬跳变
+  // 双页模式：两页图就绪后再淡入；翻到已加载/已预载完成的跨页时保持不透明度直接呈现。
+  // 消除开关双页/翻页时的闪白或生硬跳变
   const [doubleLoaded, setDoubleLoaded] = useState(false);
   // 双页加载失败同理
   const [doubleFailed, setDoubleFailed] = useState(false);
@@ -147,6 +148,9 @@ export default function Reader() {
   // 组内有序章节序列（含当前档案）与“已触发末页续章”标记
   const chapterListRef = useRef(null);
   const chapterEndFiredRef = useRef(false);
+  // 本次会话已完成过加载的页 id 集合：翻页到已就绪的跨页时保持不透明度直接呈现，
+  // 不再每翻一页都先闪一帧背景色再淡入（双页模式闪烁的根因）
+  const loadedPageIdsRef = useRef(new Set());
 
   // 稳定的 sentinel ref 回调：从 data-idx 读索引，避免每次渲染产生新函数
   // 导致 React 对所有已挂载元素反复 detach/attach ref。
@@ -170,12 +174,14 @@ export default function Reader() {
   // 长图模式已加载页的真实高度缓存（idx -> px），用于占位与跳页定位
   const [pageHeights, setPageHeights] = useState({});
   const handleImageLoad = useCallback((idx, height) => {
+    const p = pages[idx];
+    if (p) loadedPageIdsRef.current.add(p.id); // 长图模式看过的页同样记为已就绪
     setPageHeights(prev => {
       const prevH = prev[idx];
       if (prevH && Math.abs(prevH - height) < 4) return prev;
       return { ...prev, [idx]: height };
     });
-  }, []);
+  }, [pages]);
 
   // 高度前缀和：pageHeights 变化时重建（O(n)，只发生在图片加载时），
   // 滚动帧里取任意区间高度都是 O(1)，不再每帧做两次 O(n) 累加。
@@ -195,6 +201,15 @@ export default function Reader() {
     const map = {};
     for (let i = 0; i < pages.length; i++) map[pages[i].url] = i;
     return map;
+  }, [pages]);
+
+  // 页面是否“已就绪”：本会话显示过（onLoad 已记录 id）或预加载 Image 已完成解码。
+  // 已就绪的页面在翻页时直接呈现（保持不透明度），不再把透明度拉回 0，消除闪烁帧。
+  const pageReady = useCallback((i) => {
+    if (i == null || i < 0 || i >= pages.length) return false;
+    if (loadedPageIdsRef.current.has(pages[i].id)) return true;
+    const img = preloadCacheRef.current.map[pages[i].url];
+    return !!(img && img.complete && img.naturalWidth > 0);
   }, [pages]);
 
   // 服务端设置异步到达时同步阅读器偏好（仅当用户尚未操作时）
@@ -287,6 +302,7 @@ export default function Reader() {
     setImageLoaded(false);
     setImageFailed(false);
     sentinelRefs.current = {}; // 释放旧书 DOM 节点引用
+    loadedPageIdsRef.current = new Set(); // 已加载页集合随换档重置
     async function load() {
       try {
         const data = await api.getPages(archiveId);
@@ -418,9 +434,9 @@ export default function Reader() {
       }
     };
 
-    // 预载当前页前后小窗口（-2 … +3，双页/翻页主要向下一页前进）
+    // 预载当前页前后小窗口（-2 … +3 含，双页模式下下一跨页需要 {ci+2, ci+3} 都就绪）
     const start = Math.max(0, currentIndex - 2);
-    const end = Math.min(pages.length, currentIndex + 3);
+    const end = Math.min(pages.length, currentIndex + 4);
     for (let i = start; i < end; i++) {
       if (i !== currentIndex) touch(pages[i].url);
     }
@@ -590,14 +606,18 @@ export default function Reader() {
     setCurrentIndex(newIndex);
     setScale(1);
     setTranslate({ x: 0, y: 0 });
-    setImageLoaded(false);
     setImageFailed(false);
-    setDoubleLoaded(false);
     setDoubleFailed(false);
+    // 跨页 = {newIndex, newIndex+1}（末页缺一张时按就绪的单张判定）。两张图都
+    // “已就绪”（本会话加载过，或预加载 Image 已完成解码）时保持不透明度直接呈现，
+    // 否则才回 0 走 spinner + 淡入——不再每翻一页都闪一帧背景色。
+    const sideReady = (i) => i >= pages.length || pageReady(i);
+    setDoubleLoaded(sideReady(newIndex) && sideReady(newIndex + 1));
+    setImageLoaded(pageReady(newIndex));
     // 长图模式下让滚动容器跟随到目标页（scrollTarget effect 内消费）
     setScrollTarget(newIndex);
     showOverlay(`${newIndex + 1} / ${pages.length}`);
-  }, [pages.length, showOverlay]);
+  }, [pages.length, pages, pageReady, showOverlay]);
 
   const goPrev = useCallback(() => {
     const step = doublePage ? 2 : 1;
@@ -623,6 +643,18 @@ export default function Reader() {
     goPage(target);
   }, [doublePage, pageDirection, goPage, pages.length, jumpToSiblingChapter, showOverlay]);
 
+  // 键盘 D 键开关双页：开启时重置双页加载态，保证新跨页走 spinner + 淡入
+  const toggleDouble = useCallback(() => {
+    setDoublePage(v => {
+      if (!v) {
+        setLongImage(false);
+        setDoubleLoaded(false);
+        setDoubleFailed(false);
+      }
+      return !v;
+    });
+  }, [setDoublePage, setLongImage]);
+
   // 快捷键（通过自定义 hook 管理，减少组件依赖数量）
   useReaderKeyboard({
     goPrev, goNext, goPage, pagesLength: pages.length,
@@ -632,7 +664,7 @@ export default function Reader() {
     showHelp, setShowHelp,
     showMenu, setShowMenu,
     showTagPicker, setShowTagPicker,
-    setDoublePage, setLongImage, setRotation, setFitMode,
+    setDoublePage: toggleDouble, setLongImage, setRotation, setFitMode,
     onFitModeChange: (val) => updateSetting('reader_fit', val),
     showOverlay, containerRef,
     doublePageDisabled: containerTooNarrow || longImage,
@@ -990,7 +1022,11 @@ export default function Reader() {
           title={!doublePage && containerTooNarrow ? '窗口宽度不足，无法使用双页模式' : !doublePage && longImage ? '请先关闭长图模式' : ''}>
           <input type="checkbox" checked={doublePage}
             disabled={!doublePage && (containerTooNarrow || longImage)}
-            onChange={(e) => { setDoublePage(e.target.checked); if (e.target.checked) setLongImage(false); }}
+            onChange={(e) => {
+              setDoublePage(e.target.checked);
+              // 开启双页时重置加载态，让新跨页走 spinner + 淡入，而不是沿用旧状态直接显示
+              if (e.target.checked) { setLongImage(false); setDoubleLoaded(false); setDoubleFailed(false); }
+            }}
             aria-label="启用双页模式" /> 双页
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, opacity: doublePage ? 0.5 : 1 }}
@@ -1086,26 +1122,37 @@ export default function Reader() {
             prefix={heightsPrefix}
             onImageLoad={handleImageLoad}
           />
-        ) : doublePage && doubleLeft && doubleRight ? (
+        ) : doublePage && (doubleLeft || doubleRight) ? (
           <div style={{ display: 'flex', gap: 4, height: '100%', alignItems: 'center' }}>
+            {/* 加载占位：与单页模式一致，双页空白期不再直接暴露背景色 */}
+            {!doubleLoaded && !doubleFailed && (
+              <div className="reader-page-loading">
+                <div className="reader-page-spinner" />
+              </div>
+            )}
             {doubleFailed && (
               <div className="reader-page-loading">
                 <div className="reader-page-error">图片加载失败</div>
               </div>
             )}
-            {[doubleLeft, doubleRight].map((p) => (
-              <img
-                key={p.id}
-                src={p.url}
-                alt={p.filename}
-                className="reader-image"
-                decoding="async"
-                draggable={false}
-                style={{ ...imgStyle, opacity: doubleLoaded && !doubleFailed ? 1 : 0, transition: 'opacity 0.25s ease' }}
-                onLoad={() => setDoubleLoaded(true)}
-                onError={() => { setDoubleLoaded(true); setDoubleFailed(true); }}
-              />
-            ))}
+            {[doubleLeft, doubleRight].map((p) =>
+              p ? (
+                <img
+                  key={p.id}
+                  src={p.url}
+                  alt={p.filename}
+                  className="reader-image"
+                  decoding="async"
+                  draggable={false}
+                  style={{ ...imgStyle, opacity: doubleLoaded && !doubleFailed ? 1 : 0, transition: 'opacity 0.25s ease' }}
+                  onLoad={() => { loadedPageIdsRef.current.add(p.id); setDoubleLoaded(true); }}
+                  onError={() => { setDoubleLoaded(true); setDoubleFailed(true); }}
+                />
+              ) : (
+                // 末页缺一张时保留双页布局（空位占位），避免双页↔单页布局来回切换的闪烁
+                <div key="empty-side" aria-hidden="true" style={{ flex: 1, height: '100%' }} />
+              )
+            )}
           </div>
         ) : (
           <div className="reader-page-wrapper">
@@ -1126,7 +1173,7 @@ export default function Reader() {
               decoding="async"
               style={{ ...imgStyle, opacity: imageLoaded && !imageFailed ? 1 : 0, transition: 'opacity 0.2s ease' }}
               draggable={false}
-              onLoad={() => setImageLoaded(true)}
+              onLoad={() => { const p = pages[currentIndex]; if (p) loadedPageIdsRef.current.add(p.id); setImageLoaded(true); }}
               onError={() => { setImageLoaded(true); setImageFailed(true); }}
             />
           </div>
