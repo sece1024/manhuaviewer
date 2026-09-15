@@ -6,7 +6,7 @@ import { SettingsProvider } from './hooks/useSettings';
 import useSettings from './hooks/useSettings';
 import { TagsProvider } from './hooks/useTags';
 import ErrorBoundary from './components/ErrorBoundary';
-import api from './utils/api';
+import api, { localStorageGet, localStorageSet } from './utils/api';
 
 // 非首屏页面按需加载，减小首屏 bundle
 const Reader = lazy(() => import('./pages/Reader'));
@@ -21,7 +21,8 @@ const PageFallback = () => (
 );
 
 function AppContent() {
-  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+  // localStorage 读取走 try/catch（隐私模式/存储禁用时不抛错，回退默认主题）
+  const [theme, setTheme] = useState(() => localStorageGet('theme') || 'dark');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
   const { settings } = useSettings();
@@ -53,7 +54,7 @@ function AppContent() {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('theme', theme);
+    localStorageSet('theme', theme);
   }, [theme]);
 
   return (

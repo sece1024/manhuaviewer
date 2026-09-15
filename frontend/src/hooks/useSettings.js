@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useContext, useMemo, createContext } from 'react';
-import api from '../utils/api';
+import api, { localStorageGet, localStorageSet } from '../utils/api';
 
 const SettingsContext = createContext(null);
 
@@ -15,7 +15,7 @@ const LS_FALLBACKS = {
 
 function getFallback(key) {
   const lsKey = LS_FALLBACKS[key];
-  return lsKey ? localStorage.getItem(lsKey) : null;
+  return lsKey ? localStorageGet(lsKey) || null : null;
 }
 
 export function SettingsProvider({ children }) {
@@ -34,7 +34,7 @@ export function SettingsProvider({ children }) {
       setSettings(prev => ({ ...prev, ...data }));
       // 同步回 localStorage 作为缓存
       for (const [serverKey, lsKey] of Object.entries(LS_FALLBACKS)) {
-        if (data[serverKey]) localStorage.setItem(lsKey, data[serverKey]);
+        if (data[serverKey]) localStorageSet(lsKey, data[serverKey]);
       }
     }).catch(() => {});
   }, []);
@@ -43,7 +43,7 @@ export function SettingsProvider({ children }) {
     // 乐观更新
     setSettings(prev => ({ ...prev, [key]: value }));
     const lsKey = LS_FALLBACKS[key];
-    if (lsKey) localStorage.setItem(lsKey, value);
+    if (lsKey) localStorageSet(lsKey, value);
     try {
       await api.updateSettings({ [key]: value });
     } catch (e) {

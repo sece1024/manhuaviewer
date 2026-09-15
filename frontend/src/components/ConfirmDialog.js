@@ -10,8 +10,17 @@ export default function ConfirmDialog({ open, title, message, confirmText = '确
   useEffect(() => {
     if (!open) return;
     const handleKey = (e) => {
-      if (e.key === 'Escape') onCancel();
-      if (e.key === 'Enter') onConfirm();
+      // Enter 走 confirm、Esc 走 cancel，两者都必须 preventDefault：
+      // 焦点默认落在“取消”按钮上，不拦截的话 Enter 会同时触发本处理器的
+      // onConfirm 与取消按钮的原生 click（一次回车确认又取消）。
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onCancel();
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        onConfirm();
+      }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);

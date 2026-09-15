@@ -11,10 +11,12 @@ export const apiBase = () => BASE;
 // 口令在桌面端“设置→局域网”里生成；这里仅负责把它附到请求头上。
 // 用 localStorage 保存便于跨页面/跨设备会话使用（桌面端由设置页同步）。
 const TOKEN_KEY = 'mv_server_token';
-function localStorageGet(k) {
+// 导出供 App/useSettings 复用：隐私模式/存储被禁用时读写会抛错，统一捕获，
+// 避免初始化崩溃（ErrorBoundary 全屏）或主题切换时 effect 抛错卸载整棵树。
+export function localStorageGet(k) {
   try { return window.localStorage.getItem(k) || ''; } catch (e) { return ''; }
 }
-function localStorageSet(k, v) {
+export function localStorageSet(k, v) {
   try { if (v) window.localStorage.setItem(k, v); else window.localStorage.removeItem(k); } catch (e) { /* 忽略 */ }
 }
 let _serverToken = localStorageGet(TOKEN_KEY);

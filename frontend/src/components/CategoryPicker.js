@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import api from '../utils/api';
+import useModalKeyboard from '../hooks/useModalKeyboard';
 
 /**
  * CategoryPicker — 弹窗组件，用于给指定漫画分配/取消分类
@@ -16,6 +17,7 @@ export default function CategoryPicker({ archiveId, archiveIds, onClose }) {
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
   const [changed, setChanged] = useState(false);
+  const panelRef = useModalKeyboard(() => onClose(changed));
 
   useEffect(() => {
     let cancelled = false;
@@ -99,7 +101,7 @@ export default function CategoryPicker({ archiveId, archiveIds, onClose }) {
 
   return (
     <div className="modal-overlay" onClick={() => onClose(changed)}>
-      <div className="modal tag-picker-modal" onClick={e => e.stopPropagation()}>
+      <div ref={panelRef} tabIndex={-1} className="modal tag-picker-modal" style={{ outline: 'none' }} onClick={e => e.stopPropagation()}>
         <div className="modal-title">📂 {isBatch ? `批量分类（已选 ${archiveIds.length} 个）` : '管理分类'}</div>
         <div className="modal-body">
           {loading ? (
