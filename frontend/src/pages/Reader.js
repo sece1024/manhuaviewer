@@ -7,6 +7,7 @@ import useReaderKeyboard from '../hooks/useReaderKeyboard';
 import useGamepad from '../hooks/useGamepad';
 import TagPicker from '../components/TagPicker';
 import Modal from '../components/Modal';
+import { spreadTooWide, WIDE_SPREAD_MIN_PAGE_RATIO } from '../utils/spreadFit';
 
 // —— 长图模式虚拟滚动 ——
 // 只渲染可视窗口 ± OVERSCAN 页的 DOM 节点；窗口外用上下 spacer 撑出总高度维持滚动条。
@@ -33,13 +34,14 @@ const WindowedPage = React.memo(function WindowedPage({ p, index, inRange, senti
           style={imgStyle}
           onError={(e) => { e.target.style.display = 'none'; }}
           onLoad={(e) => {
-            // 记录真实渲染高度（宽 100%，高度=容器宽×原始高宽比），供占位与跳页定位使用
+            // 记录真实渲染高度（宽 100%，高度=容器宽×原始高宽比），供占位与跳页定位使用；
+            // 顺带把原始宽高带回，供“跨页过宽→自动单页”判定缓存页尺寸
             const img = e.currentTarget;
             const container = img.parentElement;
             const cw = container ? container.clientWidth : 0;
             const nh = img.naturalHeight || 0;
             const nw = img.naturalWidth || 1;
-            if (cw > 0 && nh > 0) onImageLoad(index, Math.round((cw * nh) / nw));
+            if (cw > 0 && nh > 0) onImageLoad(index, Math.round((cw * nh) / nw), nw, nh);
           }}
         />
       ) : null}
@@ -129,6 +131,10 @@ export default function Reader() {
   // 容器宽度不足时禁用双页模式
   const [containerTooNarrow, setContainerTooNarrow] = useState(false);
   const DOUBLE_PAGE_MIN_WIDTH = 600;
+  // 阅读区可视尺寸（ResizeObserver 更新），驱动“跨页过宽→自动单页”判定
+  const [readerSize, setReaderSize] = useState({ w: 0, h: 0 });
+  // 双页模式：整跨页适配后单页仍过小时自动改单页显示（默认开启，可在设置中关闭）
+  const [autoSingleWide, setAutoSingleWide] = useState(() => settings.reader_auto_single !== '0');
 
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
   const dragRef = useRef({ active: false, startX: 0, startY: 0, origX: 0, origY: 0 });
@@ -151,6 +157,10 @@ export default function Reader() {
   // 本次会话已完成过加载的页 id 集合：翻页到已就绪的跨页时保持不透明度直接呈现，
   // 不再每翻一页都先闪一帧背景色再淡入（双页模式闪烁的根因）
   const loadedPageIdsRef = useRef(new Set());
+  // 页面原始尺寸缓存（id -> {w, h}）：跨页过宽判定使用，随图片加载记录
+  const pageDimsRef = useRef({});
+  // “跨页过宽→自动单页”提示：每次换档只弹一次
+  const wideHintShownRef = useRef(false);
 
   // 稳定的 sentinel ref 回调：从 data-idx 读索引，避免每次渲染产生新函数
   // 导致 React 对所有已挂载元素反复 detach/attach ref。
@@ -173,9 +183,12 @@ export default function Reader() {
 
   // 长图模式已加载页的真实高度缓存（idx -> px），用于占位与跳页定位
   const [pageHeights, setPageHeights] = useState({});
-  const handleImageLoad = useCallback((idx, height) => {
+  const handleImageLoad = useCallback((idx, height, nw = 0, nh = 0) => {
     const p = pages[idx];
-    if (p) loadedPageIdsRef.current.add(p.id); // 长图模式看过的页同样记为已就绪
+    if (p) {
+      loadedPageIdsRef.current.add(p.id); // 长图模式看过的页同样记为已就绪
+      if (nw > 0 && nh > 0) pageDimsRef.current[p.id] = { w: nw, h: nh };
+    }
     setPageHeights(prev => {
       const prevH = prev[idx];
       if (prevH && Math.abs(prevH - height) < 4) return prev;
@@ -226,10 +239,9 @@ export default function Reader() {
   // 窄窗口判定镜像到 ref，供偏好恢复等回调读取最新值
   const containerTooNarrowRef = useRef(containerTooNarrow);
   useEffect(() => { containerTooNarrowRef.current = containerTooNarrow; }, [containerTooNarrow]);
+  // 恢复双页时强制关闭长图（互斥）；窗口过窄时不恢复双页，避免“开了关不掉”
   useEffect(() => {
     if (settings.reader_double !== undefined) {
-      prefsReadyRef.current = true;
-      // 恢复双页时强制关闭长图（互斥）；窗口过窄时不恢复双页，避免“开了关不掉”
       const restoreDouble = settings.reader_double === '1' && !containerTooNarrowRef.current;
       setDoublePage(restoreDouble);
       if (restoreDouble) setLongImage(false);
@@ -237,7 +249,14 @@ export default function Reader() {
     if (settings.reader_long !== undefined) {
       setLongImage(settings.reader_long === '1' && settings.reader_double !== '1');
     }
-  }, [settings.reader_double, settings.reader_long]);
+    if (settings.reader_auto_single !== undefined) {
+      setAutoSingleWide(settings.reader_auto_single === '1');
+    }
+    // 任一阅读偏好到达即开启持久化回写，避免首帧误写
+    if (settings.reader_double !== undefined || settings.reader_long !== undefined || settings.reader_auto_single !== undefined) {
+      prefsReadyRef.current = true;
+    }
+  }, [settings.reader_double, settings.reader_long, settings.reader_auto_single]);
 
   useEffect(() => {
     if (prefsReadyRef.current) updateSetting('reader_double', doublePage ? '1' : '0');
@@ -245,6 +264,9 @@ export default function Reader() {
   useEffect(() => {
     if (prefsReadyRef.current) updateSetting('reader_long', longImage ? '1' : '0');
   }, [longImage]);
+  useEffect(() => {
+    if (prefsReadyRef.current) updateSetting('reader_auto_single', autoSingleWide ? '1' : '0');
+  }, [autoSingleWide]);
   useEffect(() => {
     if (prefsReadyRef.current && settings.page_direction !== undefined) {
       updateSetting('page_direction', pageDirection);
@@ -303,6 +325,8 @@ export default function Reader() {
     setImageFailed(false);
     sentinelRefs.current = {}; // 释放旧书 DOM 节点引用
     loadedPageIdsRef.current = new Set(); // 已加载页集合随换档重置
+    pageDimsRef.current = {}; // 页面尺寸缓存随换档重置
+    wideHintShownRef.current = false; // 过宽降级提示随换档重置
     async function load() {
       try {
         const data = await api.getPages(archiveId);
@@ -450,13 +474,15 @@ export default function Reader() {
     }
   }, [currentIndex, pages, pageIndexByUrl, longImage]);
 
-  // 监听容器宽度，宽度不足时禁用双页模式
+  // 监听容器尺寸：宽度不足时禁用双页模式；同时记录可视尺寸供“跨页过宽→自动单页”判定
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        const narrow = entry.contentRect.width < DOUBLE_PAGE_MIN_WIDTH;
+        const { width, height } = entry.contentRect;
+        setReaderSize({ w: width, h: height });
+        const narrow = width < DOUBLE_PAGE_MIN_WIDTH;
         setContainerTooNarrow(narrow);
         if (narrow) setDoublePage(false);
       }
@@ -927,6 +953,26 @@ export default function Reader() {
     ? [pages[currentIndex + 1], pages[currentIndex]]
     : [pages[currentIndex], pages[currentIndex + 1]];
 
+  // 当前跨页是否“过宽”→ 自动按单页显示（仅对“适应高度”的 contain 适配有意义）。
+  // 整跨页 contain 后当前页宽度 < 容器宽度 × WIDE_SPREAD_MIN_PAGE_RATIO 即视为过度缩小。
+  const wideSpread = useMemo(() => {
+    if (!doublePage || !autoSingleWide || fitMode !== 'height') return false;
+    const cur = pages[currentIndex];
+    const other = pages[currentIndex + 1];
+    const dims = cur ? pageDimsRef.current[cur.id] : null;
+    if (!dims) return false;
+    const otherDims = other ? pageDimsRef.current[other.id] || null : null;
+    return spreadTooWide(dims, otherDims, readerSize, { gap: 4, minPageRatio: WIDE_SPREAD_MIN_PAGE_RATIO });
+  }, [doublePage, autoSingleWide, fitMode, pages, currentIndex, readerSize]);
+
+  // 首次触发过宽降级时提示一次（换档后复位），避免用户困惑“为什么双页变单页了”
+  useEffect(() => {
+    if (wideSpread && !wideHintShownRef.current) {
+      wideHintShownRef.current = true;
+      showOverlay('跨页过宽，已自动按单页显示');
+    }
+  }, [wideSpread, showOverlay]);
+
   const [loadError, setLoadError] = useState(null);
 
   if (!archive && !loadError) {
@@ -1122,7 +1168,7 @@ export default function Reader() {
             prefix={heightsPrefix}
             onImageLoad={handleImageLoad}
           />
-        ) : doublePage && (doubleLeft || doubleRight) ? (
+        ) : doublePage && (doubleLeft || doubleRight) && !wideSpread ? (
           <div style={{ display: 'flex', gap: 4, height: '100%', alignItems: 'center' }}>
             {/* 加载占位：与单页模式一致，双页空白期不再直接暴露背景色 */}
             {!doubleLoaded && !doubleFailed && (
@@ -1145,7 +1191,12 @@ export default function Reader() {
                   decoding="async"
                   draggable={false}
                   style={{ ...imgStyle, opacity: doubleLoaded && !doubleFailed ? 1 : 0, transition: 'opacity 0.25s ease' }}
-                  onLoad={() => { loadedPageIdsRef.current.add(p.id); setDoubleLoaded(true); }}
+                  onLoad={(e) => {
+                    const el = e.currentTarget;
+                    if (el.naturalWidth > 0) pageDimsRef.current[p.id] = { w: el.naturalWidth, h: el.naturalHeight };
+                    loadedPageIdsRef.current.add(p.id);
+                    setDoubleLoaded(true);
+                  }}
                   onError={() => { setDoubleLoaded(true); setDoubleFailed(true); }}
                 />
               ) : (
@@ -1173,7 +1224,15 @@ export default function Reader() {
               decoding="async"
               style={{ ...imgStyle, opacity: imageLoaded && !imageFailed ? 1 : 0, transition: 'opacity 0.2s ease' }}
               draggable={false}
-              onLoad={() => { const p = pages[currentIndex]; if (p) loadedPageIdsRef.current.add(p.id); setImageLoaded(true); }}
+              onLoad={(e) => {
+                const el = e.currentTarget;
+                const p0 = pages[currentIndex];
+                if (p0) {
+                  if (el.naturalWidth > 0) pageDimsRef.current[p0.id] = { w: el.naturalWidth, h: el.naturalHeight };
+                  loadedPageIdsRef.current.add(p0.id);
+                }
+                setImageLoaded(true);
+              }}
               onError={() => { setImageLoaded(true); setImageFailed(true); }}
             />
           </div>
