@@ -7,82 +7,11 @@ import useReaderKeyboard from '../hooks/useReaderKeyboard';
 import useGamepad from '../hooks/useGamepad';
 import TagPicker from '../components/TagPicker';
 import Modal from '../components/Modal';
+import ThumbnailPanel from '../components/ThumbnailPanel';
+import LongImageList, { EST_PAGE_HEIGHT } from '../components/ReaderVirtualList';
+import usePagePreloader from '../hooks/usePagePreloader';
+import useProgressPersistence from '../hooks/useProgressPersistence';
 import { spreadTooWide, WIDE_SPREAD_MIN_PAGE_RATIO } from '../utils/spreadFit';
-
-// —— 长图模式虚拟滚动 ——
-// 只渲染可视窗口 ± OVERSCAN 页的 DOM 节点；窗口外用上下 spacer 撑出总高度维持滚动条。
-// 未测量页面按 EST_PAGE_HEIGHT 估算，已在 pageHeights 中的页面按真实显示高度累加，
-// 因此滚动↔页码定位与“全量挂载占位”时精度一致，但 DOM 节点从上千降到几十个。
-const OVERSCAN = 10; // 窗口上下各多渲染的页数，保证快速滚动时 sentinel 已就位
-const EST_PAGE_HEIGHT = 250; // 未测量页面的估算显示高度（与旧版占位一致）
-
-/// 单个窗口页（memoized）：只有本页的高度/可见性等 props 变化才重渲染，
-/// 其余页面在别的页图片加载后跳过 diff（前缀和变化不再拖累整个窗口）。
-const WindowedPage = React.memo(function WindowedPage({ p, index, inRange, sentinelRef, imgStyle, pageHeight, onImageLoad }) {
-  return (
-    <div
-      ref={sentinelRef}
-      data-idx={index}
-      style={{ width: '100%', minHeight: inRange ? undefined : pageHeight }}
-    >
-      {inRange ? (
-        <img
-          src={p.url}
-          alt={p.filename}
-          loading="lazy"
-          decoding="async"
-          style={imgStyle}
-          onError={(e) => { e.target.style.display = 'none'; }}
-          onLoad={(e) => {
-            // 记录真实渲染高度（宽 100%，高度=容器宽×原始高宽比），供占位与跳页定位使用；
-            // 顺带把原始宽高带回，供“跨页过宽→自动单页”判定缓存页尺寸
-            const img = e.currentTarget;
-            const container = img.parentElement;
-            const cw = container ? container.clientWidth : 0;
-            const nh = img.naturalHeight || 0;
-            const nw = img.naturalWidth || 1;
-            if (cw > 0 && nh > 0) onImageLoad(index, Math.round((cw * nh) / nw), nw, nh);
-          }}
-        />
-      ) : null}
-    </div>
-  );
-});
-
-/// 长图虚拟列表：高度来自前缀和（O(1) 取上下 spacer），页节点 memoized。
-function LongImageList({ pages, visibleRange, sentinelRef, imgStyle, prefix, onImageLoad }) {
-  const n = pages.length;
-  const start = Math.max(0, visibleRange.start - OVERSCAN);
-  const end = Math.min(n, visibleRange.end + OVERSCAN);
-
-  const topSpacer = prefix[start];
-  const bottomSpacer = prefix[n] - prefix[end];
-
-  const items = [];
-  for (let i = start; i < end; i++) {
-    const p = pages[i];
-    items.push(
-      <WindowedPage
-        key={p.id}
-        p={p}
-        index={i}
-        inRange={i >= visibleRange.start && i < visibleRange.end}
-        sentinelRef={sentinelRef}
-        imgStyle={imgStyle}
-        pageHeight={prefix[i + 1] - prefix[i]}
-        onImageLoad={onImageLoad}
-      />
-    );
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', touchAction: 'pan-y', width: '100%' }}>
-      {topSpacer > 0 && <div aria-hidden="true" style={{ height: topSpacer, flexShrink: 0 }} />}
-      {items}
-      {bottomSpacer > 0 && <div aria-hidden="true" style={{ height: bottomSpacer, flexShrink: 0 }} />}
-    </div>
-  );
-}
 
 export default function Reader() {
   const { archiveId } = useParams();
@@ -140,27 +69,24 @@ export default function Reader() {
   const dragRef = useRef({ active: false, startX: 0, startY: 0, origX: 0, origY: 0 });
   const touchRef = useRef({ startX: 0, startY: 0, startTime: 0, lastTapTime: 0, pinchDist: 0 });
   const containerRef = useRef(null);
-  const saveTimerRef = useRef(null);
-  // 预加载缓存（LRU）：持有 Image 对象引用防止被 GC，最多 30 张
-  const preloadCacheRef = useRef({ order: [], map: {} });
   // 长图模式虚拟滚动：追踪可见范围
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 20 });
   const sentinelRefs = useRef({});
   // 长图模式共享 IntersectionObserver（只创建一次，不随滚动重建）
   const longObserverRef = useRef(null);
-  const activeThumbRef = useRef(null);
   // 需要程序化滚动到的目标页（跳页/缩略图/进入长图/恢复进度）；消费一次后置 null
   const [scrollTarget, setScrollTarget] = useState(null);
   // 组内有序章节序列（含当前档案）与“已触发末页续章”标记
   const chapterListRef = useRef(null);
   const chapterEndFiredRef = useRef(false);
-  // 本次会话已完成过加载的页 id 集合：翻页到已就绪的跨页时保持不透明度直接呈现，
-  // 不再每翻一页都先闪一帧背景色再淡入（双页模式闪烁的根因）
-  const loadedPageIdsRef = useRef(new Set());
   // 页面原始尺寸缓存（id -> {w, h}）：跨页过宽判定使用，随图片加载记录
   const pageDimsRef = useRef({});
   // “跨页过宽→自动单页”提示：每次换档只弹一次
   const wideHintShownRef = useRef(false);
+
+  // —— 抽取的 hook：进度持久化（防抖保存 + 换档/卸载 flush）与图片预加载（LRU）——
+  const { flushPending } = useProgressPersistence({ archive, archiveId, pages, currentIndex });
+  const { pageReady, loadedPageIdsRef } = usePagePreloader({ pages, currentIndex, longImage });
 
   // 稳定的 sentinel ref 回调：从 data-idx 读索引，避免每次渲染产生新函数
   // 导致 React 对所有已挂载元素反复 detach/attach ref。
@@ -208,22 +134,6 @@ export default function Reader() {
     heightsPrefixRef.current = { pageHeights, prefix: p };
     return p;
   }, [pageHeights, pages.length]);
-
-  // url -> index 映射，用于预加载清理，避免 O(pages × 30) 的 findIndex 扫描
-  const pageIndexByUrl = useMemo(() => {
-    const map = {};
-    for (let i = 0; i < pages.length; i++) map[pages[i].url] = i;
-    return map;
-  }, [pages]);
-
-  // 页面是否“已就绪”：本会话显示过（onLoad 已记录 id）或预加载 Image 已完成解码。
-  // 已就绪的页面在翻页时直接呈现（保持不透明度），不再把透明度拉回 0，消除闪烁帧。
-  const pageReady = useCallback((i) => {
-    if (i == null || i < 0 || i >= pages.length) return false;
-    if (loadedPageIdsRef.current.has(pages[i].id)) return true;
-    const img = preloadCacheRef.current.map[pages[i].url];
-    return !!(img && img.complete && img.naturalWidth > 0);
-  }, [pages]);
 
   // 服务端设置异步到达时同步阅读器偏好（仅当用户尚未操作时）
   useEffect(() => {
@@ -273,53 +183,6 @@ export default function Reader() {
     }
   }, [pageDirection]);
 
-  // 缩略图面板：虚拟窗口渲染——格子的占位始终存在（撑出滚动条与滚动位置），
-// 只有进入可视范围 ±THUMB_OVERSCAN 的格子才真正挂载 <img>。
-// 此前是"每次追加 100 个直到整本挂满"，2000 页最终会有 2000 个 <img> + 2000 个请求。
-  const [thumbRange, setThumbRange] = useState({ start: 0, end: 30 });
-  const thumbPanelRef = useRef(null);
-  const thumbGridRef = useRef(null);
-  const THUMB_OVERSCAN = 12;
-
-  // 面板打开时把窗口重置到当前页附近（否则从第 1 页开始，翻到 800 页会看到空白）
-  useEffect(() => {
-    if (!showThumbnails) return;
-    const start = Math.max(0, currentIndex - 15);
-    setThumbRange({ start, end: Math.min(pages.length, start + 30) });
-  }, [showThumbnails, currentIndex, pages.length]);
-
-  // 滚动/尺寸变化时重算窗口：以已挂载格子的实际位置为准（格子高度一致，误差小）
-  useEffect(() => {
-    if (!showThumbnails) return;
-    const root = thumbPanelRef.current;
-    const grid = thumbGridRef.current;
-    if (!root || !grid || pages.length === 0) return;
-
-    let rafPending = false;
-    const recompute = () => {
-      rafPending = false;
-      const gridRect = grid.getBoundingClientRect();
-      const rootRect = root.getBoundingClientRect();
-      // 网格内可见区域的上下边界，外扩 OVERSCAN 个格子的高度
-      const cellH = 150; // 缩略图 120px + 页码 + gap 的近似行高
-      const rowsVisible = Math.ceil((rootRect.height || 600) / cellH);
-      const firstRow = Math.max(0, Math.floor((rootRect.top - gridRect.top) / cellH));
-      const cols = Math.max(1, Math.floor(gridRect.width / 110));
-      const start = Math.max(0, (firstRow - THUMB_OVERSCAN) * cols);
-      const end = Math.min(pages.length, (firstRow + rowsVisible + THUMB_OVERSCAN) * cols);
-      setThumbRange(prev => (prev.start === start && prev.end === end ? prev : { start, end }));
-    };
-    const onScroll = () => {
-      if (!rafPending) {
-        rafPending = true;
-        requestAnimationFrame(recompute);
-      }
-    };
-    recompute();
-    root.addEventListener('scroll', onScroll, { passive: true });
-    return () => root.removeEventListener('scroll', onScroll);
-  }, [showThumbnails, pages.length]);
-
   // 显示 overlay 信息
   const showOverlay = useCallback((text) => {
     setOverlayText(text);
@@ -327,26 +190,11 @@ export default function Reader() {
     overlayTimer.current = setTimeout(() => setOverlayText(''), 2000);
   }, []);
 
-  // 已提交进度指纹：防抖保存、卸载 flush 与换档 flush 共用，避免同一值被重复 POST。
-  // commitSave 提升到加载 effect 之前定义，供换档时先落盘旧档案进度。
-  const lastSavedRef = useRef(null);
-  const commitSave = useCallback((aid, index, len) => {
-    if (!Number.isFinite(aid) || aid <= 0 || !Number.isFinite(len) || len <= 0) return;
-    const fingerprint = `${aid}:${index}:${len}`;
-    if (lastSavedRef.current === fingerprint) return;
-    lastSavedRef.current = fingerprint;
-    api.saveHistory(aid, index, len).catch(() => {});
-  }, []);
-
   // 加载数据
   useEffect(() => {
-    // 换档前先落盘旧档案未保存的进度：防抖定时器即将被清掉，且组件复用不卸载
-    // （组内章节跳转/末页续章不会触发卸载 flush），否则旧档案最后几秒的阅读位置会丢失。
-    // 指纹去重避免与刚完成的防抖重复提交。saveParamsRef 仍持有旧档案参数
-    // （其镜像 effect 定义在本 effect 之后，本渲染周期内尚未被覆写）。
-    clearTimeout(saveTimerRef.current);
-    const { archiveId: aid, currentIndex: ci, pagesLength: pl } = saveParamsRef.current;
-    commitSave(parseInt(aid), ci, pl);
+    // 换档前先落盘旧档案未保存的进度（防抖定时器即将被清掉，且组件复用不卸载，
+    // 组内章节跳转/末页续章不会触发卸载 flush），否则旧档案最后几秒的阅读位置会丢失。
+    flushPending();
 
     let cancelled = false;
     // 重置状态，防止 save effect 用旧数据保存到新 archiveId
@@ -407,111 +255,14 @@ export default function Reader() {
     }
     load();
     return () => { cancelled = true; };
-  }, [archiveId, commitSave]);
+  }, [archiveId, flushPending]);
 
-  // 组件卸载时清理所有定时器
+  // 组件卸载时清理 overlay 定时器（进度保存定时器由 useProgressPersistence 管理）
   useEffect(() => {
     return () => {
       clearTimeout(overlayTimer.current);
-      clearTimeout(saveTimerRef.current);
     };
   }, []);
-
-  useEffect(() => {
-    if (showThumbnails && activeThumbRef.current) {
-      setTimeout(() => {
-        activeThumbRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      }, 100);
-    }
-  }, [showThumbnails]);
-
-  // 保存进度参数镜像（供卸载/换档 flush 读取最新值）；commitSave/lastSavedRef 见上方加载前的定义。
-  // 只有「已加载的 archive 属于当前 archiveId」时才更新——切换渲染周期里 archive 还是旧对象，
-  // 此时覆写会把「新 id + 旧页码」混进 flush，导致连跳两话时把旧进度写进新档案。
-  const saveParamsRef = useRef({ archiveId: null, currentIndex: 0, pagesLength: 0 });
-  useEffect(() => {
-    if (archive && archive.id === parseInt(archiveId) && pages.length > 0) {
-      saveParamsRef.current = { archiveId, currentIndex, pagesLength: pages.length };
-    }
-  }, [archive, archiveId, currentIndex, pages.length]);
-
-  // 进度保存：仅在状态变化时调度防抖保存；卸载/换档时单独 flush。
-  // clearTimeout 必须在守卫之前（换档周期也要清掉旧定时器）；archive.id 归属校验保证
-  // 切换渲染周期（archive 还是旧对象）不会用「新 archiveId + 旧页码」排定有害定时器。
-  useEffect(() => {
-    clearTimeout(saveTimerRef.current);
-    if (!archive || archive.id !== parseInt(archiveId) || pages.length === 0) return;
-    saveTimerRef.current = setTimeout(() => {
-      commitSave(parseInt(archiveId), currentIndex, pages.length);
-    }, 1000);
-  }, [currentIndex, archive, pages.length, archiveId, commitSave]);
-
-  // 仅在组件卸载时立即保存一次（指纹去重，避免与刚完成的防抖重复提交）
-  useEffect(() => {
-    return () => {
-      clearTimeout(saveTimerRef.current);
-      const { archiveId: aid, currentIndex: ci, pagesLength: pl } = saveParamsRef.current;
-      commitSave(parseInt(aid), ci, pl);
-    };
-  }, [commitSave]);
-
-  // 预加载图片（LRU 缓存，最多 12 张 Image 对象）。长图模式页面由 <img> 随滚动加载，
-  // 额外 new Image() 只会上双份内存，故长图模式不预载。
-  useEffect(() => {
-    if (pages.length === 0 || longImage) return;
-    const MAX_PRELOAD = 12;
-    const cache = preloadCacheRef.current;
-
-    // 换了书：清空不属于当前页的残留缓存
-    for (const url of [...cache.order]) {
-      if (pageIndexByUrl[url] === undefined) {
-        delete cache.map[url];
-        cache.order = cache.order.filter(u => u !== url);
-      }
-    }
-
-    const touch = (url) => {
-      if (cache.map[url]) {
-        // 已存在，移到最新
-        cache.order = cache.order.filter(u => u !== url);
-        cache.order.push(url);
-        return;
-      }
-      // 新增
-      const img = new Image();
-      img.decoding = 'async';
-      img.src = url;
-      cache.map[url] = img;
-      cache.order.push(url);
-      // LRU 淘汰
-      while (cache.order.length > MAX_PRELOAD) {
-        const oldest = cache.order.shift();
-        delete cache.map[oldest];
-      }
-    };
-
-    const remove = (url) => {
-      if (cache.map[url]) {
-        delete cache.map[url];
-        cache.order = cache.order.filter(u => u !== url);
-      }
-    };
-
-    // 预载当前页前后小窗口（-2 … +3 含，双页模式下下一跨页需要 {ci+2, ci+3} 都就绪）
-    const start = Math.max(0, currentIndex - 2);
-    const end = Math.min(pages.length, currentIndex + 4);
-    for (let i = start; i < end; i++) {
-      if (i !== currentIndex) touch(pages[i].url);
-    }
-
-    // 清理远离当前页的缓存（±6 页范围外）
-    for (const url of [...cache.order]) {
-      const idx = pageIndexByUrl[url];
-      if (idx !== undefined && (idx < currentIndex - 6 || idx > currentIndex + 6)) {
-        remove(url);
-      }
-    }
-  }, [currentIndex, pages, pageIndexByUrl, longImage]);
 
   // 监听容器尺寸：宽度不足时禁用双页模式；同时记录可视尺寸供“跨页过宽→自动单页”判定
   useEffect(() => {
@@ -1301,38 +1052,13 @@ export default function Reader() {
 
       {/* 缩略图面板 */}
       {showThumbnails && (
-        <div className="thumbnail-panel" onClick={() => setShowThumbnails(false)} role="dialog" aria-modal="true" aria-label="缩略图总览">
-          <div className="thumbnail-panel-inner" ref={thumbPanelRef} onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h3 id="thumbnail-title">缩略图 ({pages.length} 页)</h3>
-              <button className="btn btn-secondary btn-sm" onClick={() => setShowThumbnails(false)} aria-label="关闭缩略图面板">关闭</button>
-            </div>
-            <div className="thumbnail-grid" ref={thumbGridRef}>
-              {/* 全部格子都渲染（占位撑出滚动高度），窗口外的格子不挂 <img> */}
-              {pages.map((p, i) => {
-                const inWindow = i >= thumbRange.start && i < thumbRange.end;
-                return (
-                  <div
-                    key={p.id}
-                    ref={(el) => {
-                      if (i === currentIndex) activeThumbRef.current = el;
-                    }}
-                    className={`thumbnail-item ${i === currentIndex ? 'active' : ''}`}
-                    onClick={() => { goPage(i); setShowThumbnails(false); }}
-                  >
-                    {inWindow ? (
-                      <img src={p.thumb_url || p.url} alt={p.filename} loading="lazy" decoding="async" />
-                    ) : (
-                      // 未进入窗口：保留同尺寸空位，避免网格塌陷导致滚动位置跳动
-                      <div className="thumbnail-placeholder" aria-hidden="true" />
-                    )}
-                    <div className="page-num">{i + 1}{bookmarks.has(i) ? ' ⭐' : ''}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+        <ThumbnailPanel
+          pages={pages}
+          currentIndex={currentIndex}
+          bookmarks={bookmarks}
+          onSelect={(i) => { goPage(i); setShowThumbnails(false); }}
+          onClose={() => setShowThumbnails(false)}
+        />
       )}
 
       {/* 跳转对话框 */}
