@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import Reader from '../pages/Reader';
 import { ToastProvider } from '../components/Toast';
 import { SettingsProvider } from '../hooks/useSettings';
@@ -146,5 +146,61 @@ describe('Reader 双页模式', () => {
     pressKey('ArrowLeft'); // 第一跨页往回 → 环回末跨页（index 4 → 右=page-5，左=page-6）
     expect(screen.getByAltText('page-5.jpg')).toBeInTheDocument();
     expect(screen.getByAltText('page-6.jpg')).toBeInTheDocument();
+  });
+
+  test('切换档案：旧档案进度先落盘，且不把旧页码写进新档案（回归：同路由换档损坏进度）', async () => {
+    jest.useFakeTimers();
+    // 每个档案独立返回（id 随路由变化）
+    api.getPages.mockImplementation((id) => Promise.resolve({
+      archive: { id: Number(id), title: `档案${id}`, archive_type: 'folder', group_id: null },
+      pages: makePages(6),
+      read_page: 0,
+    }));
+
+    function GoButton({ to, label }) {
+      const navigate = useNavigate();
+      return <button onClick={() => navigate(to)}>{label}</button>;
+    }
+
+    render(
+      <SettingsProvider>
+        <ToastProvider>
+          <MemoryRouter initialEntries={['/reader/1']}>
+            <Routes>
+              <Route path="/reader/:archiveId" element={(
+                <>
+                  <GoButton to="/reader/2" label="切到档案2" />
+                  <Reader />
+                </>
+              )} />
+            </Routes>
+          </MemoryRouter>
+        </ToastProvider>
+      </SettingsProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: /页面阅读区/ })).toBeInTheDocument();
+    });
+
+    // 档案 1 翻 3 页到 index 3（第 4 页），防抖尚未触发
+    pressKey('ArrowRight');
+    pressKey('ArrowRight');
+    pressKey('ArrowRight');
+
+    // 立刻切到档案 2：旧档案进度应立即落盘（flush），而不是 1s 后才被防抖覆盖
+    await act(async () => {
+      fireEvent.click(screen.getByText('切到档案2'));
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(1000); // 让新档案加载 + 防抖落定
+    });
+
+    const calls = api.saveHistory.mock.calls.map(c => c.slice(0, 3));
+    expect(calls).toContainEqual([1, 3, 6]);     // 旧档案 1 的最后位置已保存
+    expect(calls).not.toContainEqual([2, 3, 6]); // 旧页码绝不能写进新档案 2
+    expect(calls).toContainEqual([2, 0, 6]);     // 新档案 2 正常保存自己的（首页）进度
+
+    jest.useRealTimers();
   });
 });

@@ -303,8 +303,27 @@ export default function Reader() {
     overlayTimer.current = setTimeout(() => setOverlayText(''), 2000);
   }, []);
 
+  // 已提交进度指纹：防抖保存、卸载 flush 与换档 flush 共用，避免同一值被重复 POST。
+  // commitSave 提升到加载 effect 之前定义，供换档时先落盘旧档案进度。
+  const lastSavedRef = useRef(null);
+  const commitSave = useCallback((aid, index, len) => {
+    if (!Number.isFinite(aid) || aid <= 0 || !Number.isFinite(len) || len <= 0) return;
+    const fingerprint = `${aid}:${index}:${len}`;
+    if (lastSavedRef.current === fingerprint) return;
+    lastSavedRef.current = fingerprint;
+    api.saveHistory(aid, index, len).catch(() => {});
+  }, []);
+
   // 加载数据
   useEffect(() => {
+    // 换档前先落盘旧档案未保存的进度：防抖定时器即将被清掉，且组件复用不卸载
+    // （组内章节跳转/末页续章不会触发卸载 flush），否则旧档案最后几秒的阅读位置会丢失。
+    // 指纹去重避免与刚完成的防抖重复提交。saveParamsRef 仍持有旧档案参数
+    // （其镜像 effect 定义在本 effect 之后，本渲染周期内尚未被覆写）。
+    clearTimeout(saveTimerRef.current);
+    const { archiveId: aid, currentIndex: ci, pagesLength: pl } = saveParamsRef.current;
+    commitSave(parseInt(aid), ci, pl);
+
     let cancelled = false;
     // 重置状态，防止 save effect 用旧数据保存到新 archiveId
     setArchive(null);
@@ -364,7 +383,7 @@ export default function Reader() {
     }
     load();
     return () => { cancelled = true; };
-  }, [archiveId]);
+  }, [archiveId, commitSave]);
 
   // 组件卸载时清理所有定时器
   useEffect(() => {
@@ -382,26 +401,22 @@ export default function Reader() {
     }
   }, [showThumbnails]);
 
-  // 保存进度（防抖 + 卸载时立即保存）
+  // 保存进度参数镜像（供卸载/换档 flush 读取最新值）；commitSave/lastSavedRef 见上方加载前的定义。
+  // 只有「已加载的 archive 属于当前 archiveId」时才更新——切换渲染周期里 archive 还是旧对象，
+  // 此时覆写会把「新 id + 旧页码」混进 flush，导致连跳两话时把旧进度写进新档案。
   const saveParamsRef = useRef({ archiveId: null, currentIndex: 0, pagesLength: 0 });
   useEffect(() => {
-    saveParamsRef.current = { archiveId, currentIndex, pagesLength: pages.length };
-  }, [archiveId, currentIndex, pages.length]);
+    if (archive && archive.id === parseInt(archiveId) && pages.length > 0) {
+      saveParamsRef.current = { archiveId, currentIndex, pagesLength: pages.length };
+    }
+  }, [archive, archiveId, currentIndex, pages.length]);
 
-  // 已提交进度指纹：防抖保存与卸载 flush 共用，避免同一值被重复 POST
-  const lastSavedRef = useRef(null);
-  const commitSave = useCallback((aid, index, len) => {
-    if (!Number.isFinite(aid) || aid <= 0 || !Number.isFinite(len) || len <= 0) return;
-    const fingerprint = `${aid}:${index}:${len}`;
-    if (lastSavedRef.current === fingerprint) return;
-    lastSavedRef.current = fingerprint;
-    api.saveHistory(aid, index, len).catch(() => {});
-  }, []);
-
-  // 进度保存：仅在状态变化时调度防抖保存；卸载时单独 flush
+  // 进度保存：仅在状态变化时调度防抖保存；卸载/换档时单独 flush。
+  // clearTimeout 必须在守卫之前（换档周期也要清掉旧定时器）；archive.id 归属校验保证
+  // 切换渲染周期（archive 还是旧对象）不会用「新 archiveId + 旧页码」排定有害定时器。
   useEffect(() => {
-    if (!archive || pages.length === 0) return;
     clearTimeout(saveTimerRef.current);
+    if (!archive || archive.id !== parseInt(archiveId) || pages.length === 0) return;
     saveTimerRef.current = setTimeout(() => {
       commitSave(parseInt(archiveId), currentIndex, pages.length);
     }, 1000);
