@@ -215,6 +215,20 @@ pub trait ArchiveReader {
     fn get_cover(&self) -> Result<Vec<u8>>;
 }
 
+/// 档案路径是否仍然存在：folder 类型看目录、其余（zip/cbz/rar/cbr/7z）看文件。
+///
+/// 手动从磁盘删除档案后 DB 记录会残留，此时再打开档案会先在列目录/解压等深层
+/// I/O 上失败，最终被路由层吞成笼统的 500。打开档案前用本函数预检一次，
+/// 让路由层能针对“文件已不存在”返回明确的 404 与可操作提示。
+pub fn archive_exists(archive_type: &str, path: &str) -> bool {
+    let p = std::path::Path::new(path);
+    if archive_type == "folder" {
+        p.is_dir()
+    } else {
+        p.is_file()
+    }
+}
+
 // ZIP/CBZ Archive
 pub struct ZipArchive {
     path: String,

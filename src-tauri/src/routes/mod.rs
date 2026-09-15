@@ -730,4 +730,46 @@ mod tests {
         assert_eq!(status, 200, "/archives 应成功: {}", raw);
         assert!(raw.contains("\"日常\""), "列表响应应包含档案标签: {}", raw);
     }
+
+    /// 手动删除磁盘档案后 DB 记录残留：打开（页列表/封面/页面图片/缩略图）应回
+    /// 明确 404 + 可操作提示，而不是在列目录/解压等深层 I/O 上失败后被吞成笼统的 500。
+    /// 文件夹与压缩包两类档案都要覆盖。
+    #[tokio::test]
+    async fn missing_archive_file_returns_404_not_500() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::new(dir.path().join("t.db").to_str().unwrap()).unwrap();
+        db.init().unwrap();
+        let file_id = db
+            .upsert_scanned_archive("GoneCbz", "/definitely/not/on/disk/a.cbz", "cbz", 5, 100, 1)
+            .unwrap();
+        let folder_id = db
+            .upsert_scanned_archive(
+                "GoneFolder",
+                "/definitely/not/on/disk/folder",
+                "folder",
+                3,
+                0,
+                1,
+            )
+            .unwrap();
+
+        let db_arc = Arc::new(db);
+        let port = spawn_server_with(db_arc.clone(), dir.path().to_path_buf()).await;
+
+        for (id, kind) in [(file_id, "压缩包"), (folder_id, "文件夹")] {
+            for endpoint in [
+                format!("/api/archives/{id}/pages"),
+                format!("/api/archives/{id}/cover"),
+                format!("/api/archives/{id}/pages/0"),
+                format!("/api/archives/{id}/pages/0/thumb"),
+            ] {
+                let (status, raw) = get(port, &endpoint).await;
+                assert_eq!(
+                    status, 404,
+                    "{kind} 档案 {endpoint} 应回 404 而非 500: {raw}"
+                );
+                assert!(raw.contains("档案"), "{endpoint} 应带可操作提示: {raw}");
+            }
+        }
+    }
 }

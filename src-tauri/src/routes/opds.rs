@@ -275,6 +275,11 @@ pub async fn archive_detail(State(state): State<Arc<AppState>>, Path(id): Path<i
             }
         };
 
+    // 磁盘上已不存在的档案（手动删除）：返回明确错误而非笼统的 “Error loading pages”
+    if !crate::services::archive::archive_exists(&archive_type, &archive_path) {
+        return opds_response(opds_error_xml("档案文件不存在或已被移动"));
+    }
+
     // 复用 /api/archives/:id/pages 的页表缓存（进程内 + pages 表），
     // 避免每次请求都重开压缩包/重列目录（此前 unrar/7z 每请求起一次子进程）。
     let result = tokio::task::spawn_blocking({

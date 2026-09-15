@@ -28,6 +28,16 @@ pub(crate) fn archive_mtime_secs(path: &str) -> i64 {
     crate::services::fs_ext::mtime_secs(std::path::Path::new(path))
 }
 
+/// 档案已不在磁盘上的统一响应：404 + 可操作提示（提示重新扫描书库）。
+/// 手动从磁盘删除档案后 DB 记录会残留，打开时应先预检（见 `archive_exists`），
+/// 否则会在列目录/解压等深层 I/O 上失败并被 `internal_error` 吞成笼统的 500。
+fn archive_missing_response() -> Response {
+    error_response(
+        StatusCode::NOT_FOUND,
+        "档案文件不存在或已被移动，请重新扫描书库",
+    )
+}
+
 /// 返回路径的父目录（去除末尾分隔符），与 `title`+`parent` 过滤的分组键保持一致。
 fn parent_dir_of(path: &str) -> String {
     std::path::Path::new(path)
@@ -584,6 +594,11 @@ pub async fn get_cover(
             Err(e) => return internal_error(e),
         };
 
+    // 磁盘上已不存在的档案（手动删除/磁盘变动）：回到明确 404，而不是深层 I/O 后 500
+    if !crate::services::archive::archive_exists(&archive_type, &archive_path) {
+        return archive_missing_response();
+    }
+
     let mtime = archive_mtime(&archive_path);
     // ETag 同时纳入覆写页与远程封面，二者任一变化都会使浏览器缓存失效
     let etag_key = cover_override
@@ -718,6 +733,11 @@ pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>)
         Err(e) => return internal_error(e),
     };
 
+    // 磁盘上已不存在的档案：明确 404（见 archive_missing_response）
+    if !crate::services::archive::archive_exists(&archive.archive_type, &archive.path) {
+        return archive_missing_response();
+    }
+
     let archive_path = archive.path.clone();
     let archive_type = archive.archive_type.clone();
     let archive_id = archive.id;
@@ -785,6 +805,11 @@ pub async fn get_page(
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
             Err(e) => return internal_error(e),
         };
+
+    // 磁盘上已不存在的档案：明确 404（见 archive_missing_response）
+    if !crate::services::archive::archive_exists(&archive_type, &archive_path) {
+        return archive_missing_response();
+    }
 
     let mtime = archive_mtime(&archive_path);
     let etag = etag_for_page(id, page_index, mtime);
@@ -955,6 +980,11 @@ pub async fn get_page_thumb(
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
             Err(e) => return internal_error(e),
         };
+
+    // 磁盘上已不存在的档案：明确 404（见 archive_missing_response）
+    if !crate::services::archive::archive_exists(&archive_type, &archive_path) {
+        return archive_missing_response();
+    }
 
     // 缓存命中路径整体放进阻塞线程（exists/stat/read 都是同步 IO），
     // 并校验档案 mtime 标记：档案已变更时旧缩略图作废（清目录后走重新生成）。
@@ -1136,6 +1166,11 @@ pub async fn download_archive_file(
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
             Err(e) => return internal_error(e),
         };
+
+    // 磁盘上已不存在的档案：明确 404（见 archive_missing_response）
+    if !crate::services::archive::archive_exists(&archive_type, &archive_path) {
+        return archive_missing_response();
+    }
 
     if crate::services::is_compressed(&archive_type) {
         // 压缩包：直接流式回传原文件（不解包、不重打包），源文件 mtime 随响应头带回
@@ -1708,6 +1743,11 @@ pub async fn set_archive_cover(
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
         Err(e) => return internal_error(e),
     };
+
+    // 磁盘上已不存在的档案：明确 404（见 archive_missing_response）
+    if !crate::services::archive::archive_exists(&archive_row.archive_type, &archive_row.path) {
+        return archive_missing_response();
+    }
 
     let page_name = if let Some(idx) = payload.page_index {
         if idx < 0 {
