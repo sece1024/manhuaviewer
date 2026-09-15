@@ -278,7 +278,7 @@ export default function Library({ mode = 'library', enableSession }) {
   const toast = useToast();
 
   // 浏览会话：卸载时保存（含滚动位置）、进入时后台与服务器比对
-  const { librarySessions, reconcileLibrary } = useLibrarySession({
+  const { librarySessions, reconcileLibrary, markSessionVerified, sessionIsStale } = useLibrarySession({
     mode,
     sessionEnabled,
     listScrollRef,
@@ -309,7 +309,9 @@ export default function Library({ mode = 'library', enableSession }) {
 
   useEffect(() => {
     const s = sessionEnabled ? librarySessions[mode] : null;
-    if (s && s.archives && s.archives.length > 0) {
+    // 会话记录写入后若发生过影响成员集合的写操作（扫描/删除/导入…），代际会变化，
+    // 该会话视为陈旧：直接重新拉取，不再用旧列表秒开（否则已删档案名会先出现）
+    if (s && !sessionIsStale(s) && s.archives && s.archives.length > 0) {
       // 恢复浏览会话：秒开旧列表，保留已加载分页、展开状态与滚动位置
       setSearch(s.search); searchRef.current = s.search;
       setSortBy(s.sortBy); sortByRef.current = s.sortBy;
@@ -393,6 +395,8 @@ export default function Library({ mode = 'library', enableSession }) {
       setArchives(prev => append ? [...prev, ...data] : data);
       pageRef.current = nextPage;
       setHasMore(data.length >= PAGE_SIZE);
+      // 列表直接来自服务端（首次加载 / 筛选变化 / 写操作后重拉）：可作为会话基准写回
+      markSessionVerified();
     } catch (e) {
       if (id === requestIdRef.current) toast(e.message, 'error');
     } finally {

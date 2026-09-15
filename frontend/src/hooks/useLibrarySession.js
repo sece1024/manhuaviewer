@@ -1,11 +1,25 @@
 import { useCallback, useEffect, useRef } from 'react';
-import api from '../utils/api';
+import api, { membershipGeneration } from '../utils/api';
 import { membershipChanged, idsWithin } from '../utils/listReconcile';
 
 // 会话缓存：{ [mode]: { archives, page, hasMore, search, sortBy, sortOrder,
 // selectedTag, selectedCategory, expandedGroup, groupMembers, scrollTop } }
 // 模块级 —— Library 卸载（进入阅读器等路由）后保留，返回时可秒开旧列表。
 const librarySessions = {};
+
+// 写操作（扫描/删除/导入/改名…）会改变档案成员集合，此时会话里的旧列表必须作废：
+// 否则从设置页扫描完回到书库，会先秒开出已被清理的档案名（比对失败或中途切页时
+// 还会被再次写回会话），表现为“手动删掉的漫画一直在”。
+// 用 api 的成员代际号判定：会话记录写入时的代际，代际变了即视为失效。
+// （用比较而不是注册回调，避免依赖模块加载顺序与 mock 行为。）
+function sessionIsStale(session) {
+  return !session || session.generation !== membershipGeneration();
+}
+
+/// 测试辅助：清空模块级会话缓存（跨用例隔离；模块级缓存不会随卸载消失）。
+export function clearLibrarySessions() {
+  for (const key of Object.keys(librarySessions)) delete librarySessions[key];
+}
 
 /**
  * 书库浏览会话：保存（每帧镜像 + 卸载写入、带滚动位置）与后台一致性比对。
@@ -38,14 +52,24 @@ export default function useLibrarySession({
     latestStateRef.current = snapshot;
   });
 
+  // 会话恢复后是否已通过后台比对确认过：未确认前不允许把当前列表写回会话。
+  // 否则“恢复旧列表 → 比对尚未返回就切走页面”会把可能已陈旧的列表重新固化进会话，
+  // 让已被删除的档案在每次往返中复活。无会话可恢复（首次加载）时直接视为已确认。
+  const sessionVerifiedRef = useRef(false);
+
   // 卸载（进入阅读器等路由）时保存浏览会话，返回时可恢复
   useEffect(() => {
     return () => {
       if (!sessionEnabled) return;
+      if (!sessionVerifiedRef.current) return; // 未经比对确认的列表不写回，避免固化陈旧数据
       const el = listScrollRef.current;
       const st = latestStateRef.current;
       if (st && st.archives && st.archives.length > 0) {
-        librarySessions[mode] = { ...st, scrollTop: el ? el.scrollTop : 0 };
+        librarySessions[mode] = {
+          ...st,
+          scrollTop: el ? el.scrollTop : 0,
+          generation: membershipGeneration(),
+        };
       }
     };
   }, [mode, sessionEnabled, listScrollRef]);
@@ -83,6 +107,7 @@ export default function useLibrarySession({
         setHasMore(data.length >= pageSize);
         setExpandedGroup(null);
         setGroupMembers(null);
+        sessionVerifiedRef.current = true;
         return;
       }
       // 顺序一致 → 合并第一页的字段变化，保留滚动与后续分页
@@ -101,10 +126,16 @@ export default function useLibrarySession({
         });
         return changed ? next : prev;
       });
+      sessionVerifiedRef.current = true;
     } catch (e) {
-      // 已恢复到旧数据；比对失败时静默保留现状
+      // 已恢复到旧数据；比对失败时静默保留现状，但不允许把未确认的列表写回会话
     }
   }, [filterRefs, pageRef, pageSize, setArchives, setHasMore, setExpandedGroup, setGroupMembers]);
 
-  return { librarySessions, reconcileLibrary };
+  /// 首次加载（无会话可恢复）时列表直接来自服务端，视为已确认。
+  const markSessionVerified = useCallback(() => {
+    sessionVerifiedRef.current = true;
+  }, []);
+
+  return { librarySessions, reconcileLibrary, markSessionVerified, sessionIsStale };
 }

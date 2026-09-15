@@ -90,6 +90,28 @@ function _matchesPattern(key, pattern) {
   return key === pattern || key.startsWith(pattern + '/') || key.startsWith(pattern + '?');
 }
 
+// ---- 跨路由浏览会话（Library）失效 ----
+// Library 卸载时会把当前列表写进模块级会话缓存，返回时先恢复旧列表再后台比对，
+// 这是“秒开”的来源。但写操作（扫描/删除/导入等）会改变成员集合：若不在这里一并
+// 作废会话，用户从设置页扫描完再回到书库，会先看到已被清理的档案名，甚至（比对
+// 失败或中途切页时）被再次写回，表现为“删掉的漫画一直在”。
+//
+// 用一个单调递增的代际号而不是回调注册：调用方（useLibrarySession）只需比较自己
+// 记住的代际与当前值，无需在模块加载期注册监听，也就不会受模块加载顺序影响。
+let _membershipGeneration = 0;
+
+/// 当前档案成员代际；每次影响列表成员的写操作都会 +1。
+export function membershipGeneration() {
+  return _membershipGeneration;
+}
+
+/// 作废浏览会话（仅递增代际，避免直接触碰调用方的缓存对象）。
+/// 影响成员集合的写操作在 `_invalidate('/archives')` 里自动调用；
+/// 导出供需要在测试/特殊流程中显式作废的调用方使用。
+export function invalidateLibrarySessions() {
+  _membershipGeneration += 1;
+}
+
 function _invalidate(pattern) {
   _generation += 1; // 使所有 in-flight GET 的缓存回写失效（见 request() 的代数比对）
   for (const key of _cache.keys()) {
@@ -100,6 +122,8 @@ function _invalidate(pattern) {
   for (const key of _inflight.keys()) {
     if (_matchesPattern(key, pattern)) _inflight.delete(key);
   }
+  // 档案成员集合可能已变化：浏览会话不能再用旧列表秒开
+  if (_matchesPattern('/archives', pattern)) _membershipGeneration += 1;
 }
 
 /// 只失效“端点本身及其查询串”的缓存（不含子路径）。

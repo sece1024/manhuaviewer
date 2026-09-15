@@ -2,12 +2,14 @@ import React from 'react';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import Library from '../pages/Library';
+import { clearLibrarySessions } from '../hooks/useLibrarySession';
 import { ToastProvider } from '../components/Toast';
 import { SettingsProvider } from '../hooks/useSettings';
 import { TagsProvider } from '../hooks/useTags';
 
 jest.mock('../utils/api');
 const api = require('../utils/api').default;
+const { membershipGeneration } = require('../utils/api');
 
 function renderLibrary() {
   return render(
@@ -275,6 +277,50 @@ describe('Library 会话恢复（从阅读器返回不丢翻页位置）', () =>
       expect(screen.getByText('第2页漫画1')).toBeInTheDocument();
     });
     expect(screen.getByText('第1页漫画1')).toBeInTheDocument();
+  });
+
+  /// 回归：手动删除磁盘档案后扫描清理，回到书库不得再显示已删除的漫画名。
+  /// 此前浏览会话是模块级缓存，扫描（写操作）不会作废它，返回书库时会先用旧列表
+  /// 秒开——已删档案名会重新出现，比对失败或中途切页时还会被再次写回。
+  test('扫描（写操作）后返回书库：不再显示已删除的漫画', async () => {
+    const survivors = page1; // 扫描后服务端只剩第 1 页这批
+    // 首次进入：服务端返回含“待删除漫画”的列表
+    const withDeleted = [
+      { id: 999, title: '待删除漫画', archive_type: 'folder', page_count: 10, cover_url: '/api/archives/999/cover', tags: [] },
+      ...survivors,
+    ];
+    api.getArchives.mockResolvedValue(withDeleted);
+
+    // 用真实 api.js 的成员代际（automock 会把它变成 jest.fn() 而失去语义），
+    // 并清掉上一个用例遗留的会话缓存，保证本次从干净状态开始。
+    const realGeneration = jest.requireActual('../utils/api').membershipGeneration;
+    membershipGeneration.mockImplementation(() => realGeneration());
+    clearLibrarySessions();
+
+    renderWithSession();
+    await waitFor(() => {
+      expect(screen.getByText('待删除漫画')).toBeInTheDocument();
+    });
+
+    // 进入阅读器 → Library 卸载，当前列表（含待删除漫画）写入浏览会话
+    fireEvent.click(screen.getByText('待删除漫画'));
+    await waitFor(() => {
+      expect(screen.getByText('返回书库')).toBeInTheDocument();
+    });
+
+    // 扫描清理（模拟真实流程：扫描是写操作 → 成员代际递增 → 浏览会话失效）
+    const realInvalidate = jest.requireActual('../utils/api').invalidateLibrarySessions;
+    realInvalidate();
+    await api.scan();
+
+    // 返回书库：服务端已无该档案
+    api.getArchives.mockResolvedValue(survivors);
+    fireEvent.click(screen.getByText('返回书库'));
+
+    await waitFor(() => {
+      expect(screen.getByText('第1页漫画1')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('待删除漫画')).toBeNull();
   });
 });
 describe('Library 卡片密度', () => {
