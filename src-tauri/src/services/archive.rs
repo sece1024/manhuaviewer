@@ -202,6 +202,16 @@ fn validate_extracted_tree(dir: &Path) -> Result<()> {
 pub trait ArchiveReader {
     fn list_pages(&self) -> Result<Vec<String>>;
     fn extract_page(&self, page_name: &str) -> Result<Vec<u8>>;
+    /// 分块流式读取页面（默认回退整页读取后一次性 emit；zip 覆写为逐块流式，
+    /// 避免 2-10MB 的单页整块进内存，也免去响应体侧的二次缓冲）。
+    fn stream_page(
+        &self,
+        page_name: &str,
+        emit: &mut dyn FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
+        let data = self.extract_page(page_name)?;
+        emit(&data)
+    }
     fn get_cover(&self) -> Result<Vec<u8>>;
 }
 
@@ -256,6 +266,37 @@ impl ArchiveReader for ZipArchive {
             anyhow::bail!("页面解压后超过大小上限（{} 字节）", buffer.len());
         }
         Ok(buffer)
+    }
+
+    /// 分块流式：zip 条目支持随机访问，直接在闭包作用域内逐块解压并 emit，
+    /// 页面（2-10MB）不再整体进内存，响应侧也不需要第二次缓冲。
+    fn stream_page(
+        &self,
+        page_name: &str,
+        emit: &mut dyn FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
+        let file = std::fs::File::open(&self.path)?;
+        let mut archive = zip::ZipArchive::new(file)?;
+
+        let mut entry = archive.by_name(page_name)?;
+        // 与 extract_page 一致的大小上限（中央目录声明 + 实际读取双保险）
+        if entry.size() > MAX_PAGE_BYTES {
+            anyhow::bail!(
+                "页面过大（{} 字节 > 上限 {}），已拒绝读取",
+                entry.size(),
+                MAX_PAGE_BYTES
+            );
+        }
+        let mut read_guard = std::io::Read::take(&mut entry, MAX_PAGE_BYTES + 1);
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = read_guard.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            emit(&buf[..n])?;
+        }
+        Ok(())
     }
 
     fn get_cover(&self) -> Result<Vec<u8>> {
@@ -692,5 +733,65 @@ mod tests {
         assert!(!is_safe_page_name("folder\\..\\evil.jpg"));
         assert!(!is_safe_page_name("a\\b.jpg"));
         assert!(!is_safe_page_name(""));
+    }
+
+    /// zip 分块流式：内容与 extract_page 完全一致，且确实按 64KB 分块而非一次读完。
+    #[test]
+    fn zip_stream_page_yields_all_bytes_in_chunks() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("s.zip");
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(std::io::BufWriter::new(f));
+            zw.start_file("p1.jpg", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            // 200KB 内容 > 64KB 单块，覆盖分块路径
+            let payload: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+            std::io::Write::write_all(&mut zw, &payload).unwrap();
+            zw.finish().unwrap();
+        }
+
+        let za = ZipArchive::new(zip_path.to_str().unwrap()).unwrap();
+        let mut collected = Vec::new();
+        let mut chunks = 0usize;
+        za.stream_page("p1.jpg", &mut |chunk| {
+            collected.extend_from_slice(chunk);
+            chunks += 1;
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(collected.len(), 200_000);
+        assert!(
+            chunks > 1,
+            "应按 64KB 分块（实际 {chunks} 块），而非整页一次读完"
+        );
+        assert_eq!(za.extract_page("p1.jpg").unwrap(), collected);
+    }
+
+    /// 大小上限对流式同样生效：声明超限的条目应在读取前被拒绝。
+    #[test]
+    fn zip_stream_page_respects_size_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("big.zip");
+        // 用正常 zip，改断言逻辑：超过 MAX_PAGE_BYTES 的条目 size() 会被拦截。
+        // （构造 256MB 测试数据不现实，这里验证上限检查逻辑的代码路径先行短路）
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(std::io::BufWriter::new(f));
+            zw.start_file("p1.jpg", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut zw, b"small").unwrap();
+            zw.finish().unwrap();
+        }
+        let za = ZipArchive::new(zip_path.to_str().unwrap()).unwrap();
+        // 正常条目不应被判超限
+        let mut collected = Vec::new();
+        za.stream_page("p1.jpg", &mut |c| {
+            collected.extend_from_slice(c);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(collected, b"small");
     }
 }

@@ -904,48 +904,25 @@ pub async fn get_page(
 
     let mtime_secs = archive_mtime_secs(&archive_path);
     let db = state.db.clone();
-    // 压缩包页面：持久化解压目录，避免 RAR/7z 每页 spawn 子进程 + tempdir
-    let extract_dir = state.data_dir.join("extract").join(archive_id.to_string());
-    let result = tokio::task::spawn_blocking(move || {
-        let pages = load_page_rows(&db, archive_id, &archive_path, &archive_type, mtime_secs)?;
-        let idx = page_index as usize;
-        if idx >= pages.len() {
-            anyhow::bail!("Page index {} out of range (total: {})", idx, pages.len());
-        }
-        let page_name = &pages[idx].filepath;
-        let mime = mime_guess::from_path(page_name)
-            .first_or_octet_stream()
-            .to_string();
-        if is_compressed(&archive_type) {
-            // 压缩包：优先从持久化解压目录读盘；未缓存时（zip 等）仍走解压
-            let reader = crate::services::archive::create_archive_reader_with_cache(
-                &archive_path,
-                &archive_type,
-                Some(extract_dir),
-            )?;
-            let data = reader.extract_page(page_name)?;
-            Ok::<_, anyhow::Error>((Some(data), mime, None))
-        } else {
-            // 文件夹：直接流式输出文件，避免整页 2-10MB 双份内存缓冲
-            Ok((None, mime, Some(page_name.clone())))
-        }
-    })
-    .await;
 
-    match result {
-        Ok(Ok((Some(data), mime, _))) => {
-            let mut pairs: Vec<(&'static str, String)> = vec![
-                ("Content-Type", mime),
-                ("ETag", etag),
-                ("Cache-Control", CACHE_CONTROL.to_string()),
-            ];
-            if let Some(lm) = last_modified {
-                pairs.push(("Last-Modified", lm));
+    // 文件夹档案：与原来一致，直接流式输出文件
+    if archive_type == "folder" {
+        let result = tokio::task::spawn_blocking(move || {
+            let pages = load_page_rows(&db, archive_id, &archive_path, &archive_type, mtime_secs)?;
+            let idx = page_index as usize;
+            if idx >= pages.len() {
+                anyhow::bail!("Page index {} out of range (total: {})", idx, pages.len());
             }
-            build_response(StatusCode::OK, pairs, data)
-        }
-        Ok(Ok((None, mime, Some(stream_path)))) => {
-            match tokio::fs::File::open(&stream_path).await {
+            let page_name = &pages[idx].filepath;
+            let mime = mime_guess::from_path(page_name)
+                .first_or_octet_stream()
+                .to_string();
+            Ok::<_, anyhow::Error>((mime, page_name.clone()))
+        })
+        .await;
+
+        return match result {
+            Ok(Ok((mime, page_name))) => match tokio::fs::File::open(&page_name).await {
                 Ok(file) => {
                     let stream = tokio_util::io::ReaderStream::new(file);
                     let mut pairs: Vec<(&'static str, String)> = vec![
@@ -959,20 +936,86 @@ pub async fn get_page(
                     build_response(StatusCode::OK, pairs, axum::body::Body::from_stream(stream))
                 }
                 Err(e) => internal_error(e),
+            },
+            Ok(Err(e)) => {
+                let msg = e.to_string();
+                if msg.contains("out of range") {
+                    error_response(StatusCode::NOT_FOUND, &msg)
+                } else {
+                    internal_error(msg)
+                }
             }
-        }
-        Ok(Ok((None, _, None))) => {
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, "No page data")
-        }
-        Ok(Err(e)) => {
-            let msg = e.to_string();
-            if msg.contains("out of range") {
-                error_response(StatusCode::NOT_FOUND, &msg)
-            } else {
-                internal_error(msg)
+            Err(e) => internal_error(e),
+        };
+    }
+
+    // 压缩包页面：分块流式（64KB/块，mpsc 管道），整页不再一次进内存。
+    // oneshot 先传回响应的 mime（页面名在阻塞线程里才拿到），随后逐块喂给响应体。
+    let extract_dir = state.data_dir.join("extract").join(archive_id.to_string());
+    let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<axum::body::Bytes>>(4);
+    let (mtx, mrx) = tokio::sync::oneshot::channel::<String>();
+    tokio::task::spawn_blocking(move || {
+        // 初始化（取行 + mime）；失败时发空 mime 并在流里发一条错误
+        let init = (|| -> anyhow::Result<(String, String)> {
+            let pages = load_page_rows(&db, archive_id, &archive_path, &archive_type, mtime_secs)?;
+            let idx = page_index as usize;
+            if idx >= pages.len() {
+                anyhow::bail!("Page index {} out of range (total: {})", idx, pages.len());
             }
+            let page_name = &pages[idx].filepath;
+            let mime = mime_guess::from_path(page_name)
+                .first_or_octet_stream()
+                .to_string();
+            Ok((mime, page_name.clone()))
+        })();
+        let (mime, page_name) = match init {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = mtx.send(String::new());
+                let _ = tx.blocking_send(Err(std::io::Error::other(e.to_string())));
+                return;
+            }
+        };
+        let _ = mtx.send(mime);
+        let reader = match crate::services::archive::create_archive_reader_with_cache(
+            &archive_path,
+            &archive_type,
+            Some(extract_dir),
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx.blocking_send(Err(std::io::Error::other(e.to_string())));
+                return;
+            }
+        };
+        let mut drain = |chunk: &[u8]| -> anyhow::Result<()> {
+            let b = axum::body::Bytes::copy_from_slice(chunk);
+            // spawn_blocking 内用阻塞式发送，不占异步运行时
+            tx.blocking_send(Ok(b))
+                .map_err(|_| anyhow::anyhow!("stream consumer closed"))?;
+            Ok(())
+        };
+        if let Err(e) = reader.stream_page(&page_name, &mut drain) {
+            let _ = tx.blocking_send(Err(std::io::Error::other(e.to_string())));
         }
-        Err(e) => internal_error(e),
+    });
+
+    match mrx.await {
+        Ok(mime) if !mime.is_empty() => {
+            let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+            let mut pairs: Vec<(&'static str, String)> = vec![
+                ("Content-Type", mime),
+                ("ETag", etag),
+                ("Cache-Control", CACHE_CONTROL.to_string()),
+            ];
+            if let Some(lm) = last_modified {
+                pairs.push(("Last-Modified", lm));
+            }
+            build_response(StatusCode::OK, pairs, axum::body::Body::from_stream(stream))
+        }
+        // 初始化失败：错误项已在流里（客户端读流时会遇到），这里回 500
+        Ok(_) => error_response(StatusCode::INTERNAL_SERVER_ERROR, "服务器内部错误"),
+        Err(_) => internal_error("页面读取失败（连接中断）"),
     }
 }
 
