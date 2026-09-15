@@ -88,6 +88,96 @@ fn opds_error_xml(message: &str) -> String {
     )
 }
 
+/// 标准 OPDS 目录 feed 骨架：id + 标题 + 更新时间 + 自引用链接 + `/opds` 起始链接 + 条目区。
+/// 除根目录（含更多入口链接）与错误响应外，所有目录共用这一模板，
+/// 改 XML 结构只需动这一处。
+fn opds_feed(id: &str, title: &str, self_href: &str, entries: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
+  <id>{id}</id>
+  <title>{title}</title>
+  <updated>{}</updated>
+  <link rel="self" href="{self_href}" type="application/atom+xml"/>
+  <link rel="start" href="/opds" type="application/atom+xml"/>
+  {entries}
+</feed>"#,
+        current_timestamp()
+    )
+}
+
+/// 单条 OPDS 条目：标题 + 一条链接 + id + updated + 可选的 content 文本。
+/// 目录类（acquisition）、子目录类（subsection）与页面图片类（image）条目
+/// 只是 rel/href/type/content 不同，结构完全一致，统一用一个建造器生成。
+fn opds_entry(
+    title: &str,
+    link_rel: &str,
+    link_href: &str,
+    link_type: &str,
+    entry_id: &str,
+    updated: &str,
+    content: Option<&str>,
+) -> String {
+    let content_xml = content
+        .map(|c| format!("\n    <content type=\"text\">{}</content>", xml_escape(c)))
+        .unwrap_or_default();
+    format!(
+        r#"
+  <entry>
+    <title>{}</title>
+    <link rel="{}" href="{}" type="{}"/>
+    <id>{}</id>
+    <updated>{}</updated>{}
+  </entry>"#,
+        xml_escape(title),
+        link_rel,
+        link_href,
+        link_type,
+        entry_id,
+        updated,
+        content_xml
+    )
+}
+
+/// acquisition 类条目：指向档案详情，附 "N pages - type" 描述。
+fn archive_entry(title: &str, archive_id: i64, updated: &str, content: &str) -> String {
+    opds_entry(
+        title,
+        "http://opds-spec.org/acquisition",
+        &format!("/opds/archive/{}", archive_id),
+        "application/atom+xml",
+        &format!("manhuaviewer-archive-{}", archive_id),
+        updated,
+        Some(content),
+    )
+}
+
+/// subsection 类条目：指向标签/分类子目录。
+fn subsection_entry(title: &str, entry_id: &str, link_href: &str, updated: &str) -> String {
+    opds_entry(
+        title,
+        "subsection",
+        link_href,
+        "application/atom+xml",
+        entry_id,
+        updated,
+        None,
+    )
+}
+
+/// image 类条目：档案详情里的页面，链接类型用页面的真实 MIME。
+fn image_entry(filename: &str, image_type: &str, archive_id: i64, page_index: usize) -> String {
+    opds_entry(
+        filename,
+        "http://opds-spec.org/image",
+        &format!("/api/archives/{}/pages/{}", archive_id, page_index),
+        image_type,
+        &format!("manhuaviewer-page-{}-{}", archive_id, page_index),
+        &current_timestamp(),
+        None,
+    )
+}
+
 pub async fn root_catalog(State(_state): State<Arc<AppState>>) -> Response {
     let ts = current_timestamp();
     let xml = format!(
@@ -142,38 +232,23 @@ pub async fn catalog(
     .await
     {
         Ok(archives) => {
-            let mut entries = String::new();
+            let entries = archives
+                .iter()
+                .map(|archive| {
+                    archive_entry(
+                        &archive.title,
+                        archive.id,
+                        &archive.updated_at,
+                        &format!("{} pages - {}", archive.page_count, archive.archive_type),
+                    )
+                })
+                .collect::<String>();
 
-            for archive in archives {
-                entries.push_str(&format!(r#"
-  <entry>
-    <title>{}</title>
-    <link rel="http://opds-spec.org/acquisition" href="/opds/archive/{}" type="application/atom+xml"/>
-    <id>manhuaviewer-archive-{}</id>
-    <updated>{}</updated>
-    <content type="text">{} pages - {}</content>
-  </entry>"#,
-                    xml_escape(&archive.title),
-                    archive.id,
-                    archive.id,
-                    archive.updated_at,
-                    archive.page_count,
-                    xml_escape(&archive.archive_type)
-                ));
-            }
-
-            opds_response(format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
-  <id>manhuaviewer-catalog</id>
-  <title>All Archives</title>
-  <updated>{}</updated>
-  <link rel="self" href="/opds/catalog" type="application/atom+xml"/>
-  <link rel="start" href="/opds" type="application/atom+xml"/>
-  {}
-</feed>"#,
-                current_timestamp(),
-                entries
+            opds_response(opds_feed(
+                "manhuaviewer-catalog",
+                "All Archives",
+                "/opds/catalog",
+                &entries,
             ))
         }
         Err(_) => opds_response(
@@ -206,59 +281,42 @@ pub async fn archive_detail(State(state): State<Arc<AppState>>, Path(id): Path<i
         let db = state.db.clone();
         move || {
             let mtime = crate::routes::archives::archive_mtime_secs(&archive_path);
-            crate::routes::archives::load_page_rows(&db, id, &archive_path, &archive_type, mtime)
+            crate::services::page_cache::load_page_rows(
+                &db,
+                id,
+                &archive_path,
+                &archive_type,
+                mtime,
+            )
         }
     })
     .await;
 
     match result {
         Ok(Ok(pages)) => {
-            let mut entries = String::new();
+            let entries = pages
+                .iter()
+                .enumerate()
+                .map(|(i, page)| {
+                    let filename = std::path::Path::new(&page.filepath)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    // 按真实扩展名给出 image type（此前硬编码 image/jpeg，PNG/WebP/AVIF 均错标）
+                    let image_type = mime_guess::from_path(&page.filepath)
+                        .first()
+                        .map(|m| m.to_string())
+                        .unwrap_or_else(|| "application/octet-stream".to_string());
+                    image_entry(&filename, &image_type, id, i)
+                })
+                .collect::<String>();
 
-            for (i, page) in pages.iter().enumerate() {
-                let filename = std::path::Path::new(&page.filepath)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy();
-                // 按真实扩展名给出 image type（此前硬编码 image/jpeg，PNG/WebP/AVIF 均错标）
-                let image_type = mime_guess::from_path(&page.filepath)
-                    .first()
-                    .map(|m| m.to_string())
-                    .unwrap_or_else(|| "application/octet-stream".to_string());
-
-                entries.push_str(&format!(
-                    r#"
-  <entry>
-    <title>{}</title>
-    <link rel="http://opds-spec.org/image" href="/api/archives/{}/pages/{}" type="{image_type}"/>
-    <id>manhuaviewer-page-{}-{}</id>
-    <updated>{}</updated>
-  </entry>"#,
-                    xml_escape(&filename),
-                    id,
-                    i,
-                    id,
-                    i,
-                    current_timestamp()
-                ));
-            }
-
-            opds_response(format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
-  <id>manhuaviewer-archive-{}-pages</id>
-  <title>{} ({} pages)</title>
-  <updated>{}</updated>
-  <link rel="self" href="/opds/archive/{}" type="application/atom+xml"/>
-  <link rel="start" href="/opds" type="application/atom+xml"/>
-  {}
-</feed>"#,
-                id,
-                xml_escape(&archive_title),
-                pages.len(),
-                current_timestamp(),
-                id,
-                entries
+            let title = format!("{} ({} pages)", archive_title, pages.len());
+            opds_response(opds_feed(
+                &format!("manhuaviewer-archive-{}-pages", id),
+                &title,
+                &format!("/opds/archive/{}", id),
+                &entries,
             ))
         }
         Ok(Err(e)) => {
@@ -275,38 +333,23 @@ pub async fn archive_detail(State(state): State<Arc<AppState>>, Path(id): Path<i
 pub async fn recent(State(state): State<Arc<AppState>>) -> Response {
     match run_db(&state, move |db| db.get_history(None, 20, 0)).await {
         Ok((history, _total)) => {
-            let mut entries = String::new();
+            let entries = history
+                .iter()
+                .map(|(h, title, _path, _archive_type)| {
+                    archive_entry(
+                        title,
+                        h.archive_id,
+                        &h.updated_at,
+                        &format!("Page {} of {}", h.page_index + 1, h.total_pages),
+                    )
+                })
+                .collect::<String>();
 
-            for (h, title, _path, _archive_type) in history.iter() {
-                entries.push_str(&format!(r#"
-  <entry>
-    <title>{}</title>
-    <link rel="http://opds-spec.org/acquisition" href="/opds/archive/{}" type="application/atom+xml"/>
-    <id>manhuaviewer-archive-{}</id>
-    <updated>{}</updated>
-    <content type="text">Page {} of {}</content>
-  </entry>"#,
-                    xml_escape(title),
-                    h.archive_id,
-                    h.archive_id,
-                    h.updated_at,
-                    h.page_index + 1,
-                    h.total_pages
-                ));
-            }
-
-            opds_response(format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
-  <id>manhuaviewer-recent</id>
-  <title>Recent Reading</title>
-  <updated>{}</updated>
-  <link rel="self" href="/opds/recent" type="application/atom+xml"/>
-  <link rel="start" href="/opds" type="application/atom+xml"/>
-  {}
-</feed>"#,
-                current_timestamp(),
-                entries
+            opds_response(opds_feed(
+                "manhuaviewer-recent",
+                "Recent Reading",
+                "/opds/recent",
+                &entries,
             ))
         }
         Err(_) => opds_response(
@@ -323,42 +366,28 @@ pub async fn recent(State(state): State<Arc<AppState>>) -> Response {
 pub async fn tags_list(State(state): State<Arc<AppState>>) -> Response {
     match run_db(&state, |db| db.list_tags()).await {
         Ok(tags) => {
-            let mut entries = String::new();
+            let entries = tags
+                .iter()
+                .map(|tag| {
+                    let display_name = if tag.namespace.is_empty() {
+                        tag.name.clone()
+                    } else {
+                        format!("{}:{}", tag.namespace, tag.name)
+                    };
+                    subsection_entry(
+                        &display_name,
+                        &format!("manhuaviewer-tag-{}", tag.id),
+                        &format!("/opds/tag/{}", tag.id),
+                        &current_timestamp(),
+                    )
+                })
+                .collect::<String>();
 
-            for tag in tags {
-                let display_name = if tag.namespace.is_empty() {
-                    tag.name.clone()
-                } else {
-                    format!("{}:{}", tag.namespace, tag.name)
-                };
-
-                entries.push_str(&format!(
-                    r#"
-  <entry>
-    <title>{}</title>
-    <link rel="subsection" href="/opds/tag/{}" type="application/atom+xml"/>
-    <id>manhuaviewer-tag-{}</id>
-    <updated>{}</updated>
-  </entry>"#,
-                    xml_escape(&display_name),
-                    tag.id,
-                    tag.id,
-                    current_timestamp()
-                ));
-            }
-
-            opds_response(format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
-  <id>manhuaviewer-tags</id>
-  <title>Tags</title>
-  <updated>{}</updated>
-  <link rel="self" href="/opds/tags" type="application/atom+xml"/>
-  <link rel="start" href="/opds" type="application/atom+xml"/>
-  {}
-</feed>"#,
-                current_timestamp(),
-                entries
+            opds_response(opds_feed(
+                "manhuaviewer-tags",
+                "Tags",
+                "/opds/tags",
+                &entries,
             ))
         }
         Err(_) => opds_response(
@@ -385,41 +414,23 @@ pub async fn tag_archives(State(state): State<Arc<AppState>>, Path(tag_id): Path
 
     match result {
         Ok((tag_name, archives)) => {
-            let mut entries = String::new();
+            let entries = archives
+                .iter()
+                .map(|archive| {
+                    archive_entry(
+                        &archive.title,
+                        archive.id,
+                        &archive.updated_at,
+                        &format!("{} pages - {}", archive.page_count, archive.archive_type),
+                    )
+                })
+                .collect::<String>();
 
-            for archive in archives {
-                entries.push_str(&format!(r#"
-  <entry>
-    <title>{}</title>
-    <link rel="http://opds-spec.org/acquisition" href="/opds/archive/{}" type="application/atom+xml"/>
-    <id>manhuaviewer-archive-{}</id>
-    <updated>{}</updated>
-    <content type="text">{} pages - {}</content>
-  </entry>"#,
-                    xml_escape(&archive.title),
-                    archive.id,
-                    archive.id,
-                    archive.updated_at,
-                    archive.page_count,
-                    xml_escape(&archive.archive_type)
-                ));
-            }
-
-            opds_response(format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
-  <id>manhuaviewer-tag-{}-archives</id>
-  <title>Archives with tag: {}</title>
-  <updated>{}</updated>
-  <link rel="self" href="/opds/tag/{}" type="application/atom+xml"/>
-  <link rel="start" href="/opds" type="application/atom+xml"/>
-  {}
-</feed>"#,
-                tag_id,
-                xml_escape(&tag_name),
-                current_timestamp(),
-                tag_id,
-                entries
+            opds_response(opds_feed(
+                &format!("manhuaviewer-tag-{}-archives", tag_id),
+                &format!("Archives with tag: {}", tag_name),
+                &format!("/opds/tag/{}", tag_id),
+                &entries,
             ))
         }
         Err(e) => {
@@ -432,36 +443,23 @@ pub async fn tag_archives(State(state): State<Arc<AppState>>, Path(tag_id): Path
 pub async fn categories_list(State(state): State<Arc<AppState>>) -> Response {
     match run_db(&state, |db| db.list_categories()).await {
         Ok(categories) => {
-            let mut entries = String::new();
+            let entries = categories
+                .iter()
+                .map(|category| {
+                    subsection_entry(
+                        &category.name,
+                        &format!("manhuaviewer-category-{}", category.id),
+                        &format!("/opds/category/{}", category.id),
+                        &category.created_at,
+                    )
+                })
+                .collect::<String>();
 
-            for category in categories {
-                entries.push_str(&format!(
-                    r#"
-  <entry>
-    <title>{}</title>
-    <link rel="subsection" href="/opds/category/{}" type="application/atom+xml"/>
-    <id>manhuaviewer-category-{}</id>
-    <updated>{}</updated>
-  </entry>"#,
-                    xml_escape(&category.name),
-                    category.id,
-                    category.id,
-                    category.created_at
-                ));
-            }
-
-            opds_response(format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
-  <id>manhuaviewer-categories</id>
-  <title>Categories</title>
-  <updated>{}</updated>
-  <link rel="self" href="/opds/categories" type="application/atom+xml"/>
-  <link rel="start" href="/opds" type="application/atom+xml"/>
-  {}
-</feed>"#,
-                current_timestamp(),
-                entries
+            opds_response(opds_feed(
+                "manhuaviewer-categories",
+                "Categories",
+                "/opds/categories",
+                &entries,
             ))
         }
         Err(_) => opds_response(
@@ -493,40 +491,23 @@ pub async fn category_archives(
             if category_name.is_empty() {
                 return opds_response(opds_error_xml("Category not found"));
             }
-            let mut entries = String::new();
-            for archive in archives {
-                entries.push_str(&format!(r#"
-  <entry>
-    <title>{}</title>
-    <link rel="http://opds-spec.org/acquisition" href="/opds/archive/{}" type="application/atom+xml"/>
-    <id>manhuaviewer-archive-{}</id>
-    <updated>{}</updated>
-    <content type="text">{} pages - {}</content>
-  </entry>"#,
-                    xml_escape(&archive.title),
-                    archive.id,
-                    archive.id,
-                    archive.updated_at,
-                    archive.page_count,
-                    xml_escape(&archive.archive_type)
-                ));
-            }
+            let entries = archives
+                .iter()
+                .map(|archive| {
+                    archive_entry(
+                        &archive.title,
+                        archive.id,
+                        &archive.updated_at,
+                        &format!("{} pages - {}", archive.page_count, archive.archive_type),
+                    )
+                })
+                .collect::<String>();
 
-            opds_response(format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
-  <id>manhuaviewer-category-{}-archives</id>
-  <title>Category: {}</title>
-  <updated>{}</updated>
-  <link rel="self" href="/opds/category/{}" type="application/atom+xml"/>
-  <link rel="start" href="/opds" type="application/atom+xml"/>
-  {}
-</feed>"#,
-                category_id,
-                xml_escape(&category_name),
-                current_timestamp(),
-                category_id,
-                entries
+            opds_response(opds_feed(
+                &format!("manhuaviewer-category-{}-archives", category_id),
+                &format!("Category: {}", category_name),
+                &format!("/opds/category/{}", category_id),
+                &entries,
             ))
         }
         Err(e) => {

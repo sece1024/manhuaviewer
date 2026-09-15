@@ -20,31 +20,12 @@ static THUMB_TOUCH: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<i64, std::time::Instant>>,
 > = std::sync::OnceLock::new();
 
-/// 进程内页表缓存：(archive_id) -> (mtime_secs, Arc<页面行>)
-/// 消灭翻页/缩略图热路径里每页请求的两类重复工作：
-/// 压缩包档案的 2 次 DB 查询（get_page_list_mtime + get_pages）、
-/// 文件夹档案的每次 read_dir 全扫 + stat（此前一本 200 页 = O(pages²)）。
-/// 档案 mtime 变化即失效；容量满时逐出任意一项（个人书库规模足够）。
-const PAGE_LIST_CACHE_MAX: usize = 256;
-type PageListCache = std::sync::Mutex<
-    std::collections::HashMap<i64, (i64, std::sync::Arc<Vec<crate::db::PageRow>>)>,
->;
-static PAGE_LIST_CACHE: std::sync::OnceLock<PageListCache> = std::sync::OnceLock::new();
-
-fn page_list_cache() -> &'static PageListCache {
-    PAGE_LIST_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-}
-
 fn archive_mtime(path: &str) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
 pub(crate) fn archive_mtime_secs(path: &str) -> i64 {
     crate::services::fs_ext::mtime_secs(std::path::Path::new(path))
-}
-
-fn is_compressed(archive_type: &str) -> bool {
-    matches!(archive_type, "zip" | "rar" | "cbz" | "cbr" | "7z")
 }
 
 /// 返回路径的父目录（去除末尾分隔符），与 `title`+`parent` 过滤的分组键保持一致。
@@ -164,84 +145,6 @@ fn group_archives(rows: Vec<crate::db::ArchiveRow>) -> Vec<ListItem> {
             }
         })
         .collect()
-}
-
-fn to_page_rows(archive_id: i64, list: &[String]) -> Vec<crate::db::PageRow> {
-    list.iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let filename = std::path::Path::new(p)
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            crate::db::PageRow {
-                id: i as i64,
-                archive_id,
-                filename,
-                filepath: p.clone(),
-                sort_order: i as i64,
-            }
-        })
-        .collect()
-}
-
-/// Resolve the page list for an archive, using the cached `pages` table when it
-/// is still valid (compressed archives whose file mtime is unchanged), falling
-/// back to a full archive scan otherwise. Folder archives always scan live.
-/// Runs on a blocking thread and needs `db` for the cache.
-/// Returns an Arc so every hot-path caller shares one page table instead of
-/// cloning (进程内缓存见 PAGE_LIST_CACHE)。
-/// 亦被 OPDS 档案详情复用，避免其每次都重开压缩包/重列目录。
-pub(crate) fn load_page_rows(
-    db: &crate::db::Database,
-    archive_id: i64,
-    archive_path: &str,
-    archive_type: &str,
-    mtime_secs: i64,
-) -> anyhow::Result<std::sync::Arc<Vec<crate::db::PageRow>>> {
-    // 进程内缓存命中（mtime 未变）：跳过 DB 与磁盘扫描
-    {
-        let cache = page_list_cache().lock().unwrap();
-        if let Some((mt, rows)) = cache.get(&archive_id) {
-            if *mt == mtime_secs {
-                return Ok(rows.clone());
-            }
-        }
-    }
-
-    let reader = crate::services::archive::create_archive_reader(archive_path, archive_type)?;
-    let rows = if is_compressed(archive_type) {
-        let cached_mtime = db.get_page_list_mtime(archive_id).ok().flatten();
-        if cached_mtime == Some(mtime_secs) {
-            let cached = db.get_pages(archive_id).unwrap_or_default();
-            if !cached.is_empty() {
-                cached
-            } else {
-                let list = reader.list_pages()?;
-                let rows = to_page_rows(archive_id, &list);
-                let _ = db.save_pages(archive_id, &rows, mtime_secs);
-                rows
-            }
-        } else {
-            let list = reader.list_pages()?;
-            let rows = to_page_rows(archive_id, &list);
-            let _ = db.save_pages(archive_id, &rows, mtime_secs);
-            rows
-        }
-    } else {
-        to_page_rows(archive_id, &reader.list_pages()?)
-    };
-
-    let arc = std::sync::Arc::new(rows);
-    let mut cache = page_list_cache().lock().unwrap();
-    if !cache.contains_key(&archive_id) && cache.len() >= PAGE_LIST_CACHE_MAX {
-        if let Some(key) = cache.keys().next().copied() {
-            cache.remove(&key);
-        }
-    }
-    cache.insert(archive_id, (mtime_secs, arc.clone()));
-    Ok(arc)
 }
 
 fn etag_for_page(id: i64, page_index: i64, mtime: Option<SystemTime>) -> String {
@@ -822,7 +725,13 @@ pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>)
     let db = state.db.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        load_page_rows(&db, archive_id, &archive_path, &archive_type, mtime_secs)
+        crate::services::page_cache::load_page_rows(
+            &db,
+            archive_id,
+            &archive_path,
+            &archive_type,
+            mtime_secs,
+        )
     })
     .await;
 
@@ -905,7 +814,13 @@ pub async fn get_page(
     // 文件夹档案：与原来一致，直接流式输出文件
     if archive_type == "folder" {
         let result = tokio::task::spawn_blocking(move || {
-            let pages = load_page_rows(&db, archive_id, &archive_path, &archive_type, mtime_secs)?;
+            let pages = crate::services::page_cache::load_page_rows(
+                &db,
+                archive_id,
+                &archive_path,
+                &archive_type,
+                mtime_secs,
+            )?;
             let idx = page_index as usize;
             if idx >= pages.len() {
                 anyhow::bail!("Page index {} out of range (total: {})", idx, pages.len());
@@ -954,7 +869,13 @@ pub async fn get_page(
     tokio::task::spawn_blocking(move || {
         // 初始化（取行 + mime）；失败时发空 mime 并在流里发一条错误
         let init = (|| -> anyhow::Result<(String, String)> {
-            let pages = load_page_rows(&db, archive_id, &archive_path, &archive_type, mtime_secs)?;
+            let pages = crate::services::page_cache::load_page_rows(
+                &db,
+                archive_id,
+                &archive_path,
+                &archive_type,
+                mtime_secs,
+            )?;
             let idx = page_index as usize;
             if idx >= pages.len() {
                 anyhow::bail!("Page index {} out of range (total: {})", idx, pages.len());
@@ -1107,7 +1028,13 @@ pub async fn get_page_thumb(
     // 压缩包页面：持久化解压目录，避免 RAR/7z 每页 spawn 子进程 + tempdir
     let extract_dir = state.data_dir.join("extract").join(id.to_string());
     let result = tokio::task::spawn_blocking(move || {
-        let pages = load_page_rows(&db, id, &archive_path, &archive_type, mtime_secs)?;
+        let pages = crate::services::page_cache::load_page_rows(
+            &db,
+            id,
+            &archive_path,
+            &archive_type,
+            mtime_secs,
+        )?;
         let idx = page_index as usize;
         if idx >= pages.len() {
             anyhow::bail!("Page index {} out of range (total: {})", idx, pages.len());
@@ -1210,7 +1137,7 @@ pub async fn download_archive_file(
             Err(e) => return internal_error(e),
         };
 
-    if is_compressed(&archive_type) {
+    if crate::services::is_compressed(&archive_type) {
         // 压缩包：直接流式回传原文件（不解包、不重打包），源文件 mtime 随响应头带回
         let source_mtime = archive_mtime_secs(&archive_path);
         match tokio::fs::File::open(&archive_path).await {
@@ -1791,7 +1718,8 @@ pub async fn set_archive_cover(
         let db = state.db.clone();
         let mtime_secs = archive_mtime_secs(&path);
         let name = tokio::task::spawn_blocking(move || {
-            let pages = load_page_rows(&db, id, &path, &atype, mtime_secs)?;
+            let pages =
+                crate::services::page_cache::load_page_rows(&db, id, &path, &atype, mtime_secs)?;
             let i = idx as usize;
             if i >= pages.len() {
                 anyhow::bail!("Page index {} out of range (total: {})", i, pages.len());

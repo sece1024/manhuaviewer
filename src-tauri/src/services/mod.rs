@@ -4,6 +4,7 @@ pub mod cbz;
 pub mod cleanup;
 pub mod fs_ext;
 pub mod metadata;
+pub mod page_cache;
 pub mod scanner;
 pub mod thumbnail;
 
@@ -20,4 +21,9 @@ pub fn is_image_file(name: &str) -> bool {
             IMAGE_EXTENSIONS.contains(&ext.as_str())
         })
         .unwrap_or(false)
+}
+
+/// 压缩包类型的档案（相对 folder：页面列表需要缓存 / 解压）。
+pub fn is_compressed(archive_type: &str) -> bool {
+    matches!(archive_type, "zip" | "rar" | "cbz" | "cbr" | "7z")
 }
