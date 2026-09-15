@@ -1,0 +1,674 @@
+//! 档案（archives 表）相关的查询：档案 CRUD、扫描入库/批量 upsert、分组、
+//! 压缩包页表缓存、缩略图路径登记与 LRU 淘汰。
+
+use rusqlite::{OptionalExtension, Result};
+
+use super::{
+    archive_row, archive_row_with_remote_cover, log_and_skip, order_expr_for, path_is_within,
+    ArchiveFilters, ArchiveRow, Database, PageRow, ARCHIVE_COLUMNS,
+};
+
+impl Database {
+    pub fn get_archive(&self, id: i64) -> Result<Option<ArchiveRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at FROM archives WHERE id = ?"
+        )?;
+        let mut rows = stmt.query_map([id], archive_row)?;
+
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 一次查询取回档案行与其远程封面 URL，避免封面请求两次往返 DB。
+    pub fn get_archive_with_remote_cover(
+        &self,
+        id: i64,
+    ) -> Result<Option<(ArchiveRow, Option<String>)>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at, remote_cover FROM archives WHERE id = ?"
+        )?;
+        let mut rows = stmt.query_map([id], archive_row_with_remote_cover)?;
+
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_archive_by_path(&self, path: &str) -> Result<Option<ArchiveRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at FROM archives WHERE path = ?"
+        )?;
+
+        let mut rows = stmt.query_map([path], archive_row)?;
+
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    // Page list cache operations (compressed archives only)
+    pub fn get_page_list_mtime(&self, archive_id: i64) -> Result<Option<i64>> {
+        self.conn()?
+            .query_row(
+                "SELECT page_list_mtime FROM archives WHERE id = ?",
+                [archive_id],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    pub fn get_pages(&self, archive_id: i64) -> Result<Vec<PageRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, archive_id, filename, filepath, sort_order
+             FROM pages WHERE archive_id = ? ORDER BY sort_order",
+        )?;
+        let pages = stmt
+            .query_map([archive_id], |row| {
+                Ok(PageRow {
+                    id: row.get(0)?,
+                    archive_id: row.get(1)?,
+                    filename: row.get(2)?,
+                    filepath: row.get(3)?,
+                    sort_order: row.get(4)?,
+                })
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+        Ok(pages)
+    }
+
+    /// Replace the cached page list for an archive and record the archive file
+    /// mtime used to build it (used to detect staleness on later requests).
+    pub fn save_pages(&self, archive_id: i64, pages: &[PageRow], mtime_secs: i64) -> Result<()> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM pages WHERE archive_id = ?", [archive_id])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO pages (archive_id, filename, filepath, sort_order) VALUES (?, ?, ?, ?)",
+            )?;
+            for p in pages {
+                stmt.execute((archive_id, &p.filename, &p.filepath, p.sort_order))?;
+            }
+        }
+        tx.execute(
+            "UPDATE archives SET page_list_mtime = ? WHERE id = ?",
+            (mtime_secs, archive_id),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn list_archives(
+        &self,
+        search: Option<&str>,
+        tag: Option<&str>,
+        category_id: Option<i64>,
+        sort: &str,
+        order: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ArchiveRow>> {
+        let conn = self.conn()?;
+        let (join_clause, where_clause, mut params) =
+            Self::build_archive_filters(&conn, search, tag, category_id)?;
+
+        let order_clause = order_expr_for(sort);
+        let direction = if order == "asc" { "ASC" } else { "DESC" };
+
+        let sql = format!(
+            "SELECT {} FROM archives a {} {} ORDER BY {} {} LIMIT ? OFFSET ?",
+            ARCHIVE_COLUMNS, join_clause, where_clause, order_clause, direction
+        );
+
+        params.push(Box::new(limit));
+        params.push(Box::new(offset));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let archives = stmt
+            .query_map(
+                rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                archive_row,
+            )?
+            .filter_map(log_and_skip)
+            .collect();
+
+        Ok(archives)
+    }
+
+    /// 拉取所有符合过滤条件的档案（不分页），供服务端分组后统一分页。
+    /// `read`: None=全部, "read"=已有阅读记录, "unread"=从未读过。
+    #[allow(clippy::too_many_arguments)]
+    pub fn list_archives_all(
+        &self,
+        search: Option<&str>,
+        tag: Option<&str>,
+        category_id: Option<i64>,
+        read: Option<&str>,
+        sort: &str,
+        order: &str,
+    ) -> Result<Vec<ArchiveRow>> {
+        let conn = self.conn()?;
+        let (join_clause, mut where_clause, params) =
+            Self::build_archive_filters(&conn, search, tag, category_id)?;
+
+        let read_clause = match read {
+            Some("read") => " AND EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)",
+            Some("unread") => {
+                " AND NOT EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)"
+            }
+            _ => "",
+        };
+        where_clause.push_str(read_clause);
+
+        let order_clause = order_expr_for(sort);
+        let direction = if order == "asc" { "ASC" } else { "DESC" };
+
+        let sql = format!(
+            "SELECT {} FROM archives a {} {} ORDER BY {} {}",
+            ARCHIVE_COLUMNS, join_clause, where_clause, order_clause, direction
+        );
+
+        let mut stmt = conn.prepare(&sql)?;
+        let archives = stmt
+            .query_map(
+                rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                archive_row,
+            )?
+            .filter_map(log_and_skip)
+            .collect();
+
+        Ok(archives)
+    }
+
+    /// 构造档案列表查询的 JOIN / WHERE 片段与参数（供 list_archives 与 list_archives_all 共用）。
+    fn build_archive_filters(
+        conn: &rusqlite::Connection,
+        search: Option<&str>,
+        tag: Option<&str>,
+        category_id: Option<i64>,
+    ) -> Result<ArchiveFilters> {
+        let mut where_clause = String::from("WHERE 1=1");
+        let mut join_clause = String::new();
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(s) = search {
+            if !s.is_empty() {
+                // 解析搜索语法：tag:xxx（标签名或 ns:name）、-xxx（排除）、普通关键词（标题或标签名）
+                for token in s.split_whitespace() {
+                    if token.is_empty() {
+                        continue;
+                    }
+                    if let Some(spec) = token.strip_prefix("tag:") {
+                        let (ns, name) = match spec.split_once(':') {
+                            Some((ns, name)) => (Some(ns), name),
+                            None => (None, spec),
+                        };
+                        let mut cond = String::from(
+                            "EXISTS (SELECT 1 FROM archive_tags atx JOIN tags tx ON tx.id = atx.tag_id WHERE atx.archive_id = a.id",
+                        );
+                        if let Some(ns) = ns {
+                            cond.push_str(" AND tx.namespace = ?");
+                            params.push(Box::new(ns.to_string()));
+                        }
+                        cond.push_str(" AND tx.name = ?)");
+                        params.push(Box::new(name.to_string()));
+                        where_clause.push_str(" AND ");
+                        where_clause.push_str(&cond);
+                    } else if let Some(ex) = token.strip_prefix('-') {
+                        if !ex.is_empty() {
+                            let pattern = format!("%{}%", ex);
+                            where_clause.push_str(
+                                " AND a.title NOT LIKE ? AND NOT EXISTS (SELECT 1 FROM archive_tags atx JOIN tags tx ON tx.id = atx.tag_id WHERE atx.archive_id = a.id AND tx.name LIKE ?)",
+                            );
+                            params.push(Box::new(pattern.clone()));
+                            params.push(Box::new(pattern));
+                        }
+                    } else {
+                        let pattern = format!("%{}%", token);
+                        where_clause.push_str(
+                            " AND (a.title LIKE ? OR EXISTS (SELECT 1 FROM archive_tags atx JOIN tags tx ON tx.id = atx.tag_id WHERE atx.archive_id = a.id AND tx.name LIKE ?))",
+                        );
+                        params.push(Box::new(pattern.clone()));
+                        params.push(Box::new(pattern));
+                    }
+                }
+            }
+        }
+
+        // 按标签过滤：支持 "namespace:name" 或 "name" 格式
+        if let Some(t) = tag {
+            if !t.is_empty() {
+                join_clause.push_str(
+                    " JOIN archive_tags at_f ON at_f.archive_id = a.id JOIN tags t_f ON t_f.id = at_f.tag_id",
+                );
+                if let Some((ns, name)) = t.split_once(':') {
+                    where_clause.push_str(" AND t_f.namespace = ? AND t_f.name = ?");
+                    params.push(Box::new(ns.to_string()));
+                    params.push(Box::new(name.to_string()));
+                } else {
+                    where_clause.push_str(" AND t_f.name = ? AND t_f.namespace = ''");
+                    params.push(Box::new(t.to_string()));
+                }
+            }
+        }
+
+        // 按分类过滤：静态分类走关联表 JOIN，动态分类（配置了 search）走标题匹配
+        if let Some(cid) = category_id {
+            let dynamic_search: Option<String> = conn
+                .query_row("SELECT search FROM categories WHERE id = ?", [cid], |row| {
+                    row.get(0)
+                })
+                .ok();
+            match dynamic_search {
+                Some(s) if !s.is_empty() => {
+                    where_clause.push_str(" AND a.title LIKE ?");
+                    params.push(Box::new(format!("%{}%", s)));
+                }
+                _ => {
+                    join_clause.push_str(" JOIN archive_categories ac_f ON ac_f.archive_id = a.id");
+                    where_clause.push_str(" AND ac_f.category_id = ?");
+                    params.push(Box::new(cid));
+                }
+            }
+        }
+
+        Ok((join_clause, where_clause, params))
+    }
+
+    pub fn list_archives_by_tag(
+        &self,
+        tag_id: i64,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ArchiveRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.thumbnail_path, a.group_id, a.created_at, a.updated_at
+             FROM archives a
+             JOIN archive_tags at ON at.archive_id = a.id
+             WHERE at.tag_id = ?
+             ORDER BY a.updated_at DESC
+             LIMIT ? OFFSET ?",
+        )?;
+
+        let archives = stmt
+            .query_map(rusqlite::params![tag_id, limit, offset], archive_row)?
+            .filter_map(log_and_skip)
+            .collect();
+
+        Ok(archives)
+    }
+
+    pub fn insert_archive(
+        &self,
+        title: &str,
+        path: &str,
+        archive_type: &str,
+        page_count: i64,
+        file_size: i64,
+    ) -> Result<i64> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO archives (title, path, archive_type, page_count, file_size)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(path) DO NOTHING",
+            (title, path, archive_type, page_count, file_size),
+        )?;
+        // ON CONFLICT DO NOTHING 吞掉并发重复插入，随后按 path 取回 id（可能已存在）。
+        let id = conn.query_row("SELECT id FROM archives WHERE path = ?", [path], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        Ok(id)
+    }
+
+    pub fn delete_archive(&self, id: i64) -> Result<usize> {
+        self.conn()?
+            .execute("DELETE FROM archives WHERE id = ?", [id])
+    }
+
+    /// 增量扫描入库：按 path upsert（更新标题/类型/页数/大小/file_mtime），
+    /// 不使用 INSERT OR REPLACE，避免级联删除 history 与标签/分类关联。返回该档案 id。
+    pub fn upsert_scanned_archive(
+        &self,
+        title: &str,
+        path: &str,
+        archive_type: &str,
+        page_count: i64,
+        file_size: i64,
+        file_mtime: i64,
+    ) -> Result<i64> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO archives (title, path, archive_type, page_count, file_size, file_mtime, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+             ON CONFLICT(path) DO UPDATE SET
+                title = excluded.title,
+                archive_type = excluded.archive_type,
+                page_count = excluded.page_count,
+                file_size = excluded.file_size,
+                file_mtime = excluded.file_mtime,
+                updated_at = excluded.updated_at",
+            (title, path, archive_type, page_count, file_size, file_mtime),
+        )?;
+        let id = conn.query_row("SELECT id FROM archives WHERE path = ?", [path], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        Ok(id)
+    }
+
+    /// 批量 upsert 扫描结果：单连接 + 单事务内完成全部写入，避免每次 upsert
+    /// 都单独获取连接并在 `SELECT id` 上往返。`entries` 为 (title, path, archive_type,
+    /// page_count, file_size, file_mtime)。
+    pub fn batch_upsert_scanned_archives(
+        &self,
+        entries: &[(String, String, String, i64, i64, i64)],
+    ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO archives (title, path, archive_type, page_count, file_size, file_mtime, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+                 ON CONFLICT(path) DO UPDATE SET
+                    title = excluded.title,
+                    archive_type = excluded.archive_type,
+                    page_count = excluded.page_count,
+                    file_size = excluded.file_size,
+                    file_mtime = excluded.file_mtime,
+                    updated_at = excluded.updated_at",
+            )?;
+            for (title, path, archive_type, page_count, file_size, file_mtime) in entries {
+                stmt.execute((
+                    title.as_str(),
+                    path.as_str(),
+                    archive_type.as_str(),
+                    *page_count,
+                    *file_size,
+                    *file_mtime,
+                ))?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 读取某根目录下所有档案的扫描元数据快照：(path, page_count, file_size, file_mtime)。
+    pub fn scan_meta_for_root(&self, root: &str) -> Result<Vec<(String, i64, i64, i64)>> {
+        let conn = self.conn()?;
+        let mut stmt =
+            conn.prepare("SELECT path, page_count, file_size, file_mtime FROM archives")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?;
+        Ok(rows
+            .filter_map(log_and_skip)
+            .filter(|(path, _, _, _)| path_is_within(root, path))
+            .collect())
+    }
+
+    /// 按 path 删除档案（供扫描清理孤儿档案；级联删除 pages/history/标签分类关联）。
+    pub fn delete_archive_by_path(&self, path: &str) -> Result<usize> {
+        self.conn()?
+            .execute("DELETE FROM archives WHERE path = ?", [path])
+    }
+
+    /// 批量删除档案，单事务执行
+    pub fn batch_delete_archives(&self, ids: &[i64]) -> Result<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let mut affected = 0;
+        for &id in ids {
+            affected += tx.execute("DELETE FROM archives WHERE id = ?", [id])?;
+        }
+        tx.commit()?;
+        Ok(affected)
+    }
+
+    pub fn update_archive_title(&self, id: i64, title: &str) -> Result<usize> {
+        self.conn()?.execute(
+            "UPDATE archives SET title = ?, title_auto = 0, updated_at = datetime('now') WHERE id = ?",
+            (title, id),
+        )
+    }
+
+    /// 列出需要按「初始标题层级」重生成的档案（自动派生标题且未被手动改名）
+    pub fn list_auto_titled(&self) -> Result<Vec<(i64, String)>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT id, path FROM archives WHERE title_auto = 1")?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(log_and_skip)
+            .collect();
+        Ok(rows)
+    }
+
+    /// 更新自动派生标题（保持 title_auto = 1）；title 未变化时不更新，返回是否变更。
+    pub fn update_title_auto(&self, id: i64, title: &str) -> Result<bool> {
+        let affected = self.conn()?.execute(
+            "UPDATE archives SET title = ?, updated_at = datetime('now') WHERE id = ? AND title != ?",
+            (title, id, title),
+        )?;
+        Ok(affected > 0)
+    }
+
+    /// 批量重生成自动标题：单连接 + 单事务 + 单条 prepared 语句，返回实际变更数。
+    pub fn update_titles_auto(&self, entries: &[(i64, String)]) -> Result<usize> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        let mut changed = 0usize;
+        {
+            let mut stmt = tx.prepare_cached(
+                "UPDATE archives SET title = ?1, updated_at = datetime('now') WHERE id = ?2 AND title != ?1",
+            )?;
+            for (id, title) in entries {
+                changed += stmt.execute((title, id))?;
+            }
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    /// 获取组内所有章节（按路径排序）
+    pub fn get_group_chapters(&self, group_id: i64) -> Result<Vec<ArchiveRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at
+             FROM archives WHERE group_id = ? ORDER BY path",
+        )?;
+
+        let archives = stmt
+            .query_map([group_id], archive_row)?
+            .filter_map(log_and_skip)
+            .collect();
+
+        Ok(archives)
+    }
+
+    /// 按精确标题查询所有档案（供自动分组展开时拉取完整成员列表）
+    pub fn get_archives_by_title(&self, title: &str) -> Result<Vec<ArchiveRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at
+             FROM archives WHERE title = ? COLLATE NOCASE ORDER BY path",
+        )?;
+
+        let archives = stmt
+            .query_map([title], archive_row)?
+            .filter_map(log_and_skip)
+            .collect();
+
+        Ok(archives)
+    }
+
+    /// 合并多个档案：第一个为主档案，其余 group_id 设为主档案 id
+    pub fn merge_archives(&self, archive_ids: &[i64]) -> Result<i64> {
+        let primary_id = archive_ids[0];
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+
+        // 主档案: group_id 设为自身 id
+        tx.execute(
+            "UPDATE archives SET group_id = ?, updated_at = datetime('now') WHERE id = ?",
+            (primary_id, primary_id),
+        )?;
+
+        // 其余档案: group_id 设为主档案 id
+        for &id in &archive_ids[1..] {
+            tx.execute(
+                "UPDATE archives SET group_id = ?, updated_at = datetime('now') WHERE id = ?",
+                (primary_id, id),
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(primary_id)
+    }
+
+    // Thumbnail cache operations
+    const MAX_CACHED_ARCHIVES: i64 = 30;
+
+    pub fn set_thumbnail_path(&self, archive_id: i64, thumb_path: &str) -> Result<()> {
+        self.conn()?.execute(
+            "UPDATE archives SET thumbnail_path = ? WHERE id = ?",
+            (thumb_path, archive_id),
+        )?;
+        Ok(())
+    }
+
+    /// 记录一次缩略图访问（由路由层节流调用），供 LRU 按真实使用时间淘汰。
+    pub fn touch_thumbnail_access(&self, archive_id: i64) -> Result<usize> {
+        self.conn()?.execute(
+            "UPDATE archives SET thumb_accessed_at = datetime('now') WHERE id = ?",
+            [archive_id],
+        )
+    }
+
+    /// 有缩略图缓存的档案，按「最近访问 → updated_at」倒序排列（最近使用的留在缓存）。
+    pub fn get_cached_archive_ids(&self) -> Result<Vec<i64>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT a.id FROM archives a
+             WHERE a.thumbnail_path IS NOT NULL
+             ORDER BY COALESCE(a.thumb_accessed_at, a.updated_at) DESC",
+        )?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .filter_map(log_and_skip)
+            .collect();
+        Ok(ids)
+    }
+
+    /// 所有存活档案的 id 集合，用于清理不再被任何档案引用的缓存目录
+    /// （extract/thumbnails 下的孤立子目录）。
+    pub fn live_archive_ids(&self) -> Result<std::collections::HashSet<i64>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT id FROM archives")?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .filter_map(log_and_skip)
+            .collect();
+        Ok(ids)
+    }
+
+    /// 淘汰超出上限的最旧缩略图目录。`exclude_id` 为刚写入的档案时跳过它，
+    /// 避免“注册后立刻把自己的目录淘汰掉”。
+    pub fn evict_old_thumbnails(&self, exclude_id: Option<i64>) -> Result<Vec<(i64, String)>> {
+        let cached_ids = self.get_cached_archive_ids()?;
+        if cached_ids.len() as i64 <= Self::MAX_CACHED_ARCHIVES {
+            return Ok(vec![]);
+        }
+
+        // 要淘汰的：超出限制的最旧条目
+        let to_evict: Vec<i64> = cached_ids[Self::MAX_CACHED_ARCHIVES as usize..]
+            .iter()
+            .copied()
+            .filter(|id| Some(*id) != exclude_id)
+            .collect();
+        if to_evict.is_empty() {
+            return Ok(vec![]);
+        }
+        let conn = self.conn()?;
+        let placeholders = vec!["?"; to_evict.len()].join(",");
+
+        // 一次 IN 读回路径 + 一次 IN 置空（替代逐 id 的 2N 次往返）
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, thumbnail_path FROM archives WHERE id IN ({})",
+            placeholders
+        ))?;
+        let evicted: Vec<(i64, String)> = stmt
+            .query_map(rusqlite::params_from_iter(to_evict.iter()), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(log_and_skip)
+            .collect();
+        conn.execute(
+            &format!(
+                "UPDATE archives SET thumbnail_path = NULL WHERE id IN ({})",
+                placeholders
+            ),
+            rusqlite::params_from_iter(to_evict.iter()),
+        )?;
+
+        Ok(evicted)
+    }
+
+    /// 设置/清除手动封面页（cover_image 存档案内页面名；None 恢复默认首页）。
+    pub fn set_archive_cover(&self, id: i64, cover: Option<&str>) -> Result<usize> {
+        let conn = self.conn()?;
+        match cover {
+            Some(c) => conn.execute(
+                "UPDATE archives SET cover_image = ?1 WHERE id = ?2",
+                (c, id),
+            ),
+            None => conn.execute("UPDATE archives SET cover_image = NULL WHERE id = ?", [id]),
+        }
+    }
+
+    /// 读取远程封面 URL（无则 None）。
+    pub fn get_remote_cover(&self, id: i64) -> Result<Option<String>> {
+        self.conn()?
+            .query_row(
+                "SELECT remote_cover FROM archives WHERE id = ?",
+                [id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(|v| v.flatten())
+    }
+
+    /// 设置/清除远程封面 URL（None 清除，恢复 页面封面/首页 的优先级）。
+    pub fn set_remote_cover(&self, id: i64, url: Option<&str>) -> Result<usize> {
+        let conn = self.conn()?;
+        match url {
+            Some(u) => conn.execute(
+                "UPDATE archives SET remote_cover = ?1 WHERE id = ?2",
+                (u, id),
+            ),
+            None => conn.execute("UPDATE archives SET remote_cover = NULL WHERE id = ?", [id]),
+        }
+    }
+}
