@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback, Fragment } fr
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 import { formatSize, splitPathParts, lastPathPart } from '../utils/format';
+import { membershipChanged, idsWithin } from '../utils/listReconcile';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
@@ -208,11 +209,9 @@ const librarySessions = {}; // { [mode]: { archives, page, hasMore, search, sort
 // jest 环境下每个用例都是独立的“首次访问”，跨用例恢复会造成泄漏，故禁用
 const IS_TEST = typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
 
-function firstPageIds(list, size) {
-  return (list || []).slice(0, size).map(a => a.id).join(',');
-}
-
-export default function Library({ mode = 'library' }) {
+export default function Library({ mode = 'library', enableSession }) {
+  // 会话恢复默认在测试环境禁用（跨用例泄漏）；回归测试可显式 enableSession 打开
+  const sessionEnabled = enableSession !== undefined ? enableSession : !IS_TEST;
   const { settings, updateSetting } = useSettings();
   const { tags, reload: reloadTags } = useTags();
   const [archives, setArchives] = useState([]);
@@ -273,8 +272,9 @@ export default function Library({ mode = 'library' }) {
   const requestIdRef = useRef(0);
   const appendLockRef = useRef(false); // 防触底自动加载与按钮点击重复追加同一页
   const loadMoreSentinelRef = useRef(null); // 触底自动加载观察哨兵
-  const restoringRef = useRef(false); // 会话恢复期间抑制“筛选变化”触发的整表重拉
   const listScrollRef = useRef(null); // 列表滚动容器
+  // 会话恢复写入的筛选值快照：用于在恢复后跳过“筛选变化重拉”，避免覆盖恢复的分页
+  const restoredFiltersRef = useRef(null);
   const latestStateRef = useRef(null); // 每帧最新状态镜像（卸载时写会话）
   const navigate = useNavigate();
   const toast = useToast();
@@ -294,8 +294,7 @@ export default function Library({ mode = 'library' }) {
   }, []);
 
   useEffect(() => {
-    restoringRef.current = true;
-    const s = IS_TEST ? null : librarySessions[mode];
+    const s = sessionEnabled ? librarySessions[mode] : null;
     if (s && s.archives && s.archives.length > 0) {
       // 恢复浏览会话：秒开旧列表，保留已加载分页、展开状态与滚动位置
       setSearch(s.search); searchRef.current = s.search;
@@ -305,6 +304,13 @@ export default function Library({ mode = 'library' }) {
       setReadFilter(s.readFilter || 'all'); readFilterRef.current = s.readFilter || 'all';
       setTypeFilter(s.typeFilter || 'all'); typeFilterRef.current = s.typeFilter || 'all';
       setSelectedCategory(s.selectedCategory); selectedCategoryRef.current = s.selectedCategory;
+      // 记录本轮恢复写入的筛选值：上述 setState 提交后，“筛选变化重拉”effect 会看到
+      // 与这里相同的值并跳过，避免把恢复好的分页/滚动位置覆盖成第 1 页
+      restoredFiltersRef.current = {
+        sortBy: s.sortBy, sortOrder: s.sortOrder, selectedTag: s.selectedTag,
+        readFilter: s.readFilter || 'all', selectedCategory: s.selectedCategory,
+        typeFilter: s.typeFilter || 'all',
+      };
       setArchives(s.archives);
       pageRef.current = s.page;
       setHasMore(s.hasMore);
@@ -326,11 +332,9 @@ export default function Library({ mode = 'library' }) {
     reloadCategories();
     // 每次进入书库刷新标签列表与计数（阅读器/设置页里的改动可能已过期）
     reloadTags();
-    // 本帧渲染与后续“筛选变化重拉”effect 稳定后再放开抑制
-    requestAnimationFrame(() => { restoringRef.current = false; });
     return () => clearTimeout(searchDebounceRef.current);
   // eslint-disable-next-line
-  }, [mode]);
+  }, [mode, sessionEnabled]);
 
   // 每帧镜像最新状态（卸载时用于写浏览会话）
   useEffect(() => {
@@ -344,7 +348,7 @@ export default function Library({ mode = 'library' }) {
   // 卸载（进入阅读器等路由）时保存浏览会话，返回时可恢复
   useEffect(() => {
     return () => {
-      if (IS_TEST) return;
+      if (!sessionEnabled) return;
       const el = listScrollRef.current;
       const st = latestStateRef.current;
       if (st && st.archives && st.archives.length > 0) {
@@ -352,7 +356,7 @@ export default function Library({ mode = 'library' }) {
       }
     };
   // eslint-disable-next-line
-  }, [mode]);
+  }, [mode, sessionEnabled]);
 
   useEffect(() => {
     const check = () => setIsNarrow(window.innerWidth < 768);
@@ -411,11 +415,23 @@ export default function Library({ mode = 'library' }) {
     }
   };
 
+  // 会话恢复后抑制“筛选变化重拉”：恢复时写入的筛选值与当前 state 一致时不应触发整表
+  // 重拉（否则会把恢复的分页覆盖成第 1 页）。用记录“该轮恢复写入的筛选值”代替单帧
+  // ref：React 批处理下 setState 可能跨帧提交，单帧窗口不足以覆盖。
   useEffect(() => {
-    // 会话恢复期间会直接 set 这些值，其“变化”不应触发整表重拉（避免覆盖恢复的列表）
-    if (restoringRef.current) return;
+    if (restoredFiltersRef.current) {
+      const r = restoredFiltersRef.current;
+      const same = r.sortBy === sortBy && r.sortOrder === sortOrder &&
+        r.selectedTag === selectedTag && r.readFilter === readFilter &&
+        r.selectedCategory === selectedCategory && r.typeFilter === typeFilter;
+      if (same) {
+        // 仍是恢复写入的那组值：跳过重拉；用户一旦改动筛选，下次运行不再匹配即正常重拉
+        return;
+      }
+      restoredFiltersRef.current = null;
+    }
     loadArchives({ search: searchRef.current, tag: selectedTag, category_id: selectedCategory });
-  }, [sortBy, sortOrder, selectedTag, readFilter, selectedCategory]);
+  }, [sortBy, sortOrder, selectedTag, readFilter, selectedCategory, typeFilter]);
 
   const handleSearch = useCallback((val) => {
     setSearch(val);
@@ -429,15 +445,19 @@ export default function Library({ mode = 'library' }) {
     loadArchives({ search: searchRef.current, tag: selectedTagRef.current }, true);
   }, []);
 
-  // 后台一致性比对：与会话第一页对比。仅当服务器第一页顺序变化（增删/重排）时整体刷新；
-  // 否则只把字段级变化（read_page/标题/页数等）合并进现有列表，保留滚动与已加载分页。
+  // 后台一致性比对：与会话“已加载窗口”的成员集合对比。
+  // 只有成员集合变化（档案增删/替换）才整体刷新；顺序变化（典型：读完一本后它在
+  // “最近阅读”排序里前移）与字段变化一律走合并分支 —— 保留已加载分页与滚动位置，
+  // 否则每次从阅读器返回都会被踢回第一页。
   const reconcileLibrary = useCallback(async (s) => {
     if (!s || !s.archives) return;
     try {
+      // 比对窗口 = 会话已加载条数（上限 500，避免大库全量拉取）
+      const windowSize = Math.min(Math.max(s.archives.length, 1), 500);
       const data = await api.getArchives({
         sort_by: s.sortBy,
         sort_order: s.sortOrder,
-        limit: PAGE_SIZE,
+        limit: windowSize,
         page: 1,
         search: s.search,
         ...(s.readFilter && s.readFilter !== 'all' ? { read: s.readFilter } : {}),
@@ -452,8 +472,8 @@ export default function Library({ mode = 'library' }) {
           selectedCategoryRef.current !== s.selectedCategory) {
         return;
       }
-      if (firstPageIds(data, PAGE_SIZE) !== firstPageIds(s.archives, PAGE_SIZE)) {
-        // 顺序变化 → 列表内容确实变了，整体刷新（此时回到顶部是正确行为）
+      if (membershipChanged(idsWithin(s.archives, windowSize), idsWithin(data, windowSize))) {
+        // 成员变化 → 归档确实增删/替换，整体刷新（此时回到顶部是正确行为）
         setArchives(data);
         pageRef.current = 1;
         setHasMore(data.length >= PAGE_SIZE);

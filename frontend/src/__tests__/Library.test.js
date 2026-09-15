@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import Library from '../pages/Library';
 import { ToastProvider } from '../components/Toast';
 import { SettingsProvider } from '../hooks/useSettings';
@@ -197,6 +197,86 @@ describe('Library 统一书库（合并原“漫画库/文件夹”双 tab）', 
   });
 });
 
+describe('Library 会话恢复（从阅读器返回不丢翻页位置）', () => {
+  // 两页数据：第 2 页的档案与第 1 页不同（模拟“翻页后进入漫画再退出”）
+  const page1 = Array.from({ length: 50 }, (_, i) => ({
+    id: i + 1, title: `第1页漫画${i + 1}`, archive_type: 'folder', page_count: 10,
+    cover_url: `/api/archives/${i + 1}/cover`, tags: [],
+  }));
+  const page2 = Array.from({ length: 20 }, (_, i) => ({
+    id: 100 + i, title: `第2页漫画${i + 1}`, archive_type: 'folder', page_count: 10,
+    cover_url: `/api/archives/${100 + i}/cover`, tags: [],
+  }));
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+  });
+
+  function renderWithSession() {
+    function ReaderStub() {
+      const navigate = useNavigate();
+      return <button onClick={() => navigate('/')}>返回书库</button>;
+    }
+    return render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={
+            <SettingsProvider>
+              <TagsProvider>
+                <ToastProvider>
+                  <Library enableSession />
+                </ToastProvider>
+              </TagsProvider>
+            </SettingsProvider>
+          } />
+          <Route path="/reader/:id" element={<ReaderStub />} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  test('翻到第 2 页后进入阅读器再返回：保留已加载分页与位置（顺序变化不回顶）', async () => {
+    const all = [...page1, ...page2];
+    api.getArchives.mockImplementation((params = {}) => {
+      const page = Number(params.page || 1);
+      const limit = Number(params.limit || 50);
+      if (page === 2) return Promise.resolve(page2);
+      // 真实服务端按 limit 返回；比对请求（limit=已加载条数）顺序打乱但成员不变，
+      // 模拟“刚读完的漫画在最近阅读排序里前移”
+      const shuffled = [all[5], ...all.slice(0, 5), ...all.slice(6)];
+      return Promise.resolve(shuffled.slice(0, limit));
+    });
+
+    renderWithSession();
+    await waitFor(() => {
+      expect(screen.getByText('第1页漫画1')).toBeInTheDocument();
+    });
+
+    // 手动加载第 2 页（触底自动加载在测试环境不触发）
+    fireEvent.click(screen.getByText(/加载更多/));
+    await waitFor(() => {
+      expect(screen.getByText('第2页漫画1')).toBeInTheDocument();
+    });
+
+    // 进入阅读器（Library 卸载 → 写入浏览会话）
+    fireEvent.click(screen.getByText('第2页漫画1'));
+    await waitFor(() => {
+      expect(screen.getByText('返回书库')).toBeInTheDocument();
+    });
+
+    // 返回书库：恢复会话 + 后台一致性比对
+    fireEvent.click(screen.getByText('返回书库'));
+
+    await waitFor(() => {
+      // 关键断言：仍保留第 2 页已加载内容，而不是被踢回第一页
+      expect(screen.getByText('第2页漫画1')).toBeInTheDocument();
+    });
+    expect(screen.getByText('第1页漫画1')).toBeInTheDocument();
+  });
+});
 describe('Library 卡片密度', () => {
   const tagged = {
     id: 1,
