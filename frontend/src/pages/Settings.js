@@ -567,6 +567,14 @@ export default function Settings() {
             <option value="0.0.0.0">局域网（重启生效）</option>
           </select>
         </div>
+        {/* 局域网模式 + 未开启口令：同网段设备可完全读写，明确警告 */}
+        {(settings.server_bind || '127.0.0.1') === '0.0.0.0' && !lanTokenSetting && (
+          <div className="settings-row">
+            <div className="settings-row-desc" style={{ color: '#e5a93d' }}>
+              ⚠️ 当前为「局域网」模式且未设置口令：同网段任何设备都可<b>匿名读写</b>你的书库（删除/扫描/恢复/同步）。建议先「生成新口令」再开放。
+            </div>
+          </div>
+        )}
         {/* 访问地址仅对本机（回环）显示；手机/平板浏览器看不到宿主网卡地址 */}
         {lanInfo && lanInfo.loopback && (
           <div className="settings-row">
@@ -600,6 +608,10 @@ export default function Settings() {
             <div className="settings-row-label">局域网访问口令 {lanTokenSetting ? '🔒' : ''}</div>
             <div className="settings-row-desc">
               开启后，局域网里的写操作与备份/设置需携带该口令；本机使用不受影响。清空=关闭鉴权
+              <br />
+              <span style={{ color: 'var(--text-tertiary)' }}>
+                注意：口令<b>不保护内容读取</b>——同网段设备仍可打开书库、逐页下载漫画与阅读历史（含 OPDS）。完全私密请保持「仅本机」。
+              </span>
             </div>
             {lanTokenSetting && (
               <div style={{ marginTop: 6, fontFamily: 'monospace', fontSize: 13, wordBreak: 'break-all', opacity: 0.9 }}>

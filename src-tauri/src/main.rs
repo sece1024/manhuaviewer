@@ -79,7 +79,7 @@ async fn main() {
 
     // 监听地址：环境变量 BIND_ADDR > 设置 server_bind（默认仅本机 127.0.0.1）。
     // 改为 0.0.0.0 后在局域网其它设备可通过 http://<本机IP>:<端口>/ 访问（需重启应用生效）。
-    let bind_addr = std::env::var("BIND_ADDR")
+    let mut bind_addr = std::env::var("BIND_ADDR")
         .ok()
         .filter(|s| !s.is_empty())
         .or_else(|| {
@@ -89,6 +89,27 @@ async fn main() {
                 .filter(|s| !s.is_empty())
         })
         .unwrap_or_else(|| "127.0.0.1".to_string());
+
+    // 监听地址白名单：仅接受回环 / 未指定(0.0.0.0、::) / 常规单播地址。
+    // 链路本地与组播不可监听且多为配置错误；无法解析为 IP 的值（如误填的 hostname）
+    // 一并回退本机监听并告警，避免“以为开了局域网结果裸奔/监听了一个没用的地址”。
+    let bind_is_sane = match bind_addr.parse::<std::net::IpAddr>() {
+        Ok(ip) => {
+            !ip.is_multicast()
+                && match ip {
+                    std::net::IpAddr::V4(v4) => !v4.is_link_local(),
+                    std::net::IpAddr::V6(v6) => !v6.is_unicast_link_local(),
+                }
+        }
+        Err(_) => false,
+    };
+    if !bind_is_sane {
+        tracing::warn!(
+            "忽略无效监听地址 {:?}，回退 127.0.0.1（仅接受回环/0.0.0.0/常规单播地址）",
+            bind_addr
+        );
+        bind_addr = "127.0.0.1".to_string();
+    }
 
     // Create app state
     let state = AppState {
