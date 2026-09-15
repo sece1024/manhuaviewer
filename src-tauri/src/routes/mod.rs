@@ -46,12 +46,14 @@ pub(crate) fn validate_outbound_url(url: &str) -> bool {
         .trim_start_matches("http://")
         .trim_start_matches("https://");
     let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let hostname = host
-        .rsplit_once(':')
-        .map(|(h, _)| h)
-        .unwrap_or(host)
-        .trim_start_matches('[')
-        .trim_end_matches(']');
+    // 端口剥离：带括号的 IPv6 字面量按 ']' 取地址（"[::ffff:127.0.0.1]" 或
+    // "[::ffff:127.0.0.1]:5002"），不能按最后一个 ':' 拆——裸 IPv6 无端口时会在
+    // 地址内部被截断（"[::ffff:169.254.169.254]" 会被拆成 "::ffff"，反成合法地址）。
+    let hostname = if let Some(r) = host.strip_prefix('[') {
+        r.split_once(']').map(|(h, _)| h).unwrap_or(r)
+    } else {
+        host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host)
+    };
 
     fn allowed(ip: std::net::IpAddr) -> bool {
         if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
@@ -59,19 +61,38 @@ pub(crate) fn validate_outbound_url(url: &str) -> bool {
         }
         match ip {
             std::net::IpAddr::V4(v4) => !v4.is_link_local(),
-            std::net::IpAddr::V6(v6) => !v6.is_unicast_link_local(),
+            std::net::IpAddr::V6(v6) => {
+                // IPv4 映射地址（::ffff:127.0.0.1 等）：Ipv6Addr::is_loopback() 只认 ::1，
+                // 必须转回 IPv4 按 IPv4 规则再审一遍，否则回环/链路本地可借映射形式绕过白名单。
+                if let Some(v4) = v6.to_ipv4_mapped() {
+                    return allowed(std::net::IpAddr::V4(v4));
+                }
+                !v6.is_unicast_link_local()
+            }
         }
     }
 
     if let Ok(ip) = hostname.parse::<std::net::IpAddr>() {
         return allowed(ip);
     }
-    // 主机名：解析全部地址，任一允许即视为合法（LAN 常用主机名）
+    // 主机名：解析全部地址。只要任一解析结果是回环/未指定就整体拒绝（混合 A 记录
+    // 可把校验与 curl/ureq 的实际连接导向本机）；其余按“任一允许”放行（LAN 主机名
+    // 常见多记录，含公网/私网/链路本地混合时链路本地可容忍）。
     use std::net::ToSocketAddrs;
-    match (hostname, 80u16).to_socket_addrs() {
-        Ok(addrs) => addrs.map(|a| a.ip()).any(allowed),
-        Err(_) => false,
+    let addrs: Vec<std::net::IpAddr> = match (hostname, 80u16).to_socket_addrs() {
+        Ok(it) => it.map(|a| a.ip()).collect(),
+        Err(_) => return false,
+    };
+    if addrs.is_empty() {
+        return false;
     }
+    if addrs
+        .iter()
+        .any(|ip| ip.is_loopback() || ip.is_unspecified())
+    {
+        return false;
+    }
+    addrs.iter().any(|ip| allowed(*ip))
 }
 
 /// Run a blocking closure against the DB pool off the async runtime.
@@ -500,6 +521,30 @@ mod tests {
             let (status, _) = get(port, path).await;
             assert_eq!(status, 200, "{path} 应可访问 OPDS 根目录");
         }
+    }
+
+    /// 出站白名单必须拒绝 IPv4 映射的回环/链路本地（::ffff:127.0.0.1 等），
+    /// 此前 is_loopback() 只认 ::1，映射形式可绕过白名单直连本机回环服务。
+    #[test]
+    fn outbound_url_rejects_ipv4_mapped_loopback_and_link_local() {
+        // 映射的回环/云元数据地址：一律拒绝
+        assert!(!validate_outbound_url(
+            "http://[::ffff:127.0.0.1]:5002/cover"
+        ));
+        assert!(!validate_outbound_url(
+            "http://[::ffff:169.254.169.254]/latest/meta-data/"
+        ));
+        // 映射的私网/公网地址仍可放行（局域网同步/远程封面正常使用）
+        assert!(validate_outbound_url("http://[::ffff:192.168.1.5]:5002/"));
+        assert!(validate_outbound_url("http://[::ffff:203.0.113.5]:5002/"));
+        // 原有行为不回归
+        assert!(!validate_outbound_url("http://127.0.0.1:5002/"));
+        assert!(!validate_outbound_url("http://[::1]:5002/"));
+        assert!(!validate_outbound_url("ftp://192.168.1.5/x"));
+        // 无法解析的主机名拒绝（离线/不存在域名）
+        assert!(!validate_outbound_url(
+            "http://definitely-not-a-real-host-xyz.invalid/"
+        ));
     }
 
     /// 扫描的孤儿清理：只删除磁盘上确实不存在的路径；
