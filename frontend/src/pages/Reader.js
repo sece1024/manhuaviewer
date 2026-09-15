@@ -279,13 +279,7 @@ export default function Reader() {
   const [thumbRange, setThumbRange] = useState({ start: 0, end: 30 });
   const thumbPanelRef = useRef(null);
   const thumbGridRef = useRef(null);
-  const thumbItemRefs = useRef({});
   const THUMB_OVERSCAN = 12;
-
-  const setThumbItemRef = useCallback((i) => (el) => {
-    if (el) thumbItemRefs.current[i] = el;
-    else delete thumbItemRefs.current[i];
-  }, []);
 
   // 面板打开时把窗口重置到当前页附近（否则从第 1 页开始，翻到 800 页会看到空白）
   useEffect(() => {
@@ -1321,7 +1315,6 @@ export default function Reader() {
                   <div
                     key={p.id}
                     ref={(el) => {
-                      setThumbItemRef(i)(el);
                       if (i === currentIndex) activeThumbRef.current = el;
                     }}
                     className={`thumbnail-item ${i === currentIndex ? 'active' : ''}`}
