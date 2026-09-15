@@ -600,31 +600,6 @@ export default function Reader() {
     return false;
   }, [archiveId, navigate]);
 
-  // 长图模式：滚动到整本书末尾时自动续下一话（每次到达末尾只触发一次）
-  useEffect(() => {
-    if (!longImage || !containerRef.current) return;
-    const el = containerRef.current;
-    let ticking = false;
-    const check = () => {
-      ticking = false;
-      const container = containerRef.current;
-      if (!container) return;
-      const scrollable = container.scrollHeight - container.clientHeight;
-      // 内容本身可滚动且已滚到底（防打开即跳下一话）
-      const nearBottom = scrollable > 40 && container.scrollTop + container.clientHeight >= container.scrollHeight - 80;
-      if (nearBottom && currentIndexRef.current >= pages.length - 1) {
-        if (chapterEndFiredRef.current) return;
-        chapterEndFiredRef.current = true;
-        if (!jumpToSiblingChapter(1)) showOverlay('已经是最后一话');
-      } else if (!nearBottom || currentIndexRef.current < pages.length - 1) {
-        chapterEndFiredRef.current = false;
-      }
-    };
-    const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(check); } };
-    el.addEventListener('scroll', onScroll);
-    return () => el.removeEventListener('scroll', onScroll);
-  }, [longImage, pages.length, jumpToSiblingChapter, showOverlay]);
-
   // 翻页
   const goPage = useCallback((newIndex) => {
     if (newIndex < 0 || newIndex >= pages.length) return;
@@ -646,28 +621,57 @@ export default function Reader() {
   }, [pages.length, pages, pageReady, showOverlay]);
 
   const goPrev = useCallback(() => {
+    // 步进 = 双页 2 / 单页 1。RTL 与 LTR 的“阅读前进方向”都是索引递增（页序按索引排列），
+    // 版面左右镜像由 doubleLeft/doubleRight 与点击区各自处理，翻页方向不再按语向反转。
     const step = doublePage ? 2 : 1;
-    const dir = pageDirection === 'rtl' ? 1 : -1;
-    const target = currentIndexRef.current - step * dir;
+    const target = currentIndexRef.current - step;
     if (target < 0) {
-      // 第一页继续往前 → 尝试回到上一话
-      if (!jumpToSiblingChapter(-1)) showOverlay('已经是第一话');
+      // 第一页继续往前 → 上一话（组内）；没有则环回本册末页
+      // （双页模式回到末跨页起始页：偶数页数 len-2，奇数页数末页单张 len-1）
+      if (!jumpToSiblingChapter(-1)) {
+        goPage(doublePage && pages.length % 2 === 0 ? pages.length - 2 : pages.length - 1);
+      }
       return;
     }
     goPage(target);
-  }, [doublePage, pageDirection, goPage, jumpToSiblingChapter, showOverlay]);
+  }, [doublePage, goPage, jumpToSiblingChapter, pages.length]);
 
   const goNext = useCallback(() => {
     const step = doublePage ? 2 : 1;
-    const dir = pageDirection === 'rtl' ? 1 : -1;
-    const target = currentIndexRef.current + step * dir;
+    const target = currentIndexRef.current + step;
     if (target >= pages.length) {
-      // 末页继续 → 尝试进入下一话
-      if (!jumpToSiblingChapter(1)) showOverlay('已经是最后一话');
+      // 末页继续 → 下一话（组内）；没有则环回本册第一页
+      if (!jumpToSiblingChapter(1)) goPage(0);
       return;
     }
     goPage(target);
-  }, [doublePage, pageDirection, goPage, pages.length, jumpToSiblingChapter, showOverlay]);
+  }, [doublePage, goPage, jumpToSiblingChapter, pages.length]);
+
+  // 长图模式：滚动到整本书末尾时自动续下一话（每次到达末尾只触发一次）；
+  // 没有下一话则环回本册第一页（scrollTarget 消费后滚回顶部）
+  useEffect(() => {
+    if (!longImage || !containerRef.current) return;
+    const el = containerRef.current;
+    let ticking = false;
+    const check = () => {
+      ticking = false;
+      const container = containerRef.current;
+      if (!container) return;
+      const scrollable = container.scrollHeight - container.clientHeight;
+      // 内容本身可滚动且已滚到底（防打开即跳下一话）
+      const nearBottom = scrollable > 40 && container.scrollTop + container.clientHeight >= container.scrollHeight - 80;
+      if (nearBottom && currentIndexRef.current >= pages.length - 1) {
+        if (chapterEndFiredRef.current) return;
+        chapterEndFiredRef.current = true;
+        if (!jumpToSiblingChapter(1)) goPage(0);
+      } else if (!nearBottom || currentIndexRef.current < pages.length - 1) {
+        chapterEndFiredRef.current = false;
+      }
+    };
+    const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(check); } };
+    el.addEventListener('scroll', onScroll);
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [longImage, pages.length, jumpToSiblingChapter, goPage]);
 
   // 键盘 D 键开关双页：开启时重置双页加载态，保证新跨页走 spinner + 淡入
   const toggleDouble = useCallback(() => {

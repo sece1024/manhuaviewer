@@ -110,4 +110,41 @@ describe('Reader 双页模式', () => {
     expect(row.querySelector('div[aria-hidden="true"]')).not.toBeNull();
     expect(container.querySelector('.reader-page-wrapper')).toBeNull(); // 未回退到单页
   });
+
+  test('单页模式：末页继续翻环回第一页，首页往回翻环回末页', async () => {
+    renderReader();
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: /页面阅读区/ })).toBeInTheDocument();
+    });
+
+    pressKey('End'); // index 5
+    expect(screen.getByAltText('page-6.jpg')).toBeInTheDocument();
+
+    pressKey('ArrowRight'); // 末页继续 → 环回本册第一页
+    expect(screen.getByAltText('page-1.jpg')).toBeInTheDocument();
+
+    pressKey('ArrowLeft'); // 第一页往回 → 环回本册末页
+    expect(screen.getByAltText('page-6.jpg')).toBeInTheDocument();
+  });
+
+  test('双页模式：末页继续翻环回第一跨页，首页往回翻环回末跨页', async () => {
+    renderReader();
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: /页面阅读区/ })).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('启用双页模式'));
+    });
+
+    pressKey('End'); // index 5（末页单张，RTL 右=page-6）
+    expect(screen.getByAltText('page-6.jpg')).toBeInTheDocument();
+
+    pressKey('ArrowRight'); // 末页继续 → 环回第一跨页 (0,1)
+    expect(screen.getByAltText('page-1.jpg')).toBeInTheDocument();
+    expect(screen.getByAltText('page-2.jpg')).toBeInTheDocument();
+
+    pressKey('ArrowLeft'); // 第一跨页往回 → 环回末跨页（index 4 → 右=page-5，左=page-6）
+    expect(screen.getByAltText('page-5.jpg')).toBeInTheDocument();
+    expect(screen.getByAltText('page-6.jpg')).toBeInTheDocument();
+  });
 });
