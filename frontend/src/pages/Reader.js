@@ -273,28 +273,58 @@ export default function Reader() {
     }
   }, [pageDirection]);
 
-  // 缩略图面板：分批渲染，滚动到末尾时追加，避免一次挂载上千 <img>
-  const [thumbCount, setThumbCount] = useState(0);
-  const thumbLoadMoreRef = useRef(null);
-  const THUMB_BATCH = 100;
+  // 缩略图面板：虚拟窗口渲染——格子的占位始终存在（撑出滚动条与滚动位置），
+// 只有进入可视范围 ±THUMB_OVERSCAN 的格子才真正挂载 <img>。
+// 此前是"每次追加 100 个直到整本挂满"，2000 页最终会有 2000 个 <img> + 2000 个请求。
+  const [thumbRange, setThumbRange] = useState({ start: 0, end: 30 });
+  const thumbPanelRef = useRef(null);
+  const thumbGridRef = useRef(null);
+  const thumbItemRefs = useRef({});
+  const THUMB_OVERSCAN = 12;
+
+  const setThumbItemRef = useCallback((i) => (el) => {
+    if (el) thumbItemRefs.current[i] = el;
+    else delete thumbItemRefs.current[i];
+  }, []);
+
+  // 面板打开时把窗口重置到当前页附近（否则从第 1 页开始，翻到 800 页会看到空白）
   useEffect(() => {
-    if (showThumbnails) setThumbCount(Math.min(THUMB_BATCH, pages.length));
+    if (!showThumbnails) return;
+    const start = Math.max(0, currentIndex - 15);
+    setThumbRange({ start, end: Math.min(pages.length, start + 30) });
+  }, [showThumbnails, currentIndex, pages.length]);
+
+  // 滚动/尺寸变化时重算窗口：以已挂载格子的实际位置为准（格子高度一致，误差小）
+  useEffect(() => {
+    if (!showThumbnails) return;
+    const root = thumbPanelRef.current;
+    const grid = thumbGridRef.current;
+    if (!root || !grid || pages.length === 0) return;
+
+    let rafPending = false;
+    const recompute = () => {
+      rafPending = false;
+      const gridRect = grid.getBoundingClientRect();
+      const rootRect = root.getBoundingClientRect();
+      // 网格内可见区域的上下边界，外扩 OVERSCAN 个格子的高度
+      const cellH = 150; // 缩略图 120px + 页码 + gap 的近似行高
+      const rowsVisible = Math.ceil((rootRect.height || 600) / cellH);
+      const firstRow = Math.max(0, Math.floor((rootRect.top - gridRect.top) / cellH));
+      const cols = Math.max(1, Math.floor(gridRect.width / 110));
+      const start = Math.max(0, (firstRow - THUMB_OVERSCAN) * cols);
+      const end = Math.min(pages.length, (firstRow + rowsVisible + THUMB_OVERSCAN) * cols);
+      setThumbRange(prev => (prev.start === start && prev.end === end ? prev : { start, end }));
+    };
+    const onScroll = () => {
+      if (!rafPending) {
+        rafPending = true;
+        requestAnimationFrame(recompute);
+      }
+    };
+    recompute();
+    root.addEventListener('scroll', onScroll, { passive: true });
+    return () => root.removeEventListener('scroll', onScroll);
   }, [showThumbnails, pages.length]);
-  useEffect(() => {
-    if (!showThumbnails || thumbCount >= pages.length) return;
-    const el = thumbLoadMoreRef.current;
-    if (!el) return;
-    const obs = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) {
-          setThumbCount(c => Math.min(pages.length, c + THUMB_BATCH));
-        }
-      },
-      { rootMargin: '200px' }
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [showThumbnails, thumbCount, pages.length]);
 
   // 显示 overlay 信息
   const showOverlay = useCallback((text) => {
@@ -1278,24 +1308,35 @@ export default function Reader() {
       {/* 缩略图面板 */}
       {showThumbnails && (
         <div className="thumbnail-panel" onClick={() => setShowThumbnails(false)} role="dialog" aria-modal="true" aria-label="缩略图总览">
-          <div className="thumbnail-panel-inner" onClick={e => e.stopPropagation()}>
+          <div className="thumbnail-panel-inner" ref={thumbPanelRef} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <h3 id="thumbnail-title">缩略图 ({pages.length} 页)</h3>
               <button className="btn btn-secondary btn-sm" onClick={() => setShowThumbnails(false)} aria-label="关闭缩略图面板">关闭</button>
             </div>
-            <div className="thumbnail-grid">
-              {pages.slice(0, thumbCount).map((p, i) => (
-                <div
-                  key={p.id}
-                  ref={i === currentIndex ? activeThumbRef : null}
-                  className={`thumbnail-item ${i === currentIndex ? 'active' : ''}`}
-                  onClick={() => { goPage(i); setShowThumbnails(false); }}
-                >
-                  <img src={p.thumb_url || p.url} alt={p.filename} loading="lazy" decoding="async" />
-                  <div className="page-num">{i + 1}{bookmarks.has(i) ? ' ⭐' : ''}</div>
-                </div>
-              ))}
-              {thumbCount < pages.length && <div ref={thumbLoadMoreRef} style={{ height: 1 }} />}
+            <div className="thumbnail-grid" ref={thumbGridRef}>
+              {/* 全部格子都渲染（占位撑出滚动高度），窗口外的格子不挂 <img> */}
+              {pages.map((p, i) => {
+                const inWindow = i >= thumbRange.start && i < thumbRange.end;
+                return (
+                  <div
+                    key={p.id}
+                    ref={(el) => {
+                      setThumbItemRef(i)(el);
+                      if (i === currentIndex) activeThumbRef.current = el;
+                    }}
+                    className={`thumbnail-item ${i === currentIndex ? 'active' : ''}`}
+                    onClick={() => { goPage(i); setShowThumbnails(false); }}
+                  >
+                    {inWindow ? (
+                      <img src={p.thumb_url || p.url} alt={p.filename} loading="lazy" decoding="async" />
+                    ) : (
+                      // 未进入窗口：保留同尺寸空位，避免网格塌陷导致滚动位置跳动
+                      <div className="thumbnail-placeholder" aria-hidden="true" />
+                    )}
+                    <div className="page-num">{i + 1}{bookmarks.has(i) ? ' ⭐' : ''}</div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
