@@ -2,10 +2,10 @@ import React, { useState, useEffect, useMemo, useRef, useCallback, Fragment } fr
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 import { formatSize, splitPathParts, lastPathPart } from '../utils/format';
-import { membershipChanged, idsWithin } from '../utils/listReconcile';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
+import useLibrarySession from '../hooks/useLibrarySession';
 import LazyImage from '../components/LazyImage';
 import TagPicker from '../components/TagPicker';
 import CategoryPicker from '../components/CategoryPicker';
@@ -203,10 +203,9 @@ const GroupChapterPanel = React.memo(function GroupChapterPanel({ loading, membe
   );
 });
 
-// 跨路由浏览会话：进入阅读器/设置等页面时 Library 会被卸载，这里按 mode 暂存
-// 列表/筛选/分页/展开状态与滚动位置；返回时先恢复、再后台与服务器比对。
-const librarySessions = {}; // { [mode]: { archives, page, hasMore, search, sortBy, sortOrder, selectedTag, selectedCategory, expandedGroup, groupMembers, scrollTop } }
-// jest 环境下每个用例都是独立的“首次访问”，跨用例恢复会造成泄漏，故禁用
+// 跨路由浏览会话由 useLibrarySession 管理：进入阅读器/设置等页面时 Library 会被卸载，
+// 按 mode 暂存列表/筛选/分页/展开状态与滚动位置；返回时先恢复、再后台与服务器比对。
+// jest 环境下每个用例都是独立的“首次访问”，跨用例恢复会造成泄漏，故默认禁用
 const IS_TEST = typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
 
 export default function Library({ mode = 'library', enableSession }) {
@@ -275,9 +274,24 @@ export default function Library({ mode = 'library', enableSession }) {
   const listScrollRef = useRef(null); // 列表滚动容器
   // 会话恢复写入的筛选值快照：用于在恢复后跳过“筛选变化重拉”，避免覆盖恢复的分页
   const restoredFiltersRef = useRef(null);
-  const latestStateRef = useRef(null); // 每帧最新状态镜像（卸载时写会话）
   const navigate = useNavigate();
   const toast = useToast();
+
+  // 浏览会话：卸载时保存（含滚动位置）、进入时后台与服务器比对
+  const { librarySessions, reconcileLibrary } = useLibrarySession({
+    mode,
+    sessionEnabled,
+    listScrollRef,
+    snapshot: {
+      archives, page: pageRef.current, hasMore,
+      search, sortBy, sortOrder, selectedTag, readFilter, typeFilter, selectedCategory,
+      expandedGroup, groupMembers,
+    },
+    filterRefs: { sortByRef, searchRef, selectedTagRef, readFilterRef, selectedCategoryRef },
+    pageRef,
+    pageSize: PAGE_SIZE,
+    setArchives, setHasMore, setExpandedGroup, setGroupMembers,
+  });
 
   // 保持 refs 同步
   useEffect(() => { sortByRef.current = sortBy; }, [sortBy]);
@@ -333,28 +347,6 @@ export default function Library({ mode = 'library', enableSession }) {
     // 每次进入书库刷新标签列表与计数（阅读器/设置页里的改动可能已过期）
     reloadTags();
     return () => clearTimeout(searchDebounceRef.current);
-  // eslint-disable-next-line
-  }, [mode, sessionEnabled]);
-
-  // 每帧镜像最新状态（卸载时用于写浏览会话）
-  useEffect(() => {
-    latestStateRef.current = {
-      archives, page: pageRef.current, hasMore,
-      search, sortBy, sortOrder, selectedTag, readFilter, typeFilter, selectedCategory,
-      expandedGroup, groupMembers,
-    };
-  });
-
-  // 卸载（进入阅读器等路由）时保存浏览会话，返回时可恢复
-  useEffect(() => {
-    return () => {
-      if (!sessionEnabled) return;
-      const el = listScrollRef.current;
-      const st = latestStateRef.current;
-      if (st && st.archives && st.archives.length > 0) {
-        librarySessions[mode] = { ...st, scrollTop: el ? el.scrollTop : 0 };
-      }
-    };
   // eslint-disable-next-line
   }, [mode, sessionEnabled]);
 
@@ -443,63 +435,6 @@ export default function Library({ mode = 'library', enableSession }) {
 
   const handleLoadMore = useCallback(() => {
     loadArchives({ search: searchRef.current, tag: selectedTagRef.current }, true);
-  }, []);
-
-  // 后台一致性比对：与会话“已加载窗口”的成员集合对比。
-  // 只有成员集合变化（档案增删/替换）才整体刷新；顺序变化（典型：读完一本后它在
-  // “最近阅读”排序里前移）与字段变化一律走合并分支 —— 保留已加载分页与滚动位置，
-  // 否则每次从阅读器返回都会被踢回第一页。
-  const reconcileLibrary = useCallback(async (s) => {
-    if (!s || !s.archives) return;
-    try {
-      // 比对窗口 = 会话已加载条数（上限 500，避免大库全量拉取）
-      const windowSize = Math.min(Math.max(s.archives.length, 1), 500);
-      const data = await api.getArchives({
-        sort_by: s.sortBy,
-        sort_order: s.sortOrder,
-        limit: windowSize,
-        page: 1,
-        search: s.search,
-        ...(s.readFilter && s.readFilter !== 'all' ? { read: s.readFilter } : {}),
-        ...(s.selectedTag ? { tag: s.selectedTag } : {}),
-        ...(s.selectedCategory ? { category_id: s.selectedCategory } : {}),
-      });
-      if (!Array.isArray(data)) return;
-      // 用户在比对期间已切换条件：丢弃过期结果
-      if (sortByRef.current !== s.sortBy || sortOrderRef.current !== s.sortOrder ||
-          searchRef.current !== s.search || selectedTagRef.current !== s.selectedTag ||
-          readFilterRef.current !== (s.readFilter || 'all') ||
-          selectedCategoryRef.current !== s.selectedCategory) {
-        return;
-      }
-      if (membershipChanged(idsWithin(s.archives, windowSize), idsWithin(data, windowSize))) {
-        // 成员变化 → 归档确实增删/替换，整体刷新（此时回到顶部是正确行为）
-        setArchives(data);
-        pageRef.current = 1;
-        setHasMore(data.length >= PAGE_SIZE);
-        setExpandedGroup(null);
-        setGroupMembers(null);
-        return;
-      }
-      // 顺序一致 → 合并第一页的字段变化，保留滚动与后续分页
-      const patch = new Map(data.map(a => [a.id, a]));
-      setArchives(prev => {
-        let changed = false;
-        const next = prev.map(it => {
-          const p = patch.get(it.id);
-          if (!p) return it;
-          if (p.read_page === it.read_page && p.updated_at === it.updated_at &&
-              p.title === it.title && p.page_count === it.page_count && p.file_size === it.file_size) {
-            return it;
-          }
-          changed = true;
-          return { ...it, ...p };
-        });
-        return changed ? next : prev;
-      });
-    } catch (e) {
-      // 已恢复到旧数据；比对失败时静默保留现状
-    }
   }, []);
 
   const handleViewMode = (mode) => {
