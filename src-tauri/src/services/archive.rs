@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -21,6 +22,13 @@ const WINDOWS_7Z_CANDIDATES: &[&str] = &[
 
 /// 持久化解压目录中的签名文件：内容是档案签名 `mtime_secs:len`，用于失效检测。
 const EXTRACT_MARKER: &str = ".mv_extracted";
+
+/// 单页解压后字节上限：防“名称像图片的压缩炸弹条目”一次性读入/落盘撑爆内存或磁盘。
+const MAX_PAGE_BYTES: u64 = 256 * 1024 * 1024;
+/// 单档案整包解压后的总字节预算（解压后树校验时累计）：防空爆归档写满磁盘。
+const MAX_EXTRACT_TOTAL_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+/// 外部解压/列目录子进程总时长上限：卡死的 unrar/7z 不再永久占用 tokio blocking 线程。
+const EXTRACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 /// 解析外部工具路径：先查 PATH，再查 Windows 常见安装目录。
 fn resolve_tool(exe: &str, _windows_candidates: &[&str]) -> Option<PathBuf> {
@@ -105,12 +113,53 @@ fn write_extract_marker(dir: &Path, sig: (i64, u64)) -> Result<()> {
     Ok(())
 }
 
-/// 页面名是否安全（可安全 join 进缓存目录，拒绝绝对路径与 `..` 逃逸）。
+/// 页面名是否安全（可安全 join 进缓存目录）。
+/// 拒绝绝对路径、`..` 逃逸与反斜杠：unrar/7z 同时把 '/' 和 '\' 当分隔符，
+/// Unix 上 "a\..\b.jpg" 在 Path::components 里只是普通文件名，却能被外部工具解出逃逸路径。
 fn is_safe_page_name(name: &str) -> bool {
+    if name.is_empty() || name.contains('\\') {
+        return false;
+    }
     let p = Path::new(name);
     !p.is_absolute()
         && p.components()
             .all(|c| !matches!(c, std::path::Component::ParentDir))
+}
+
+/// 带上限地读取解压产物：超过 MAX_PAGE_BYTES 直接拒绝，避免整页超大文件撑爆内存。
+fn read_page_bounded(path: &Path) -> Result<Vec<u8>> {
+    let meta = std::fs::metadata(path)?;
+    if meta.len() > MAX_PAGE_BYTES {
+        anyhow::bail!(
+            "页面文件过大（{} 字节 > 上限 {}），已拒绝读取",
+            meta.len(),
+            MAX_PAGE_BYTES
+        );
+    }
+    Ok(std::fs::read(path)?)
+}
+
+/// 运行 unrar/7z 并限时：try_wait 轮询 + 超时 kill，超时视为失败。
+/// 直接 output() 在子进程卡死时会无限期占住 tokio blocking 线程，耗尽 512 的阻塞池。
+fn run_extractor(program: &Path, args: &[&str]) -> Result<std::process::Output> {
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let deadline = std::time::Instant::now() + EXTRACT_TIMEOUT;
+    loop {
+        match child.try_wait()? {
+            Some(_) => break,
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                anyhow::bail!("解压/列目录超时（>{EXTRACT_TIMEOUT:?}），已终止子进程");
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    }
+    Ok(child.wait_with_output()?)
 }
 
 /// 整包解压后校验：目录内每个条目（含子目录递归）规范化后必须仍位于 `dir` 之内。
@@ -120,6 +169,7 @@ fn validate_extracted_tree(dir: &Path) -> Result<()> {
     let base = dir.canonicalize()?;
     let mut stack = vec![base.clone()];
     let mut checked = 0usize;
+    let mut total_bytes: u64 = 0;
     while let Some(d) = stack.pop() {
         for entry in fs::read_dir(&d)? {
             let entry = entry?;
@@ -132,10 +182,17 @@ fn validate_extracted_tree(dir: &Path) -> Result<()> {
             }
             if entry.file_type()?.is_dir() {
                 stack.push(p);
+            } else {
+                total_bytes += entry.metadata()?.len();
             }
             checked += 1;
             if checked > 100_000 {
                 anyhow::bail!("extraction tree too large, aborting validation");
+            }
+            if total_bytes > MAX_EXTRACT_TOTAL_BYTES {
+                anyhow::bail!(
+                    "extraction tree too large ({total_bytes} bytes > {MAX_EXTRACT_TOTAL_BYTES}), aborting validation"
+                );
             }
         }
     }
@@ -185,9 +242,19 @@ impl ArchiveReader for ZipArchive {
         let mut archive = zip::ZipArchive::new(file)?;
 
         let mut file = archive.by_name(page_name)?;
-        let mut buffer = Vec::new();
-        std::io::Read::read_to_end(&mut file, &mut buffer)?;
-
+        // 防压缩炸弹：先按中央目录声明的解压后大小拦截，再用 take 兜底声明与实际不符的情况。
+        if file.size() > MAX_PAGE_BYTES {
+            anyhow::bail!(
+                "页面过大（{} 字节 > 上限 {}），已拒绝读取",
+                file.size(),
+                MAX_PAGE_BYTES
+            );
+        }
+        let mut buffer = Vec::with_capacity(file.size() as usize);
+        std::io::Read::take(&mut file, MAX_PAGE_BYTES + 1).read_to_end(&mut buffer)?;
+        if buffer.len() as u64 > MAX_PAGE_BYTES {
+            anyhow::bail!("页面解压后超过大小上限（{} 字节）", buffer.len());
+        }
         Ok(buffer)
     }
 
@@ -284,9 +351,10 @@ impl RarArchive {
             let _ = fs::remove_dir_all(dir);
         }
         fs::create_dir_all(dir)?;
-        let output = std::process::Command::new(&self.unrar)
-            .args(["x", "-o+", "-y", &self.path, &dir.to_string_lossy()])
-            .output()?;
+        let output = run_extractor(
+            &self.unrar,
+            &["x", "-o+", "-y", &self.path, &dir.to_string_lossy()],
+        )?;
         if !output.status.success() {
             anyhow::bail!(
                 "Failed to extract archive: {}",
@@ -305,9 +373,7 @@ impl RarArchive {
 
 impl ArchiveReader for RarArchive {
     fn list_pages(&self) -> Result<Vec<String>> {
-        let output = std::process::Command::new(&self.unrar)
-            .args(["lb", &self.path])
-            .output()?;
+        let output = run_extractor(&self.unrar, &["lb", &self.path])?;
 
         if !output.status.success() {
             anyhow::bail!(
@@ -340,7 +406,7 @@ impl ArchiveReader for RarArchive {
             if let Some(dir) = self.cache.as_deref() {
                 let candidate = dir.join(page_name);
                 if candidate.is_file() {
-                    return Ok(fs::read(&candidate)?);
+                    return read_page_bounded(&candidate);
                 }
                 tracing::warn!(
                     "Page {} not found in extraction cache {}; falling back to targeted extract",
@@ -352,15 +418,16 @@ impl ArchiveReader for RarArchive {
 
         let temp_dir = tempfile::tempdir()?;
 
-        let output = std::process::Command::new(&self.unrar)
-            .args([
+        let output = run_extractor(
+            &self.unrar,
+            &[
                 "x",
                 &self.path,
                 page_name,
                 &temp_dir.path().to_string_lossy(),
                 "-o+",
-            ])
-            .output()?;
+            ],
+        )?;
 
         if !output.status.success() {
             anyhow::bail!(
@@ -371,8 +438,7 @@ impl ArchiveReader for RarArchive {
 
         let extracted_path = temp_dir.path().join(page_name);
         if extracted_path.exists() {
-            let buffer = std::fs::read(&extracted_path)?;
-            return Ok(buffer);
+            return read_page_bounded(&extracted_path);
         }
 
         anyhow::bail!("File not found after extraction: {}", page_name)
@@ -423,14 +489,15 @@ impl SevenZArchive {
             let _ = fs::remove_dir_all(dir);
         }
         fs::create_dir_all(dir)?;
-        let output = std::process::Command::new(&self.sevenz)
-            .args([
+        let output = run_extractor(
+            &self.sevenz,
+            &[
                 "x",
                 "-y",
                 &self.path,
                 &format!("-o{}", dir.to_string_lossy()),
-            ])
-            .output()?;
+            ],
+        )?;
         if !output.status.success() {
             anyhow::bail!(
                 "Failed to extract archive: {}",
@@ -449,9 +516,7 @@ impl SevenZArchive {
 
 impl ArchiveReader for SevenZArchive {
     fn list_pages(&self) -> Result<Vec<String>> {
-        let output = std::process::Command::new(&self.sevenz)
-            .args(["l", &self.path])
-            .output()?;
+        let output = run_extractor(&self.sevenz, &["l", &self.path])?;
 
         if !output.status.success() {
             anyhow::bail!(
@@ -492,7 +557,7 @@ impl ArchiveReader for SevenZArchive {
             if let Some(dir) = self.cache.as_deref() {
                 let candidate = dir.join(page_name);
                 if candidate.is_file() {
-                    return Ok(fs::read(&candidate)?);
+                    return read_page_bounded(&candidate);
                 }
                 tracing::warn!(
                     "Page {} not found in extraction cache {}; falling back to targeted extract",
@@ -504,15 +569,16 @@ impl ArchiveReader for SevenZArchive {
 
         let temp_dir = tempfile::tempdir()?;
 
-        let output = std::process::Command::new(&self.sevenz)
-            .args([
+        let output = run_extractor(
+            &self.sevenz,
+            &[
                 "x",
                 &self.path,
                 &format!("-o{}", temp_dir.path().to_string_lossy()),
                 page_name,
                 "-y",
-            ])
-            .output()?;
+            ],
+        )?;
 
         if !output.status.success() {
             anyhow::bail!(
@@ -523,8 +589,7 @@ impl ArchiveReader for SevenZArchive {
 
         let extracted_path = temp_dir.path().join(page_name);
         if extracted_path.exists() {
-            let buffer = std::fs::read(&extracted_path)?;
-            return Ok(buffer);
+            return read_page_bounded(&extracted_path);
         }
 
         anyhow::bail!("File not found after extraction: {}", page_name)
@@ -622,5 +687,10 @@ mod tests {
         assert!(!is_safe_page_name("../evil.jpg"));
         assert!(!is_safe_page_name("/etc/passwd"));
         assert!(!is_safe_page_name("a/../../b.jpg"));
+        // 反斜杠是 unrar/7z 的分隔符（Unix 上 Path::components 不识别）：一律拒绝
+        assert!(!is_safe_page_name("..\\evil.jpg"));
+        assert!(!is_safe_page_name("folder\\..\\evil.jpg"));
+        assert!(!is_safe_page_name("a\\b.jpg"));
+        assert!(!is_safe_page_name(""));
     }
 }
