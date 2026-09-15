@@ -9,6 +9,7 @@ const LS_FALLBACKS = {
   page_direction: 'pageDirection',
   view_mode: 'viewMode',
   card_density: 'cardDensity',
+  type_filter: 'typeFilter',
   sort_by: 'sortBy',
   sort_order: 'sortOrder',
 };

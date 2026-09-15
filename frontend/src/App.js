@@ -1,5 +1,5 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
-import { BrowserRouter as Router, Routes, Route, NavLink, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import Library from './pages/Library';
 import { ToastProvider } from './components/Toast';
 import { SettingsProvider } from './hooks/useSettings';
@@ -89,10 +89,6 @@ function AppContent() {
             <span className="nav-icon">📚</span>
             <span>漫画库</span>
           </NavLink>
-          <NavLink to="/collection">
-            <span className="nav-icon">📦</span>
-            <span>文件夹</span>
-          </NavLink>
           <NavLink to="/history">
             <span className="nav-icon">📖</span>
             <span>历史</span>
@@ -129,7 +125,8 @@ function AppContent() {
         <Suspense fallback={<PageFallback />}>
           <Routes>
             <Route path="/" element={<ErrorBoundary><Library /></ErrorBoundary>} />
-            <Route path="/collection" element={<ErrorBoundary><Library mode="collection" /></ErrorBoundary>} />
+            {/* 旧的 /collection 已合并进统一书库：保留重定向，避免旧书签/深链接 404 */}
+            <Route path="/collection" element={<Navigate to="/" replace />} />
             <Route path="/reader/:archiveId" element={<ErrorBoundary><Reader /></ErrorBoundary>} />
             <Route path="/history" element={<ErrorBoundary><History /></ErrorBoundary>} />
             <Route path="/settings" element={<ErrorBoundary><Settings /></ErrorBoundary>} />
@@ -143,10 +140,6 @@ function AppContent() {
           <NavLink to="/" end>
             <span className="nav-icon">📚</span>
             <span>书库</span>
-          </NavLink>
-          <NavLink to="/collection">
-            <span className="nav-icon">📦</span>
-            <span>文件夹</span>
           </NavLink>
           <NavLink to="/history">
             <span className="nav-icon">📖</span>

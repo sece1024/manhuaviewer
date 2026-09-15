@@ -155,6 +155,48 @@ describe('Library 同标题自动合并', () => {
   });
 });
 
+describe('Library 统一书库（合并原“漫画库/文件夹”双 tab）', () => {
+  const folder = { id: 1, title: '文件夹漫画', archive_type: 'folder', page_count: 10, cover_url: '/api/archives/1/cover', tags: [] };
+  const cbz = { id: 2, title: '压缩包漫画', archive_type: 'cbz', page_count: 20, cover_url: '/api/archives/2/cover', tags: [] };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    api.getArchives.mockResolvedValue([folder, cbz]);
+  });
+
+  test('默认“全部类型”同时展示文件夹与压缩包档案', async () => {
+    renderLibrary();
+    await waitFor(() => {
+      expect(screen.getByText('文件夹漫画')).toBeInTheDocument();
+    });
+    // 关键回归：类型不再是顶层导航切分，两类档案在同一列表共存
+    expect(screen.getByText('压缩包漫画')).toBeInTheDocument();
+  });
+
+  test('类型筛选可收窄为仅文件夹 / 仅压缩包', async () => {
+    renderLibrary();
+    await waitFor(() => {
+      expect(screen.getByText('文件夹漫画')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('档案类型'), { target: { value: 'folder' } });
+    await waitFor(() => {
+      expect(screen.queryByText('压缩包漫画')).toBeNull();
+    });
+    expect(screen.getByText('文件夹漫画')).toBeInTheDocument();
+    expect(api.updateSettings).toHaveBeenCalledWith({ type_filter: 'folder' });
+
+    fireEvent.change(screen.getByLabelText('档案类型'), { target: { value: 'archive' } });
+    await waitFor(() => {
+      expect(screen.queryByText('文件夹漫画')).toBeNull();
+    });
+    expect(screen.getByText('压缩包漫画')).toBeInTheDocument();
+  });
+});
+
 describe('Library 卡片密度', () => {
   const tagged = {
     id: 1,

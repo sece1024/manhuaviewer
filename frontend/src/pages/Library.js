@@ -225,6 +225,12 @@ export default function Library({ mode = 'library' }) {
   const [sortOrder, setSortOrder] = useState(() => settings.sort_order || 'desc');
   const [selectedTag, setSelectedTag] = useState('');
   const [readFilter, setReadFilter] = useState('all'); // all | read | unread
+  // 档案类型筛选：all | folder | archive（压缩包）。统一书库默认展示全部类型，
+  // 该筛选仅收窄显示（原“漫画库/收藏”双 tab 合并而来，类型不再是顶层导航位）。
+  const [typeFilter, setTypeFilter] = useState(() => {
+    const v = settings.type_filter;
+    return v === 'folder' || v === 'archive' ? v : 'all';
+  });
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [showSidebar, setShowSidebar] = useState(true);
@@ -261,6 +267,7 @@ export default function Library({ mode = 'library' }) {
   const randomSeedRef = useRef(null);
   const selectedTagRef = useRef(selectedTag);
   const readFilterRef = useRef(readFilter);
+  const typeFilterRef = useRef(typeFilter);
   const selectedCategoryRef = useRef(selectedCategory);
   const searchRef = useRef(search);
   const requestIdRef = useRef(0);
@@ -277,6 +284,7 @@ export default function Library({ mode = 'library' }) {
   useEffect(() => { sortOrderRef.current = sortOrder; }, [sortOrder]);
   useEffect(() => { selectedTagRef.current = selectedTag; }, [selectedTag]);
   useEffect(() => { readFilterRef.current = readFilter; }, [readFilter]);
+  useEffect(() => { typeFilterRef.current = typeFilter; }, [typeFilter]);
   useEffect(() => { selectedCategoryRef.current = selectedCategory; }, [selectedCategory]);
   useEffect(() => { searchRef.current = search; }, [search]);
   useEffect(() => { expandedGroupRef.current = expandedGroup; }, [expandedGroup]);
@@ -295,6 +303,7 @@ export default function Library({ mode = 'library' }) {
       setSortOrder(s.sortOrder); sortOrderRef.current = s.sortOrder;
       setSelectedTag(s.selectedTag); selectedTagRef.current = s.selectedTag;
       setReadFilter(s.readFilter || 'all'); readFilterRef.current = s.readFilter || 'all';
+      setTypeFilter(s.typeFilter || 'all'); typeFilterRef.current = s.typeFilter || 'all';
       setSelectedCategory(s.selectedCategory); selectedCategoryRef.current = s.selectedCategory;
       setArchives(s.archives);
       pageRef.current = s.page;
@@ -327,7 +336,7 @@ export default function Library({ mode = 'library' }) {
   useEffect(() => {
     latestStateRef.current = {
       archives, page: pageRef.current, hasMore,
-      search, sortBy, sortOrder, selectedTag, readFilter, selectedCategory,
+      search, sortBy, sortOrder, selectedTag, readFilter, typeFilter, selectedCategory,
       expandedGroup, groupMembers,
     };
   });
@@ -724,13 +733,17 @@ export default function Library({ mode = 'library' }) {
   // 分组已在服务端完成：`archives` 里的每一项要么是普通档案，要么是带 _isGroup 的组卡片。
   const groupedArchives = archives;
 
-  // 将档案按类型分成收藏（压缩包）和文件夹两组
-  const compressedArchives = useMemo(() => groupedArchives.filter(a => a.archive_type !== 'folder'), [groupedArchives]);
-  const folderArchives = useMemo(() => groupedArchives.filter(a => a.archive_type === 'folder'), [groupedArchives]);
-
-  // 根据 mode 决定展示哪组
-  const isCollection = mode === 'collection';
-  const displayArchives = isCollection ? compressedArchives : folderArchives;
+  // 类型筛选（filter，不再是顶层导航位）：默认全部，可按容器类型收窄
+  const handleTypeFilter = (v) => {
+    setTypeFilter(v);
+    updateSetting('type_filter', v);
+  };
+  const displayArchives = useMemo(() => {
+    if (typeFilter === 'all') return groupedArchives;
+    return groupedArchives.filter(a =>
+      typeFilter === 'folder' ? a.archive_type === 'folder' : a.archive_type !== 'folder'
+    );
+  }, [groupedArchives, typeFilter]);
 
   // 触底自动加载更多：滚动接近底部自动拉下一页（底部按钮保留作手动兜底）。
   // 用 appendLockRef 防止 IO 回调与点击在短时间内重复请求同一页。
@@ -779,8 +792,8 @@ export default function Library({ mode = 'library' }) {
     [categories]
   );
 
-  // Welcome screen — 仅漫画库模式下，无漫画时显示
-  if (!isCollection && archives.length === 0) {
+  // Welcome screen — 书库彻底为空时显示（合并“漫画库/收藏”双 tab 后不再按类型区分）
+  if (archives.length === 0) {
     return (
       <div className="welcome-screen">
         <div className="welcome-screen-icon">📚</div>
@@ -889,6 +902,12 @@ export default function Library({ mode = 'library' }) {
 
           <div className="spacer" />
 
+          <select value={typeFilter} onChange={(e) => handleTypeFilter(e.target.value)} style={{ minWidth: 92 }} aria-label="档案类型">
+            <option value="all">全部类型</option>
+            <option value="folder">文件夹</option>
+            <option value="archive">压缩包</option>
+          </select>
+
           <select value={readFilter} onChange={(e) => setReadFilter(e.target.value)} style={{ minWidth: 88 }} aria-label="阅读状态">
             <option value="all">全部</option>
             <option value="unread">未读</option>
@@ -937,7 +956,6 @@ export default function Library({ mode = 'library' }) {
             >⋯</button>
           ) : (
             <ArchiveActionButtons
-              isCollection={isCollection}
               isTauri={isTauri}
               opening={opening}
               loading={loading}
@@ -953,7 +971,6 @@ export default function Library({ mode = 'library' }) {
         {isNarrow && showMobileMenu && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: 8 }}>
             <ArchiveActionButtons
-              isCollection={isCollection}
               isTauri={isTauri}
               opening={opening}
               loading={loading}
@@ -981,9 +998,15 @@ export default function Library({ mode = 'library' }) {
           </div>
         ) : displayArchives.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-state-icon">{isCollection ? '📦' : '📚'}</div>
+            <div className="empty-state-icon">{typeFilter === 'archive' ? '📦' : '📚'}</div>
             <div className="empty-state-text">
-              {search || selectedTag ? '没有匹配的漫画' : isCollection ? '暂无收藏' : '点击「打开文件」添加漫画'}
+              {search || selectedTag
+                ? '没有匹配的漫画'
+                : typeFilter === 'archive'
+                  ? '暂无压缩包档案（CBZ/RAR/7Z）；可在左侧切换为「全部」查看文件夹漫画'
+                  : typeFilter === 'folder'
+                    ? '暂无文件夹档案；可在左侧切换为「全部」查看压缩包漫画'
+                    : '点击「打开文件」添加漫画'}
             </div>
           </div>
         ) : viewMode === 'grid' ? (
@@ -1223,7 +1246,7 @@ export default function Library({ mode = 'library' }) {
 const NS_OTHER = '_other';
 
 // 漫画库操作按钮组（桌面 / 移动端共用）
-function ArchiveActionButtons({ isCollection, isTauri, opening, packingCbz, variant, onOpenFolder, onOpenArchive, onConvertCbz }) {
+function ArchiveActionButtons({ isTauri, opening, packingCbz, variant, onOpenFolder, onOpenArchive, onConvertCbz }) {
   const sizeClass = variant === 'mobile' ? 'btn-sm' : '';
 
   return (
@@ -1234,7 +1257,7 @@ function ArchiveActionButtons({ isCollection, isTauri, opening, packingCbz, vari
       <button className={`btn btn-secondary ${sizeClass}`} onClick={onOpenArchive} disabled={opening}>
         📄 打开压缩包
       </button>
-      {!isCollection && isTauri && (
+      {isTauri && (
         <button className={`btn btn-secondary ${sizeClass}`} onClick={onConvertCbz} disabled={packingCbz}>
           {packingCbz ? '⏳ 打包中...' : '📦 转换 CBZ'}
         </button>
