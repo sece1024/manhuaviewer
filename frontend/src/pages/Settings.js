@@ -4,6 +4,7 @@ import { formatSize } from '../utils/format';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
+import useSync from '../hooks/useSync';
 import ConfirmDialog from '../components/ConfirmDialog';
 
 export default function Settings() {
@@ -29,24 +30,19 @@ export default function Settings() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const toast = useToast();
 
-  // ── 跨机同步 ──
-  const [syncUrl, setSyncUrl] = useState(settings.sync_remote_url || '');
-  const [syncToken, setSyncToken] = useState(settings.sync_remote_token || '');
-  const [syncDir, setSyncDir] = useState(settings.sync_dir || '');
-  const [syncRunning, setSyncRunning] = useState(false);
-  const [syncInfo, setSyncInfo] = useState({ total: 0, done: 0, new: 0, changed: 0, skipped: 0, current: '', failed: [] });
-  const [syncPlanResult, setSyncPlanResult] = useState(null); // {new:[],changed:[],up_to_date:[],total}
-  const [planLoading, setPlanLoading] = useState(false);
-  const syncPollRef = useRef(null);
-
-  useEffect(() => {
-    setSyncUrl(settings.sync_remote_url || '');
-    setSyncToken(settings.sync_remote_token || '');
-    setSyncDir(settings.sync_dir || '');
-  }, [settings.sync_remote_url, settings.sync_remote_token, settings.sync_dir]);
-
-  // 卸载时停止轮询
-  useEffect(() => () => { if (syncPollRef.current) clearInterval(syncPollRef.current); }, []);
+  // ── 跨机同步 ──（表单/对比/启动取消/进度轮询见 useSync）
+  const {
+    syncUrl, setSyncUrl,
+    syncToken, setSyncToken,
+    syncDir, setSyncDir,
+    syncRunning,
+    syncInfo,
+    syncPlanResult,
+    planLoading,
+    handleSyncCompare,
+    handleSyncStart,
+    handleSyncCancel,
+  } = useSync({ settings, updateSetting, toast, onStatsRefresh: setStats });
 
   // 本机局域网 IPv4：展示"手机/平板访问地址"
   useEffect(() => {
@@ -56,71 +52,6 @@ export default function Settings() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
-
-  const pollSyncStatus = useCallback(async () => {
-    try {
-      const s = await api.syncStatus();
-      setSyncInfo({
-        total: s.total || 0,
-        done: s.done || 0,
-        new: s.new || 0,
-        changed: s.changed || 0,
-        skipped: s.skipped || 0,
-        current: s.current || '',
-        failed: s.failed || [],
-      });
-      if (!s.running) {
-        if (syncPollRef.current) { clearInterval(syncPollRef.current); syncPollRef.current = null; }
-        setSyncRunning(false);
-        api.getStats().then(setStats).catch(() => {}); // 完成后刷新统计
-      }
-    } catch (e) { /* 轮询失败忽略，下一轮再试 */ }
-  }, []);
-
-  // 对比预览：只拉清单与本地比对，不下载
-  const handleSyncCompare = async () => {
-    if (planLoading || syncRunning) return;
-    if (!syncUrl.trim() || !syncDir.trim()) {
-      toast('请填写远端地址和本地同步目录', 'warning');
-      return;
-    }
-    setPlanLoading(true);
-    setSyncPlanResult(null);
-    try {
-      const plan = await api.syncPlan({ url: syncUrl.trim(), token: syncToken.trim(), dir: syncDir.trim() });
-      setSyncPlanResult(plan);
-    } catch (e) {
-      toast(e.message || '对比失败', 'error');
-    } finally {
-      setPlanLoading(false);
-    }
-  };
-
-  const handleSyncStart = async () => {
-    if (syncRunning) return;
-    if (!syncUrl.trim() || !syncDir.trim()) {
-      toast('请填写远端地址和本地同步目录', 'warning');
-      return;
-    }
-    try {
-      await Promise.all([
-        updateSetting('sync_remote_url', syncUrl.trim()),
-        updateSetting('sync_remote_token', syncToken.trim()),
-        updateSetting('sync_dir', syncDir.trim()),
-      ]);
-      await api.syncStart({ url: syncUrl.trim(), token: syncToken.trim(), dir: syncDir.trim() });
-      setSyncRunning(true);
-      setSyncInfo({ total: 0, done: 0, new: 0, changed: 0, skipped: 0, current: '连接远端...', failed: [] });
-      pollSyncStatus();
-      syncPollRef.current = setInterval(pollSyncStatus, 1000);
-    } catch (e) {
-      toast(e.message || '同步启动失败', 'error');
-    }
-  };
-
-  const handleSyncCancel = async () => {
-    try { await api.syncCancel(); } catch (e) { toast(e.message, 'error'); }
-  };
 
   // 检测 Tauri 环境
   const isTauri = window.__TAURI__ !== undefined;
