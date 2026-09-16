@@ -634,6 +634,7 @@ mod tests {
         let stats = db.get_stats().unwrap();
         assert_eq!(stats["total_archives"], 2);
         assert_eq!(stats["total_pages"], 30);
+        assert_eq!(stats["total_size"], 1500); // file_size 500 + 1000
         assert_eq!(stats["total_tags"], 1);
         assert_eq!(stats["total_categories"], 1);
         assert_eq!(stats["history_count"], 0);

@@ -50,6 +50,11 @@ impl Database {
             [],
             |row| row.get(0),
         )?;
+        let total_size: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(file_size), 0) FROM archives",
+            [],
+            |row| row.get(0),
+        )?;
         let total_tags: i64 = conn.query_row("SELECT COUNT(*) FROM tags", [], |row| row.get(0))?;
         let total_categories: i64 =
             conn.query_row("SELECT COUNT(*) FROM categories", [], |row| row.get(0))?;
@@ -59,6 +64,7 @@ impl Database {
         Ok(serde_json::json!({
             "total_archives": total_archives,
             "total_pages": total_pages,
+            "total_size": total_size,
             "total_tags": total_tags,
             "total_categories": total_categories,
             "history_count": history_count

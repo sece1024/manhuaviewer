@@ -698,11 +698,11 @@ export default function Settings() {
         <div id="settings-section-stats" className="settings-section">
           <div className="settings-section-title">📊 统计</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12 }}>
-            <StatCard label="漫画总数" value={stats.archives} icon="📚" />
+            <StatCard label="漫画总数" value={stats.total_archives ?? 0} icon="📚" />
             <StatCard label="总页数" value={(stats.total_pages ?? 0).toLocaleString()} icon="📄" />
-            <StatCard label="标签数" value={stats.tags} icon="🏷️" />
-            <StatCard label="分类数" value={stats.categories} icon="📂" />
-            <StatCard label="阅读记录" value={stats.history} icon="📖" />
+            <StatCard label="标签数" value={stats.total_tags ?? 0} icon="🏷️" />
+            <StatCard label="分类数" value={stats.total_categories ?? 0} icon="📂" />
+            <StatCard label="阅读记录" value={stats.history_count ?? 0} icon="📖" />
             <StatCard label="总大小" value={formatSize(stats.total_size)} icon="💾" />
           </div>
         </div>

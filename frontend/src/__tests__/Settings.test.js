@@ -27,7 +27,7 @@ describe('Settings 页面', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     api.getSettings.mockResolvedValue({ page_direction: 'rtl', reader_fit: 'height', theme: 'dark' });
-    api.getStats.mockResolvedValue({ archives: 10, tags: 5, categories: 3, history: 20, total_pages: 500, total_size: 1024000 });
+    api.getStats.mockResolvedValue({ total_archives: 10, total_pages: 500, total_size: 1024000, total_tags: 5, total_categories: 3, history_count: 20 });
     api.getTags.mockResolvedValue([
       { id: 1, namespace: 'artist', name: '测试作者', color: '#ff0000', full_name: 'artist:测试作者', archive_count: 3 },
     ]);
@@ -37,11 +37,16 @@ describe('Settings 页面', () => {
     api.getLanIps.mockResolvedValue({ ipv4: [], port: 5002 });
   });
 
-  test('加载并显示统计数据', async () => {
+  test('加载并显示统计数据（键与后端一致）', async () => {
     renderSettings();
     await waitFor(() => {
-      expect(screen.getByText('10')).toBeInTheDocument();
+      expect(screen.getByText('10')).toBeInTheDocument(); // 漫画总数
     });
+    expect(screen.getByText('500')).toBeInTheDocument();     // 总页数（toLocaleString）
+    expect(screen.getByText('5')).toBeInTheDocument();       // 标签数
+    expect(screen.getByText('3')).toBeInTheDocument();       // 分类数
+    expect(screen.getByText('20')).toBeInTheDocument();      // 阅读记录
+    expect(screen.getByText('1000.0 KB')).toBeInTheDocument(); // 总大小（formatSize(1024000) → 1000.0 KB）
   });
 
   test('显示设置区域标题', async () => {
