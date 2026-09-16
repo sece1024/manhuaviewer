@@ -203,4 +203,35 @@ describe('Reader 双页模式', () => {
 
     jest.useRealTimers();
   });
+
+  test('组主档案（group_id===id）显示章节列表而非阅读器', async () => {
+    // 与后端 /pages 响应一致：archive 包含 group_id（此前 mock 带而真实响应缺，
+    // 掩盖了“组主档案章节列表永不触发”的缺陷；后端已修复，这里做回归保护）
+    api.getPages.mockResolvedValue({
+      archive: { id: 5, title: '组测试', archive_type: 'folder', group_id: 5 },
+      pages: makePages(3),
+      read_page: 0,
+    });
+    api.getGroupChapters.mockResolvedValue([
+      { id: 5, title: '组测试', page_count: 3, read_page: 1, archive_type: 'folder' },
+      { id: 6, title: '第2话', page_count: 4, read_page: 0, archive_type: 'folder' },
+    ]);
+
+    render(
+      <SettingsProvider>
+        <ToastProvider>
+          <MemoryRouter initialEntries={['/reader/5']}>
+            <Routes>
+              <Route path="/reader/:archiveId" element={<Reader />} />
+            </Routes>
+          </MemoryRouter>
+        </ToastProvider>
+      </SettingsProvider>
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/2 话/)).toBeInTheDocument(); // 章节列表头部
+    });
+    expect(screen.getByText('第2话')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /页面阅读区/ })).toBeNull(); // 不是阅读器
+  });
 });

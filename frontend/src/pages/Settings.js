@@ -660,7 +660,7 @@ export default function Settings() {
             {tags.map(t => (
               <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: 'var(--bg-primary)', borderRadius: 20, fontSize: 13 }}>
                 <span style={{ width: 10, height: 10, borderRadius: '50%', background: t.color, flexShrink: 0 }} />
-                <span>{t.full_name || t.name}</span>
+                <span>{t.namespace ? `${t.namespace}:${t.name}` : t.name}</span>
                 <span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>({t.archive_count})</span>
                 <button onClick={() => { setConfirmTarget({ type: 'tag', id: t.id, name: t.name }); setConfirmOpen(true); }} aria-label={`删除标签 ${t.name}`} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0, fontSize: 14 }}>×</button>
               </div>

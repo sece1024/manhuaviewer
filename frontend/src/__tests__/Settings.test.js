@@ -29,7 +29,8 @@ describe('Settings 页面', () => {
     api.getSettings.mockResolvedValue({ page_direction: 'rtl', reader_fit: 'height', theme: 'dark' });
     api.getStats.mockResolvedValue({ total_archives: 10, total_pages: 500, total_size: 1024000, total_tags: 5, total_categories: 3, history_count: 20 });
     api.getTags.mockResolvedValue([
-      { id: 1, namespace: 'artist', name: '测试作者', color: '#ff0000', full_name: 'artist:测试作者', archive_count: 3 },
+      // 与后端 /api/tags 实际返回一致：{id, namespace, name, color, archive_count}，无 full_name
+      { id: 1, namespace: 'artist', name: '测试作者', color: '#ff0000', archive_count: 3 },
     ]);
     api.getCategories.mockResolvedValue([
       { id: 1, name: '动作', color: '#00ff00', pinned: 0, archive_count: 5 },

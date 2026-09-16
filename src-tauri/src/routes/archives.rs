@@ -779,6 +779,9 @@ pub async fn list_pages(State(state): State<Arc<AppState>>, Path(id): Path<i64>)
                     "title": archive.title,
                     "archive_type": archive.archive_type,
                     "path": archive.path,
+                    // 组主档案（group_id == 自身 id）时，阅读器据此展示组内章节列表；
+                    // 缺失会让该判断永远为假，章节列表功能失效
+                    "group_id": archive.group_id,
                 },
                 "pages": page_list,
                 "read_page": read_page,
