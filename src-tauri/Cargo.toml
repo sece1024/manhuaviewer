@@ -23,7 +23,7 @@ tower-http = { version = "0.5", features = ["cors", "fs"] }
 rust-embed = "8"
 
 # 数据库
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.31", features = ["bundled", "functions"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"
 

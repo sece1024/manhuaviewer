@@ -157,6 +157,34 @@ fn group_archives(rows: Vec<crate::db::ArchiveRow>) -> Vec<ListItem> {
         .collect()
 }
 
+/// 把「服务端分组查询」返回的一行转成列表项：成员数 ≥2（或存在 group_id）视为组卡片。
+/// 与 `group_archives` 的输出语义保持一致（自动组才带 `_autoKey`/`_parentDir`）。
+fn grouped_row_to_item(row: crate::db::GroupedArchiveRow) -> ListItem {
+    let is_permanent = row.archive.group_id.is_some();
+    let is_group = is_permanent || row.chapter_count >= 2;
+    let (auto_group, auto_key, parent_dir) = if !is_permanent && is_group {
+        let parent = parent_dir_of(&row.archive.path);
+        let key = format!("{}\u{0}{}", parent, row.archive.title.to_lowercase());
+        (Some(true), Some(key), Some(parent))
+    } else {
+        (None, None, None)
+    };
+    ListItem {
+        archive: row.archive,
+        is_group,
+        chapter_count: if is_group {
+            Some(row.chapter_count)
+        } else {
+            None
+        },
+        auto_group,
+        auto_key,
+        parent_dir,
+        read_page: None,
+        tags: None,
+    }
+}
+
 fn etag_for_page(id: i64, page_index: i64, mtime: Option<SystemTime>) -> String {
     let secs = mtime
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -441,25 +469,41 @@ pub async fn list_archives(
         let sort = query.sort.as_deref().unwrap_or("updated");
         let order = query.order.as_deref().unwrap_or("desc");
 
-        let mut rows = db.list_archives_all(
-            query.search.as_deref(),
-            query.tag.as_deref(),
-            query.category_id,
-            query.read.as_deref(),
-            sort,
-            order,
-        )?;
-        // 随机排序：带会话种子时改为确定性洗牌，保证分页/无限滚动不重不漏；
-        // 未带 seed（旧客户端）保持库里 RANDOM() 的原行为。
-        if sort == "random" {
+        let mut grouped: Vec<ListItem> = if sort == "random" {
+            // 随机排序：SQL RANDOM() 拉全表后按会话种子稳定洗牌，保证分页/无限滚动不重不漏；
+            // 未带 seed（旧客户端）保持库内 RANDOM() 的原行为。
+            let mut rows = db.list_archives_all(
+                query.search.as_deref(),
+                query.tag.as_deref(),
+                query.category_id,
+                query.read.as_deref(),
+                sort,
+                order,
+            )?;
             let seed = query.seed.unwrap_or(0);
             rows.sort_by_key(|a| stable_random_key(a.id, seed));
-        }
-        let mut grouped: Vec<ListItem> = group_archives(rows)
+            group_archives(rows)
+                .into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .collect()
+        } else {
+            // 其余排序：分组与 LIMIT/OFFSET 全部下推到 SQL，只取当前页的组代表行，
+            // 不再把整表拉回内存做分组（列表规模增长后每页/每次搜索都能省下这份开销）。
+            db.list_archives_grouped_page(
+                query.search.as_deref(),
+                query.tag.as_deref(),
+                query.category_id,
+                query.read.as_deref(),
+                sort,
+                order,
+                limit,
+                offset,
+            )?
             .into_iter()
-            .skip(offset as usize)
-            .take(limit as usize)
-            .collect();
+            .map(grouped_row_to_item)
+            .collect()
+        };
 
         // 附上当前页卡片的阅读进度（read_page），供书库进度条/已读展示使用。
         // 合并组卡片显示其主成员（即排序最靠前的那一话）的进度。

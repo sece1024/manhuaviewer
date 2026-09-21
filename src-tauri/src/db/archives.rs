@@ -5,7 +5,7 @@ use rusqlite::{OptionalExtension, Result};
 
 use super::{
     archive_row, archive_row_with_remote_cover, log_and_skip, order_expr_for, path_is_within,
-    ArchiveFilters, ArchiveRow, Database, PageRow, ARCHIVE_COLUMNS,
+    ArchiveFilters, ArchiveRow, Database, GroupedArchiveRow, PageRow, ARCHIVE_COLUMNS,
 };
 
 impl Database {
@@ -188,6 +188,97 @@ impl Database {
             .collect();
 
         Ok(archives)
+    }
+
+    /// 服务端分组 + 分页：在一次 SQL 查询内按（永久组 `group_id` / 自动组「同父目录 + 同标题」）
+    /// 分组，取每组代表行与成员数，再对「组」排序并 `LIMIT/OFFSET`。
+    ///
+    /// 分组键由 SQL 标量函数 `archive_group_key` 计算（见 `db::mod`），与路由层
+    /// `group_archives` 的规则一致：永久组的代表行取 `id == group_id` 的成员，自动组取
+    /// 排序最靠前的成员；组在列表中的位置取组内成员的极值（升序 MIN / 降序 MAX），
+    /// 保持「按首条成员位置」的既有语义。
+    ///
+    /// 调用方需保证 `sort != "random"`（随机排序依赖路由层的稳定洗牌，单独处理）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn list_archives_grouped_page(
+        &self,
+        search: Option<&str>,
+        tag: Option<&str>,
+        category_id: Option<i64>,
+        read: Option<&str>,
+        sort: &str,
+        order: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<GroupedArchiveRow>> {
+        let conn = self.conn()?;
+        let (join_clause, mut where_clause, mut params) =
+            Self::build_archive_filters(&conn, search, tag, category_id)?;
+
+        let read_clause = match read {
+            Some("read") => " AND EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)",
+            Some("unread") => {
+                " AND NOT EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)"
+            }
+            _ => "",
+        };
+        where_clause.push_str(read_clause);
+
+        let sort_expr = order_expr_for(sort);
+        let direction = if order == "asc" { "ASC" } else { "DESC" };
+        // 组位置：升序用组内最小排序值、降序用最大，等价于「首条成员的位置」
+        let group_agg = if order == "asc" { "MIN" } else { "MAX" };
+
+        let sql = format!(
+            "WITH base AS (
+                 SELECT {cols},
+                        archive_group_key(a.path, a.title, a.group_id) AS gkey,
+                        {sort_expr} AS sortkey
+                 FROM archives a {join} {where}
+             ),
+             ranked AS (
+                 SELECT *,
+                     ROW_NUMBER() OVER (
+                         PARTITION BY gkey
+                         ORDER BY (CASE WHEN group_id IS NOT NULL AND id = group_id THEN 0 ELSE 1 END),
+                                  sortkey {dir}
+                     ) AS rn,
+                     COUNT(*) OVER (PARTITION BY gkey) AS cnt,
+                     {agg}(sortkey) OVER (PARTITION BY gkey) AS group_sort
+                 FROM base
+             )
+             SELECT id, title, path, archive_type, page_count, cover_image, file_size,
+                    thumbnail_path, group_id, created_at, updated_at, cnt
+             FROM ranked
+             WHERE rn = 1
+             ORDER BY group_sort {dir}, gkey
+             LIMIT ? OFFSET ?",
+            cols = ARCHIVE_COLUMNS,
+            join = join_clause,
+            where = where_clause,
+            sort_expr = sort_expr,
+            dir = direction,
+            agg = group_agg,
+        );
+
+        params.push(Box::new(limit));
+        params.push(Box::new(offset));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                |row| {
+                    Ok(GroupedArchiveRow {
+                        archive: archive_row(row)?,
+                        chapter_count: row.get(11)?,
+                    })
+                },
+            )?
+            .filter_map(log_and_skip)
+            .collect();
+
+        Ok(rows)
     }
 
     /// 构造档案列表查询的 JOIN / WHERE 片段与参数（供 list_archives 与 list_archives_all 共用）。

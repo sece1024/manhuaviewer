@@ -36,6 +36,29 @@ fn path_is_within(root: &str, path: &str) -> bool {
     p == r || p.starts_with(r)
 }
 
+/// 路径的父目录（去掉尾部 `/`/`\`）；无父目录时为空串。
+/// 与 routes 层展示/自动分组用的 `parent_dir_of` 语义一致。
+fn parent_dir_of_path(path: &str) -> String {
+    std::path::Path::new(path)
+        .parent()
+        .map(|p| {
+            p.to_string_lossy()
+                .trim_end_matches(['/', '\\'])
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+/// 列表分组键：永久组 `G{group_id}`；否则 `A{父目录}\0{小写标题}`。
+/// 与 routes 层 `group_archives` 的分组规则一致——注册为 SQL 标量函数后即可在
+/// SQL 内按组聚合分页，无需把整表拉回内存。
+fn archive_group_key(path: &str, title: &str, group_id: Option<i64>) -> String {
+    match group_id {
+        Some(g) => format!("G{g}"),
+        None => format!("A{}\u{0}{}", parent_dir_of_path(path), title.to_lowercase()),
+    }
+}
+
 /// 统一的档案查询列（带 `a.` 前缀，用于 JOIN 场景）。
 const ARCHIVE_COLUMNS: &str = "a.id, a.title, a.path, a.archive_type, a.page_count, a.cover_image, a.file_size, a.thumbnail_path, a.group_id, a.created_at, a.updated_at";
 
@@ -79,6 +102,13 @@ pub struct ArchiveRow {
     pub group_id: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// 服务端分组分页返回的一行：组代表档案 + 该组成员数。
+#[derive(Debug, Clone)]
+pub struct GroupedArchiveRow {
+    pub archive: ArchiveRow,
+    pub chapter_count: i64,
 }
 
 /// 排序方式 → ORDER BY 表达式。"updated"（最近阅读）优先按阅读时间排序：
@@ -183,6 +213,19 @@ impl Database {
             conn.pragma_update(None, "foreign_keys", "ON")?;
             // 池内多连接并发写（如翻页存 history 撞上扫描长事务）时等待而不是立刻报错
             conn.busy_timeout(std::time::Duration::from_secs(5))?;
+            // 列表分组分页用的分组键函数（与 routes::group_archives 规则一致）
+            conn.create_scalar_function(
+                "archive_group_key",
+                3,
+                rusqlite::functions::FunctionFlags::SQLITE_UTF8
+                    | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+                |ctx| {
+                    let path: String = ctx.get(0)?;
+                    let title: String = ctx.get(1)?;
+                    let group_id: Option<i64> = ctx.get(2)?;
+                    Ok(archive_group_key(&path, &title, group_id))
+                },
+            )?;
             Ok(())
         });
         let pool = r2d2::Pool::builder().max_size(8).build(manager)?;
@@ -587,6 +630,74 @@ mod tests {
             .list_archives_all(None, None, None, None, "random", "asc")
             .unwrap();
         assert_eq!(random.len(), 2);
+    }
+
+    /// 服务端分组分页：自动组按「同父目录 + 同标题」合并，且不影响不同父目录的同名档案。
+    #[test]
+    fn test_list_archives_grouped_page_auto_group() {
+        let db = setup_test_db();
+        db.insert_archive("海贼王", "/manhua/hzw/01", "folder", 10, 100)
+            .unwrap();
+        db.insert_archive("海贼王", "/manhua/hzw/02", "folder", 12, 100)
+            .unwrap();
+        // 同标题但父目录不同：不得合并
+        db.insert_archive("海贼王", "/other/hzw/01", "folder", 5, 100)
+            .unwrap();
+        db.insert_archive("火影", "/manhua/hyr", "folder", 8, 100)
+            .unwrap();
+
+        let groups = db
+            .list_archives_grouped_page(None, None, None, None, "name", "asc", 50, 0)
+            .unwrap();
+        assert_eq!(groups.len(), 3, "自动组应把 2 话合并为 1 项");
+
+        let hzw = groups
+            .iter()
+            .find(|g| g.archive.path.starts_with("/manhua/hzw/"))
+            .unwrap();
+        assert_eq!(hzw.chapter_count, 2);
+        assert_eq!(hzw.archive.title, "海贼王");
+
+        let other = groups
+            .iter()
+            .find(|g| g.archive.path.starts_with("/other/"))
+            .unwrap();
+        assert_eq!(other.chapter_count, 1, "不同父目录不合并");
+    }
+
+    /// 永久合并组：代表行取主档案（id == group_id），并对「组」整体分页。
+    #[test]
+    fn test_list_archives_grouped_page_manual_group_and_paging() {
+        let db = setup_test_db();
+        let a = db.insert_archive("A", "/g/a", "zip", 10, 100).unwrap();
+        let b = db.insert_archive("B", "/g/b", "zip", 10, 100).unwrap();
+        let c = db.insert_archive("C", "/g/c", "zip", 10, 100).unwrap();
+        let d = db.insert_archive("D", "/g/d", "zip", 10, 100).unwrap();
+        assert_eq!(db.merge_archives(&[a, b]).unwrap(), a);
+
+        // 名称升序：A 组（成员 A/B，取 MIN title = "A"）最靠前，随后 C、D
+        let page1 = db
+            .list_archives_grouped_page(None, None, None, None, "name", "asc", 1, 0)
+            .unwrap();
+        assert_eq!(page1.len(), 1);
+        assert_eq!(page1[0].archive.id, a, "永久组代表应为主档案");
+        assert_eq!(page1[0].chapter_count, 2);
+
+        let page2 = db
+            .list_archives_grouped_page(None, None, None, None, "name", "asc", 1, 1)
+            .unwrap();
+        assert_eq!(page2[0].archive.id, c);
+
+        let page3 = db
+            .list_archives_grouped_page(None, None, None, None, "name", "asc", 1, 2)
+            .unwrap();
+        assert_eq!(page3[0].archive.id, d);
+
+        // 越界页返回空
+        let empty = db
+            .list_archives_grouped_page(None, None, None, None, "name", "asc", 1, 5)
+            .unwrap();
+        assert!(empty.is_empty());
     }
 
     #[test]
