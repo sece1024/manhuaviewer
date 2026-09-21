@@ -227,6 +227,9 @@ const api = {
       _invalidate('/history');
       return r;
     }),
+  // 扫描进度：轮询用，跳过缓存与 in-flight 去重
+  scanStatus: () => request('/scan/status', { cache: false }),
+  scanCancel: () => request('/scan/cancel', { method: 'POST' }),
 
   // CBZ export
   listCbz: () => request('/cbz/list'),

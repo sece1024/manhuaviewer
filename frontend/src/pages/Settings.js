@@ -5,6 +5,7 @@ import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
 import useSync from '../hooks/useSync';
+import useScan from '../hooks/useScan';
 import ConfirmDialog from '../components/ConfirmDialog';
 
 export default function Settings() {
@@ -18,7 +19,6 @@ export default function Settings() {
   const [cbzDirInput, setCbzDirInput] = useState(settings.cbz_export_dir || '');
   const [rootDir, setRootDir] = useState(settings.root_dir || '');
   const [scanDepth, setScanDepth] = useState(settings.scan_depth || '1');
-  const [scanning, setScanning] = useState(false);
   const [newCatName, setNewCatName] = useState('');
   const [newCatColor, setNewCatColor] = useState('#6366f1');
   const [importing, setImporting] = useState(false);
@@ -43,6 +43,13 @@ export default function Settings() {
     handleSyncStart,
     handleSyncCancel,
   } = useSync({ settings, updateSetting, toast, onStatsRefresh: setStats });
+
+  // ── 书库扫描 ──（进度轮询与取消见 useScan）
+  const { scanning, scanInfo, handleScan, handleScanCancel } = useScan({
+    updateSetting,
+    toast,
+    onStatsRefresh: setStats,
+  });
 
   // 本机局域网 IPv4：展示"手机/平板访问地址"
   useEffect(() => {
@@ -209,27 +216,8 @@ export default function Settings() {
     }
   };
 
-  // 增量扫描根目录：先持久化根目录与深度，再触发扫描
-  const handleScan = async () => {
-    const dir = rootDir.trim();
-    if (!dir) {
-      toast('请先设置书库根目录', 'warning');
-      return;
-    }
-    if (scanning) return;
-    setScanning(true);
-    try {
-      await updateSetting('root_dir', dir);
-      await updateSetting('scan_depth', scanDepth);
-      const r = await api.scan(dir, Number(scanDepth) || 1);
-      toast(r.message || '扫描完成', 'success');
-      api.getStats().then(setStats).catch(() => {});
-    } catch (e) {
-      toast(e.message, 'error');
-    } finally {
-      setScanning(false);
-    }
-  };
+  // 增量扫描根目录：先持久化根目录与深度，再触发扫描（进度见 useScan）
+  const handleScanClick = () => handleScan(rootDir, scanDepth);
 
   const handleCreateTag = async () => {
     if (!newTagName.trim()) return;
@@ -478,11 +466,36 @@ export default function Settings() {
             <select value={scanDepth} onChange={(e) => setScanDepth(e.target.value)} aria-label="扫描深度">
               {[1, 2, 3, 4, 5].map(d => <option key={d} value={d}>{d} 层</option>)}
             </select>
-            <button className="btn btn-sm btn-primary" onClick={handleScan} disabled={scanning}>
+            <button className="btn btn-sm btn-primary" onClick={handleScanClick} disabled={scanning}>
               {scanning ? '扫描中...' : '立即扫描'}
             </button>
           </div>
         </div>
+        {scanning && (
+          <div style={{ background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', padding: 12 }}>
+            <div style={{ fontSize: 13, marginBottom: 6 }}>
+              {scanInfo.total > 0
+                ? `已扫描 ${scanInfo.done} / ${scanInfo.total}（新增 ${scanInfo.added} · 更新 ${scanInfo.updated} · 跳过 ${scanInfo.unchanged}）`
+                : '准备中...'}
+              {scanInfo.current && (
+                <span style={{ color: 'var(--text-secondary)' }}> —— {scanInfo.current}</span>
+              )}
+            </div>
+            {scanInfo.total > 0 && (
+              <div style={{ height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%',
+                  background: 'var(--accent)',
+                  width: `${Math.min(100, (scanInfo.done / scanInfo.total) * 100)}%`,
+                  transition: 'width 0.3s',
+                }} />
+              </div>
+            )}
+            <div style={{ marginTop: 8, textAlign: 'right' }}>
+              <button className="btn btn-sm" onClick={handleScanCancel}>取消扫描</button>
+            </div>
+          </div>
+        )}
         <div className="settings-row">
           <div>
             <div className="settings-row-label">局域网访问</div>

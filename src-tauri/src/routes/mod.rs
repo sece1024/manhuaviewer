@@ -4,6 +4,7 @@ pub mod categories;
 pub mod history;
 pub mod metadata;
 pub mod opds;
+pub mod scan;
 pub mod settings;
 pub mod sync;
 pub mod tags;
@@ -363,7 +364,9 @@ pub fn create_router(state: AppState) -> Router {
             delete(archives::remove_bookmark),
         )
         .route("/open", post(archives::open_file))
-        .route("/scan", post(archives::scan))
+        .route("/scan", post(scan::scan))
+        .route("/scan/status", get(scan::scan_status))
+        .route("/scan/cancel", post(scan::scan_cancel))
         .route("/merge", post(archives::merge_archives))
         .route("/archives/pack-cbz", post(archives::pack_cbz))
         .route("/cbz/list", get(archives::list_cbz_files))

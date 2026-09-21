@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Settings from '../pages/Settings';
 import { ToastProvider } from '../components/Toast';
@@ -69,5 +69,19 @@ describe('Settings 页面', () => {
     await waitFor(() => {
       expect(screen.getByText('动作')).toBeInTheDocument();
     });
+  });
+
+  test('点击立即扫描触发扫描接口并提示结果', async () => {
+    api.getSettings.mockResolvedValue({ root_dir: '/library', scan_depth: '2', theme: 'dark' });
+    api.scan.mockResolvedValue({ message: '扫描完成：共 3 个档案' });
+    api.scanStatus.mockResolvedValue({ running: false, total: 0, done: 0 });
+    renderSettings();
+
+    // 等服务端设置回填根目录后再触发，确保使用已持久化的目录/深度
+    await waitFor(() => expect(screen.getByDisplayValue('/library')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '立即扫描' }));
+
+    await waitFor(() => expect(api.scan).toHaveBeenCalledWith('/library', 2));
+    expect(await screen.findByText('扫描完成：共 3 个档案')).toBeInTheDocument();
   });
 });

@@ -77,7 +77,7 @@ src-tauri/                          # Tauri + Rust 后端
     │   ├── mod.rs                  # Database 结构体 + 全部 SQL 查询
     │   ├── schema.rs               # 幂等建表 SQL
     │   └── migrations.rs           # 旧版数据表迁移 + 列补充
-    ├── routes/                     # Axum 路由（archives/tags/categories/history/settings/sync/opds）
+    ├── routes/                     # Axum 路由（archives/tags/categories/history/settings/scan/sync/opds）
     └── services/                   # 业务逻辑（archive/scanner/thumbnail/cbz）
 
 frontend/
@@ -118,7 +118,9 @@ frontend/
 | `/api/archives/:id/file` | POST | 下载档案原文件（跨机同步用） |
 | `/api/archives/pack-cbz` | POST | 将文件夹打包为 CBZ |
 | `/api/open` | POST | 直接打开文件/文件夹路径 |
-| `/api/scan` | POST | 扫描目录 |
+| `/api/scan` | POST | 扫描目录（增量；返回汇总） |
+| `/api/scan/status` | GET | 扫描进度（轮询） |
+| `/api/scan/cancel` | POST | 取消扫描 |
 | `/api/merge` | POST | 合并档案为章节组 |
 | `/api/cbz/list` | GET | 列出可打包的 CBZ 文件 |
 | `/api/tags` | GET/POST | 标签列表 / 创建标签 |
