@@ -1,12 +1,12 @@
-//! 缩略图磁盘缓存的预算管理。
+//! 磁盘缓存（缩略图 / 解压产物）的预算与 LRU 淘汰。
 //!
-//! 此前书库封面与阅读器页面缩略图共用 `thumbnails/{id}/` 且只保留 30 本，滚动稍多就会
-//! 反复重新生成封面。现在改为**按磁盘大小预算的 LRU**，并把两类缓存分目录保存：
-//! - 书库封面：`thumbnails/{id}/cover.jpg`，封面很小，512MB 足以容纳数万本；
-//! - 页面缩略图：`page_thumbs/{id}/{index}.jpg`，量大，按目录 mtime 做 LRU。
+//! - 书库封面：`thumbnails/{id}/cover.jpg`，封面很小，512MB 足以容纳数万本，按 DB 的
+//!   `thumb_accessed_at`（真实访问时间）做 LRU；
+//! - 页面缩略图：`page_thumbs/{id}/{index}.jpg`，量大，按目录 mtime 做 LRU；
+//! - 解压产物：`extract/{id}/`（RAR/7z 整包解压），可能与本库同量级，按目录 mtime 做 LRU。
 //!
 //! 淘汰按「最近使用优先保留」进行，且永不清空最近一个目录（避免单个超预算目录被立刻
-//! 删掉又立即重建）。封面用 DB 的 `thumb_accessed_at` 排序，页面缩略图用目录 mtime。
+//! 删掉又立即重建）。
 
 use crate::db::Database;
 use std::path::{Path, PathBuf};
@@ -16,6 +16,8 @@ use std::time::SystemTime;
 pub const COVER_CACHE_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
 /// 阅读器页面缩略图缓存预算（每页一张 jpg，量随阅读量增长）。
 pub const PAGE_THUMB_CACHE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
+/// RAR/7z 整包解压缓存预算（解压产物通常与档案本身等大，必须有上限，否则会重复占用大量磁盘）。
+pub const EXTRACT_CACHE_BUDGET_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// 递归统计目录占用字节数；不存在或不可读按 0。
 pub fn dir_size(dir: &Path) -> u64 {
@@ -98,8 +100,9 @@ pub fn evict_cover_dirs(
     evict_paths
 }
 
-/// 页面缩略图 LRU：按目录 mtime 从新到旧，累计超过 `budget` 的最旧目录淘汰。
-pub fn evict_page_thumb_dirs(root: &Path, budget: u64, exclude_id: Option<i64>) -> Vec<PathBuf> {
+/// 按目录 mtime 的通用 LRU：从新到旧累计，超过 `budget` 的最旧目录淘汰。
+/// 适用于 `page_thumbs/`、`extract/` 这类按档案 id 命名的目录缓存。
+pub fn evict_dirs_by_mtime(root: &Path, budget: u64, exclude_id: Option<i64>) -> Vec<PathBuf> {
     let mut dirs = list_subdirs(root);
     dirs.sort_by_key(|d| std::cmp::Reverse(d.mtime));
 
@@ -150,7 +153,7 @@ mod tests {
         }
 
         // 预算 2.5KB：保留最新的 3、2，淘汰最旧的 1
-        let evicted = evict_page_thumb_dirs(root, 2500, None);
+        let evicted = evict_dirs_by_mtime(root, 2500, None);
         assert_eq!(evicted.len(), 1);
         assert_eq!(
             evicted[0].file_name().unwrap().to_str().unwrap(),
@@ -164,7 +167,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         write_file(&root.join("1").join("0.jpg"), 5000);
-        let evicted = evict_page_thumb_dirs(root, 100, None);
+        let evicted = evict_dirs_by_mtime(root, 100, None);
         assert!(evicted.is_empty(), "唯一且最新的目录必须保留");
     }
 
@@ -178,7 +181,7 @@ mod tests {
         }
 
         // 预算只够 1 个；排除最旧的 1，则次旧的 2 被淘汰、1 保留
-        let evicted = evict_page_thumb_dirs(root, 1000, Some(1));
+        let evicted = evict_dirs_by_mtime(root, 1000, Some(1));
         assert_eq!(evicted.len(), 1);
         assert_eq!(evicted[0].file_name().unwrap().to_str().unwrap(), "2");
     }

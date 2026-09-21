@@ -1,5 +1,5 @@
 use crate::db::Database;
-use crate::services::thumb_cache;
+use crate::services::cache_budget;
 use anyhow::Result;
 use std::path::Path;
 
@@ -12,7 +12,7 @@ use std::path::Path;
 ///   一次性浏览过的大量缩略图目录会一直驻留磁盘。
 ///
 /// 本函数枚举 `extract/`、`thumbnails/`、`page_thumbs/` 下的子目录，删除编号不再属于
-/// 任何存活档案的孤立目录，并按磁盘预算执行封面 / 页面缩略图各一次 LRU 淘汰。
+/// 任何存活档案的孤立目录，并按磁盘预算执行封面 / 页面缩略图 / 解压产物各一次 LRU 淘汰。
 /// 全部为磁盘 I/O，调用方应放在 spawn_blocking 中。
 pub fn cleanup_caches(data_dir: &Path, db: &Database) -> Result<()> {
     let live = db.live_archive_ids()?;
@@ -25,17 +25,24 @@ pub fn cleanup_caches(data_dir: &Path, db: &Database) -> Result<()> {
     // 旧版把页面缩略图与封面放在同一目录：清掉封面以外的残留文件，避免占用预算/误判大小
     purge_legacy_cover_dir_files(&thumbs_root);
 
-    for path in thumb_cache::evict_cover_dirs(
+    for path in cache_budget::evict_cover_dirs(
         db,
         &thumbs_root,
-        thumb_cache::COVER_CACHE_BUDGET_BYTES,
+        cache_budget::COVER_CACHE_BUDGET_BYTES,
         None,
     ) {
         let _ = std::fs::remove_dir_all(path);
     }
-    for path in thumb_cache::evict_page_thumb_dirs(
+    for path in cache_budget::evict_dirs_by_mtime(
         &data_dir.join("page_thumbs"),
-        thumb_cache::PAGE_THUMB_CACHE_BUDGET_BYTES,
+        cache_budget::PAGE_THUMB_CACHE_BUDGET_BYTES,
+        None,
+    ) {
+        let _ = std::fs::remove_dir_all(path);
+    }
+    for path in cache_budget::evict_dirs_by_mtime(
+        &data_dir.join("extract"),
+        cache_budget::EXTRACT_CACHE_BUDGET_BYTES,
         None,
     ) {
         let _ = std::fs::remove_dir_all(path);

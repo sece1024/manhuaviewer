@@ -371,6 +371,43 @@ impl ArchiveReader for FolderArchive {
     }
 }
 
+/// `extract/` 容量预算淘汰的全局节流（最多每分钟一次），避免每次解压都全量扫描目录。
+fn extract_eviction_due() -> bool {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let prev = LAST.load(Ordering::Relaxed);
+    if now.saturating_sub(prev) < 60 {
+        return false;
+    }
+    LAST.store(now, Ordering::Relaxed);
+    true
+}
+
+/// 整包解压完成后按容量预算淘汰最旧的解压目录（排除当前档案），避免 `extract/` 无限增长。
+fn enforce_extract_budget(current_dir: &Path) {
+    let Some(root) = current_dir.parent() else {
+        return;
+    };
+    if !extract_eviction_due() {
+        return;
+    }
+    let id = current_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.parse::<i64>().ok());
+    for path in crate::services::cache_budget::evict_dirs_by_mtime(
+        root,
+        crate::services::cache_budget::EXTRACT_CACHE_BUDGET_BYTES,
+        id,
+    ) {
+        let _ = fs::remove_dir_all(path);
+    }
+}
+
 // RAR Archive (uses system unrar command)
 pub struct RarArchive {
     path: String,
@@ -422,6 +459,7 @@ impl RarArchive {
             return Err(e);
         }
         write_extract_marker(dir, sig)?;
+        enforce_extract_budget(dir);
         Ok(())
     }
 }
@@ -565,6 +603,7 @@ impl SevenZArchive {
             return Err(e);
         }
         write_extract_marker(dir, sig)?;
+        enforce_extract_budget(dir);
         Ok(())
     }
 }

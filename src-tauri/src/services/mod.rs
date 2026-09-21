@@ -1,12 +1,12 @@
 pub mod archive;
 pub mod backup;
+pub mod cache_budget;
 pub mod cbz;
 pub mod cleanup;
 pub mod fs_ext;
 pub mod metadata;
 pub mod page_cache;
 pub mod scanner;
-pub mod thumb_cache;
 pub mod thumbnail;
 
 use std::path::Path;

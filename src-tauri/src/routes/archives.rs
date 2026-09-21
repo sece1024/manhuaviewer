@@ -300,10 +300,10 @@ async fn register_thumbnail(
     let root = state.data_dir.join("thumbnails");
     let db = state.db.clone();
     let evicted = tokio::task::spawn_blocking(move || {
-        crate::services::thumb_cache::evict_cover_dirs(
+        crate::services::cache_budget::evict_cover_dirs(
             &db,
             &root,
-            crate::services::thumb_cache::COVER_CACHE_BUDGET_BYTES,
+            crate::services::cache_budget::COVER_CACHE_BUDGET_BYTES,
             Some(id),
         )
     })
@@ -338,9 +338,9 @@ async fn register_page_thumb_eviction(state: &Arc<AppState>, id: i64) {
 
     let root = state.data_dir.join("page_thumbs");
     let evicted = tokio::task::spawn_blocking(move || {
-        crate::services::thumb_cache::evict_page_thumb_dirs(
+        crate::services::cache_budget::evict_dirs_by_mtime(
             &root,
-            crate::services::thumb_cache::PAGE_THUMB_CACHE_BUDGET_BYTES,
+            crate::services::cache_budget::PAGE_THUMB_CACHE_BUDGET_BYTES,
             Some(id),
         )
     })
