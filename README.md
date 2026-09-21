@@ -77,7 +77,7 @@ src-tauri/                          # Tauri + Rust 后端
     │   ├── mod.rs                  # Database 结构体 + 全部 SQL 查询
     │   ├── schema.rs               # 幂等建表 SQL
     │   └── migrations.rs           # 旧版数据表迁移 + 列补充
-    ├── routes/                     # Axum 路由（archives/tags/categories/history/settings/scan/sync/opds）
+    ├── routes/                     # Axum 路由（archives/tags/categories/history/settings/scan/convert/sync/opds）
     └── services/                   # 业务逻辑（archive/scanner/thumbnail/cbz）
 
 frontend/
@@ -117,6 +117,9 @@ frontend/
 | `/api/archives/regenerate-titles` | POST | 按文件名重新生成标题 |
 | `/api/archives/:id/file` | POST | 下载档案原文件（跨机同步用） |
 | `/api/archives/pack-cbz` | POST | 将文件夹打包为 CBZ |
+| `/api/archives/convert-cbz/start` | POST | 批量将 7z/RAR/CBR/ZIP 转为 CBZ（成功后删除原文件） |
+| `/api/archives/convert-cbz/status` | GET | 转换为 CBZ 的进度 |
+| `/api/archives/convert-cbz/cancel` | POST | 取消转换为 CBZ |
 | `/api/open` | POST | 直接打开文件/文件夹路径 |
 | `/api/scan` | POST | 扫描目录（增量；返回汇总） |
 | `/api/scan/status` | GET | 扫描进度（轮询） |

@@ -163,6 +163,79 @@ pub fn pack_folder_to_cbz(folder_path: &str, output_dir: &str) -> Result<String>
     Ok(cbz_path.to_string_lossy().to_string())
 }
 
+/// 把压缩档案（rar/cbr/7z）的图片重新打包为 CBZ（Stored 不重编码）。
+/// `extract_cache`: RAR/7z 的持久化解压目录，避免逐页 spawn 子进程。
+///
+/// 先写 `<target>.part`，用图片条目数与源页数做校验，通过后原子 rename 到 `target`；
+/// 任何失败都不留半截目标文件，也不会动到源文件。返回写入的页数。
+pub fn repack_archive_to_cbz(
+    src_path: &str,
+    archive_type: &str,
+    extract_cache: Option<std::path::PathBuf>,
+    target: &Path,
+) -> Result<usize> {
+    let reader = crate::services::archive::create_archive_reader_with_cache(
+        src_path,
+        archive_type,
+        extract_cache,
+    )?;
+    let pages = reader.list_pages()?;
+    if pages.is_empty() {
+        bail!("未找到有效的漫画图片");
+    }
+
+    let file_name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "archive.cbz".to_string());
+    let part = target.with_file_name(format!("{}.part", file_name));
+
+    let write = || -> Result<()> {
+        let file = std::fs::File::create(&part)?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for page in &pages {
+            let data = reader.extract_page(page)?;
+            zip.start_file(page.as_str(), options)?;
+            zip.write_all(&data)?;
+        }
+        zip.finish()?;
+        Ok(())
+    };
+    if let Err(e) = write() {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+
+    // 校验：新 CBZ 的图片条目数必须与源页数一致，否则视为失败并清理
+    let verified = (|| -> Result<usize> {
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&part)?)?;
+        let mut count = 0usize;
+        for i in 0..archive.len() {
+            let name = archive.by_index(i)?.name().to_string();
+            if is_image_file(&name) {
+                count += 1;
+            }
+        }
+        Ok(count)
+    })();
+    match verified {
+        Ok(n) if n == pages.len() => {}
+        Ok(n) => {
+            let _ = std::fs::remove_file(&part);
+            bail!("校验失败：CBZ 图片数 {} 与源页数 {} 不一致", n, pages.len());
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&part);
+            return Err(e);
+        }
+    }
+
+    std::fs::rename(&part, target)?;
+    Ok(pages.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +332,49 @@ mod tests {
         let result = pack_folder_to_cbz("/nonexistent/path", out.path().to_str().unwrap());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("路径不存在"));
+    }
+
+    fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, data) in entries {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(data).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    /// 重打包应保留全部图片、过滤非图片，且不改动源文件。
+    #[test]
+    fn test_repack_archive_to_cbz_writes_all_pages() {
+        let dir = TempDir::new().unwrap();
+        let src = dir.path().join("book.zip");
+        write_zip(
+            &src,
+            &[("001.jpg", b"a"), ("002.jpg", b"b"), ("notes.txt", b"n")],
+        );
+        let target = dir.path().join("book.cbz");
+
+        let n = repack_archive_to_cbz(src.to_str().unwrap(), "zip", None, &target).unwrap();
+        assert_eq!(n, 2, "只打包图片条目");
+        assert!(target.exists());
+        assert!(src.exists(), "重打包不应删除源文件");
+
+        let archive = zip::ZipArchive::new(std::fs::File::open(&target).unwrap()).unwrap();
+        assert_eq!(archive.len(), 2);
+    }
+
+    /// 没有图片时应失败，且不留下目标文件/半截 `.part`。
+    #[test]
+    fn test_repack_archive_to_cbz_empty_fails_cleanly() {
+        let dir = TempDir::new().unwrap();
+        let src = dir.path().join("empty.zip");
+        write_zip(&src, &[("notes.txt", b"n")]);
+        let target = dir.path().join("empty.cbz");
+
+        assert!(repack_archive_to_cbz(src.to_str().unwrap(), "zip", None, &target).is_err());
+        assert!(!target.exists());
+        assert!(!dir.path().join("empty.cbz.part").exists());
     }
 }

@@ -84,4 +84,17 @@ describe('Settings 页面', () => {
     await waitFor(() => expect(api.scan).toHaveBeenCalledWith('/library', 2));
     expect(await screen.findByText('扫描完成：共 3 个档案')).toBeInTheDocument();
   });
+
+  test('转换为 CBZ：确认后启动转换任务', async () => {
+    api.convertCbzStart.mockResolvedValue({ started: true, total: 3 });
+    api.convertCbzStatus.mockResolvedValue({
+      running: false, total: 0, done: 0, converted: 0, skipped: 0, failed: 0, current: '', errors: [],
+    });
+    renderSettings();
+
+    fireEvent.click(await screen.findByRole('button', { name: '转换为 CBZ' }));
+    fireEvent.click(await screen.findByRole('button', { name: '开始转换' }));
+
+    await waitFor(() => expect(api.convertCbzStart).toHaveBeenCalled());
+  });
 });

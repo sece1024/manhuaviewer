@@ -6,6 +6,7 @@ import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
 import useSync from '../hooks/useSync';
 import useScan from '../hooks/useScan';
+import useCbzConvert from '../hooks/useCbzConvert';
 import ConfirmDialog from '../components/ConfirmDialog';
 
 export default function Settings() {
@@ -23,6 +24,7 @@ export default function Settings() {
   const [newCatColor, setNewCatColor] = useState('#6366f1');
   const [importing, setImporting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [convertConfirmOpen, setConvertConfirmOpen] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState(null);
   const [cbzFiles, setCbzFiles] = useState([]);
   const [regenerating, setRegenerating] = useState(false);
@@ -47,6 +49,12 @@ export default function Settings() {
   // ── 书库扫描 ──（进度轮询与取消见 useScan）
   const { scanning, scanInfo, handleScan, handleScanCancel } = useScan({
     updateSetting,
+    toast,
+    onStatsRefresh: setStats,
+  });
+
+  // ── CBZ 格式转换 ──（7z/RAR/CBR/ZIP → CBZ，成功后删除原文件）
+  const { converting, info: convertInfo, startConvert, cancelConvert } = useCbzConvert({
     toast,
     onStatsRefresh: setStats,
   });
@@ -331,11 +339,22 @@ export default function Settings() {
         onCancel={() => setConfirmOpen(false)}
       />
 
+      <ConfirmDialog
+        open={convertConfirmOpen}
+        title="转换为 CBZ"
+        message="将把库中的 7z / RAR / CBR / ZIP 漫画转换为同目录的 CBZ，并在转换成功后删除原文件。此操作不可撤销（标签 / 阅读历史 / 书签 / 分类会保留）。确定继续吗？"
+        danger
+        confirmText="开始转换"
+        onConfirm={() => { setConvertConfirmOpen(false); startConvert(); }}
+        onCancel={() => setConvertConfirmOpen(false)}
+      />
+
       <h2 style={{ fontWeight: 700, marginBottom: 20 }}>设置</h2>
 
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="设置分类">
           <a href="#settings-section-cbz">CBZ 归档</a>
+          <a href="#settings-section-cbz-convert">CBZ 转换</a>
           <a href="#settings-section-library">漫画库</a>
           <a href="#settings-section-reader">阅读器</a>
           <a href="#settings-section-appearance">外观</a>
@@ -391,6 +410,56 @@ export default function Settings() {
                   <button className="btn btn-sm" onClick={() => api.openFile(f.path).then(r => { toast(r.message || '已打开', 'success'); }).catch(e => toast(e.message, 'error'))}>打开</button>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 批量转换为 CBZ：7z/RAR/CBR/ZIP → 同目录 CBZ，成功后删除原文件 */}
+      <div id="settings-section-cbz-convert" className="settings-section">
+        <div className="settings-section-title">🗜️ 转换为 CBZ</div>
+        <div className="settings-row">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="settings-row-label">批量格式转换</div>
+            <div className="settings-row-desc">
+              将库中的 7z / RAR / CBR / ZIP 漫画转换为同目录、同名的 CBZ（ZIP 仅改名，其余解包重打包）。
+              转换成功后<b>删除原文件</b>；标签 / 阅读历史 / 书签 / 分类会保留。
+            </div>
+          </div>
+          <button className="btn btn-sm btn-primary" onClick={() => setConvertConfirmOpen(true)} disabled={converting}>
+            {converting ? '转换中...' : '转换为 CBZ'}
+          </button>
+        </div>
+        {converting && (
+          <div style={{ background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', padding: 12, marginTop: 8 }}>
+            <div style={{ fontSize: 13, marginBottom: 6 }}>
+              {convertInfo.total > 0
+                ? `已处理 ${convertInfo.done} / ${convertInfo.total}（已转换 ${convertInfo.converted} · 跳过 ${convertInfo.skipped} · 失败 ${convertInfo.failed}）`
+                : '准备中...'}
+              {convertInfo.current && (
+                <span style={{ color: 'var(--text-secondary)' }}> —— {convertInfo.current}</span>
+              )}
+            </div>
+            {convertInfo.total > 0 && (
+              <div style={{ height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%',
+                  background: 'var(--accent)',
+                  width: `${Math.min(100, (convertInfo.done / convertInfo.total) * 100)}%`,
+                  transition: 'width 0.3s',
+                }} />
+              </div>
+            )}
+            {convertInfo.errors.length > 0 && (
+              <div style={{ marginTop: 8, fontSize: 12, color: '#e5484d' }}>
+                失败 {convertInfo.failed} 项：
+                <ul style={{ margin: '4px 0 0 18px' }}>
+                  {convertInfo.errors.slice(0, 5).map((err, i) => <li key={i}>{err}</li>)}
+                </ul>
+              </div>
+            )}
+            <div style={{ marginTop: 8, textAlign: 'right' }}>
+              <button className="btn btn-sm" onClick={cancelConvert}>取消转换</button>
             </div>
           </div>
         )}

@@ -1,6 +1,7 @@
 pub mod archives;
 pub mod auth;
 pub mod categories;
+pub mod convert;
 pub mod history;
 pub mod metadata;
 pub mod opds;
@@ -369,6 +370,12 @@ pub fn create_router(state: AppState) -> Router {
         .route("/scan/cancel", post(scan::scan_cancel))
         .route("/merge", post(archives::merge_archives))
         .route("/archives/pack-cbz", post(archives::pack_cbz))
+        .route("/archives/convert-cbz/start", post(convert::convert_start))
+        .route("/archives/convert-cbz/status", get(convert::convert_status))
+        .route(
+            "/archives/convert-cbz/cancel",
+            post(convert::convert_cancel),
+        )
         .route("/cbz/list", get(archives::list_cbz_files))
         .route(
             "/archives/batch-delete",

@@ -53,6 +53,41 @@ impl Database {
         }
     }
 
+    /// 可批量转换为 CBZ 的档案：压缩包类型中非 cbz 的（zip/rar/cbr/7z）。
+    pub fn list_convertible_archives(&self) -> Result<Vec<ArchiveRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at
+             FROM archives
+             WHERE archive_type IN ('zip', 'rar', 'cbr', '7z')
+             ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([], archive_row)?
+            .filter_map(log_and_skip)
+            .collect();
+        Ok(rows)
+    }
+
+    /// 格式转换成功后就地更新档案（保留 id，标签/历史/书签/分类/分组均不受影响）：
+    /// 更新 path 与类型为 cbz、页数/大小/mtime，并清空封面缓存登记（下次访问重新生成）。
+    pub fn update_archive_converted(
+        &self,
+        id: i64,
+        new_path: &str,
+        page_count: i64,
+        file_size: i64,
+        file_mtime: i64,
+    ) -> Result<usize> {
+        self.conn()?.execute(
+            "UPDATE archives SET path = ?1, archive_type = 'cbz', page_count = ?2,
+                file_size = ?3, file_mtime = ?4, thumbnail_path = NULL,
+                updated_at = datetime('now')
+             WHERE id = ?5",
+            (new_path, page_count, file_size, file_mtime, id),
+        )
+    }
+
     // Page list cache operations (compressed archives only)
     pub fn get_page_list_mtime(&self, archive_id: i64) -> Result<Option<i64>> {
         self.conn()?
