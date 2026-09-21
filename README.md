@@ -117,7 +117,7 @@ frontend/
 | `/api/archives/regenerate-titles` | POST | 按文件名重新生成标题 |
 | `/api/archives/:id/file` | POST | 下载档案原文件（跨机同步用） |
 | `/api/archives/pack-cbz` | POST | 将文件夹打包为 CBZ |
-| `/api/archives/convert-cbz/start` | POST | 批量将 7z/RAR/CBR/ZIP 转为 CBZ（成功后删除原文件） |
+| `/api/archives/convert-cbz/start` | POST | 批量将 7z/RAR/CBR/ZIP 转为 CBZ（成功后删除原文件；可传 `ids` 仅转换选中项） |
 | `/api/archives/convert-cbz/status` | GET | 转换为 CBZ 的进度 |
 | `/api/archives/convert-cbz/cancel` | POST | 取消转换为 CBZ |
 | `/api/open` | POST | 直接打开文件/文件夹路径 |

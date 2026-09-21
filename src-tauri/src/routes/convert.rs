@@ -14,6 +14,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -150,31 +151,63 @@ fn run_convert_job(
 ) {
     let _guard = ConvertEndGuard(job.clone());
     job.total.store(candidates.len(), Ordering::SeqCst);
-    for a in candidates {
-        if job.cancel.load(Ordering::SeqCst) {
-            break;
+
+    // 小并发：档案之间并行（受硬件并发数与 3 上限约束），每个索引只处理一次。
+    // 转换是重 I/O（解压/重压/改名），并发过高会拖慢磁盘，故上限取 3。
+    let cursor = AtomicUsize::new(0);
+    let workers = worker_count(candidates.len());
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                if job.cancel.load(Ordering::SeqCst) {
+                    break;
+                }
+                let i = cursor.fetch_add(1, Ordering::SeqCst);
+                if i >= candidates.len() {
+                    break;
+                }
+                let a = &candidates[i];
+                *job.current.lock().unwrap() = a.title.clone();
+                match convert_one(&db, &data_dir, a) {
+                    Ok(true) => {
+                        job.converted.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Ok(false) => {
+                        job.skipped.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Err(e) => {
+                        job.failed.fetch_add(1, Ordering::SeqCst);
+                        job.errors
+                            .lock()
+                            .unwrap()
+                            .push(format!("{}: {}", a.title, e));
+                    }
+                }
+                job.done.fetch_add(1, Ordering::SeqCst);
+            });
         }
-        *job.current.lock().unwrap() = a.title.clone();
-        match convert_one(&db, &data_dir, &a) {
-            Ok(true) => {
-                job.converted.fetch_add(1, Ordering::SeqCst);
-            }
-            Ok(false) => {
-                job.skipped.fetch_add(1, Ordering::SeqCst);
-            }
-            Err(e) => {
-                job.failed.fetch_add(1, Ordering::SeqCst);
-                job.errors
-                    .lock()
-                    .unwrap()
-                    .push(format!("{}: {}", a.title, e));
-            }
-        }
-        job.done.fetch_add(1, Ordering::SeqCst);
-    }
+    });
 }
 
-pub async fn convert_start(State(state): State<Arc<AppState>>) -> Response {
+/// 转换并发数：受硬件并发数与 3 上限约束，且不超过任务数。
+fn worker_count(tasks: usize) -> usize {
+    let hw = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2);
+    hw.clamp(1, 3).min(tasks.max(1))
+}
+
+#[derive(Deserialize, Default)]
+pub struct ConvertStartRequest {
+    /// 指定要转换的档案 id；省略/为空表示转换全部可转换档案。
+    #[serde(default)]
+    pub ids: Option<Vec<i64>>,
+}
+
+pub async fn convert_start(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<ConvertStartRequest>,
+) -> Response {
     {
         let cur = current_job().lock().unwrap();
         if let Some(j) = cur.as_ref() {
@@ -184,7 +217,13 @@ pub async fn convert_start(State(state): State<Arc<AppState>>) -> Response {
         }
     }
 
-    let candidates = match super::run_db(&state, |db| db.list_convertible_archives()).await {
+    let ids = payload.ids.filter(|v| !v.is_empty());
+    let candidates = match super::run_db(&state, move |db| match ids {
+        Some(ids) => db.list_convertible_archives_by_ids(&ids),
+        None => db.list_convertible_archives(),
+    })
+    .await
+    {
         Ok(v) => v,
         Err(e) => return internal_error(e),
     };
@@ -298,5 +337,31 @@ mod tests {
         assert!(!convert_one(&db, &data_dir, &archive).unwrap());
         assert!(src.exists());
         assert_eq!(db.get_archive(id).unwrap().unwrap().archive_type, "zip");
+    }
+
+    #[test]
+    fn worker_count_is_small_and_bounded() {
+        assert_eq!(worker_count(0), 1);
+        assert_eq!(worker_count(1), 1);
+        assert!((1..=3).contains(&worker_count(1000)));
+    }
+
+    /// 指定 id 时只返回其中可转换的档案。
+    #[test]
+    fn list_convertible_archives_by_ids_filters() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::new(dir.path().join("t.db").to_str().unwrap()).unwrap();
+        db.init().unwrap();
+        let seven_z = db.insert_archive("SevenZ", "/x/a.7z", "7z", 2, 10).unwrap();
+        let cbz = db.insert_archive("Cbz", "/x/b.cbz", "cbz", 2, 10).unwrap();
+        let folder = db
+            .insert_archive("Folder", "/x/c", "folder", 2, 10)
+            .unwrap();
+
+        let rows = db
+            .list_convertible_archives_by_ids(&[seven_z, cbz, folder])
+            .unwrap();
+        assert_eq!(rows.len(), 1, "只应返回 7z（cbz/folder 不可转换）");
+        assert_eq!(rows[0].id, seven_z);
     }
 }

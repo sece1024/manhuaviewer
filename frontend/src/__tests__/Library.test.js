@@ -387,3 +387,33 @@ describe('Library 卡片密度', () => {
     });
   });
 });
+
+describe('Library 批量转换为 CBZ', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    api.getArchives.mockResolvedValue([
+      { id: 7, title: '待转换', archive_type: '7z', page_count: 10, cover_url: '/api/archives/7/cover', tags: [] },
+    ]);
+    api.convertCbzStart.mockResolvedValue({ started: true, total: 1 });
+    api.convertCbzStatus.mockResolvedValue({
+      running: false, total: 0, done: 0, converted: 0, skipped: 0, failed: 0, current: '', errors: [],
+    });
+  });
+
+  test('多选后可将选中项转为 CBZ', async () => {
+    renderLibrary();
+    await waitFor(() => {
+      expect(screen.getByText('待转换')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '选择' }));
+    fireEvent.click(screen.getByText('待转换'));
+    fireEvent.click(screen.getByRole('button', { name: '转为 CBZ' }));
+    fireEvent.click(await screen.findByRole('button', { name: '开始转换' }));
+
+    await waitFor(() => expect(api.convertCbzStart).toHaveBeenCalledWith([7]));
+  });
+});

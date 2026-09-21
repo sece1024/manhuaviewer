@@ -909,6 +909,18 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   color: var(--text-primary);
 }
 
+/* 书库内发起的 CBZ 转换进度浮层（后台任务，切页/滚动时持续可见） */
+.cbz-convert-float {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  z-index: 100;
+  box-shadow: var(--shadow-lg);
+  border-radius: var(--radius-sm);
+}
+
 /* 列表视图 */
 .archive-list {
   display: flex;

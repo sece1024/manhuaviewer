@@ -10,7 +10,9 @@ import LazyImage from '../components/LazyImage';
 import TagPicker from '../components/TagPicker';
 import CategoryPicker from '../components/CategoryPicker';
 import ConfirmDialog from '../components/ConfirmDialog';
+import CbzConvertPanel from '../components/CbzConvertPanel';
 import Modal from '../components/Modal';
+import useCbzConvert from '../hooks/useCbzConvert';
 
 // 检测是否在 Tauri 环境中
 const isTauri = window.__TAURI__ !== undefined;
@@ -239,6 +241,7 @@ export default function Library({ mode = 'library', enableSession }) {
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState(null);
+  const [convertConfirmOpen, setConvertConfirmOpen] = useState(false);
   // 重命名弹窗
   const [renamingId, setRenamingId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
@@ -276,6 +279,10 @@ export default function Library({ mode = 'library', enableSession }) {
   const restoredFiltersRef = useRef(null);
   const navigate = useNavigate();
   const toast = useToast();
+
+  // ── 批量转换为 CBZ（对选中项发起；后台任务进度见 useCbzConvert）──
+  const { converting: convertingCbz, info: convertInfo, startConvert, cancelConvert } =
+    useCbzConvert({ toast });
 
   // 浏览会话：卸载时保存（含滚动位置）、进入时后台与服务器比对
   const { librarySessions, reconcileLibrary, markSessionVerified, sessionIsStale } = useLibrarySession({
@@ -1064,6 +1071,9 @@ export default function Library({ mode = 'library', enableSession }) {
           <button className="btn btn-secondary" onClick={() => setBatchCategoryPickerOpen(true)} disabled={selectedIds.size === 0}>
             分类
           </button>
+          <button className="btn btn-secondary" onClick={() => setConvertConfirmOpen(true)} disabled={selectedIds.size === 0}>
+            转为 CBZ
+          </button>
           <button className="btn btn-danger" onClick={() => setBatchDeleteConfirmOpen(true)} disabled={selectedIds.size === 0}>
             删除
           </button>
@@ -1091,6 +1101,29 @@ export default function Library({ mode = 'library', enableSession }) {
         onConfirm={handleBatchDelete}
         onCancel={() => setBatchDeleteConfirmOpen(false)}
       />
+
+      {/* 转换为 CBZ 确认（成功后删除原文件） */}
+      <ConfirmDialog
+        open={convertConfirmOpen}
+        title="转换为 CBZ"
+        message={`将把选中的 ${selectedIds.size} 个档案转换为同目录 CBZ，并在成功后删除原文件。此操作不可撤销（标签 / 阅读历史 / 书签会保留）。确定继续吗？`}
+        confirmText="开始转换"
+        danger
+        onConfirm={() => {
+          setConvertConfirmOpen(false);
+          const ids = Array.from(selectedIds);
+          handleExitSelectMode();
+          startConvert(ids);
+        }}
+        onCancel={() => setConvertConfirmOpen(false)}
+      />
+
+      {/* 转换进度浮动面板（后台任务，切页也持续） */}
+      {convertingCbz && (
+        <div className="cbz-convert-float">
+          <CbzConvertPanel info={convertInfo} onCancel={cancelConvert} />
+        </div>
+      )}
 
       {/* 重命名弹窗 */}
       {renamingId && (

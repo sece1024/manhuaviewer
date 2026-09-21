@@ -69,6 +69,26 @@ impl Database {
         Ok(rows)
     }
 
+    /// 指定 id 中可转换为 CBZ 的档案（供「仅转换选中项」使用）。
+    pub fn list_convertible_archives_by_ids(&self, ids: &[i64]) -> Result<Vec<ArchiveRow>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let conn = self.conn()?;
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, title, path, archive_type, page_count, cover_image, file_size, thumbnail_path, group_id, created_at, updated_at
+             FROM archives
+             WHERE archive_type IN ('zip', 'rar', 'cbr', '7z') AND id IN ({placeholders})
+             ORDER BY id"
+        ))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(ids.iter()), archive_row)?
+            .filter_map(log_and_skip)
+            .collect();
+        Ok(rows)
+    }
+
     /// 格式转换成功后就地更新档案（保留 id，标签/历史/书签/分类/分组均不受影响）：
     /// 更新 path 与类型为 cbz、页数/大小/mtime，并清空封面缓存登记（下次访问重新生成）。
     pub fn update_archive_converted(

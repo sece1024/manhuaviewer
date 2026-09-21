@@ -231,9 +231,13 @@ const api = {
   scanStatus: () => request('/scan/status', { cache: false }),
   scanCancel: () => request('/scan/cancel', { method: 'POST' }),
 
-  // 批量转换为 CBZ（后台任务 + 进度 + 取消；成功后删除原文件）
-  convertCbzStart: () =>
-    request('/archives/convert-cbz/start', { method: 'POST' }).then(r => {
+  // 批量转换为 CBZ（后台任务 + 进度 + 取消；成功后删除原文件）。
+  // 传 ids 时只转换这些档案，否则转换全部可转换档案。
+  convertCbzStart: (ids) =>
+    request('/archives/convert-cbz/start', {
+      method: 'POST',
+      body: JSON.stringify(ids && ids.length ? { ids } : {}),
+    }).then(r => {
       // 转换会改变档案路径/类型，作废书库缓存
       _invalidate('/archives');
       return r;

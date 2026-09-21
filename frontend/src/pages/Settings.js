@@ -8,6 +8,7 @@ import useSync from '../hooks/useSync';
 import useScan from '../hooks/useScan';
 import useCbzConvert from '../hooks/useCbzConvert';
 import ConfirmDialog from '../components/ConfirmDialog';
+import CbzConvertPanel from '../components/CbzConvertPanel';
 
 export default function Settings() {
   const { settings, updateSetting } = useSettings();
@@ -431,36 +432,8 @@ export default function Settings() {
           </button>
         </div>
         {converting && (
-          <div style={{ background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', padding: 12, marginTop: 8 }}>
-            <div style={{ fontSize: 13, marginBottom: 6 }}>
-              {convertInfo.total > 0
-                ? `已处理 ${convertInfo.done} / ${convertInfo.total}（已转换 ${convertInfo.converted} · 跳过 ${convertInfo.skipped} · 失败 ${convertInfo.failed}）`
-                : '准备中...'}
-              {convertInfo.current && (
-                <span style={{ color: 'var(--text-secondary)' }}> —— {convertInfo.current}</span>
-              )}
-            </div>
-            {convertInfo.total > 0 && (
-              <div style={{ height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
-                <div style={{
-                  height: '100%',
-                  background: 'var(--accent)',
-                  width: `${Math.min(100, (convertInfo.done / convertInfo.total) * 100)}%`,
-                  transition: 'width 0.3s',
-                }} />
-              </div>
-            )}
-            {convertInfo.errors.length > 0 && (
-              <div style={{ marginTop: 8, fontSize: 12, color: '#e5484d' }}>
-                失败 {convertInfo.failed} 项：
-                <ul style={{ margin: '4px 0 0 18px' }}>
-                  {convertInfo.errors.slice(0, 5).map((err, i) => <li key={i}>{err}</li>)}
-                </ul>
-              </div>
-            )}
-            <div style={{ marginTop: 8, textAlign: 'right' }}>
-              <button className="btn btn-sm" onClick={cancelConvert}>取消转换</button>
-            </div>
+          <div style={{ marginTop: 8 }}>
+            <CbzConvertPanel info={convertInfo} onCancel={cancelConvert} />
           </div>
         )}
       </div>

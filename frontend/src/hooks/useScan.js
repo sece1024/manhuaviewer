@@ -23,6 +23,8 @@ export default function useScan({ updateSetting, toast, onStatsRefresh }) {
   const [scanning, setScanning] = useState(false);
   const [scanInfo, setScanInfo] = useState(DEFAULT_SCAN_INFO);
   const pollRef = useRef(null);
+  // 是否已经观察到任务在运行：避免启动瞬间状态还没置位就误判“已结束”而停止轮询
+  const sawRunningRef = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -47,8 +49,12 @@ export default function useScan({ updateSetting, toast, onStatsRefresh }) {
         skipped: s.skipped || 0,
         current: s.current || '',
       });
-      // 服务端已收尾：停止轮询（最终状态由扫描请求的返回决定）
-      if (!s.running) stopPolling();
+      if (s.running) {
+        sawRunningRef.current = true;
+      } else if (sawRunningRef.current) {
+        // 只有先见过 running=true，!running 才代表任务真正结束
+        stopPolling();
+      }
     } catch (e) {
       /* 轮询失败忽略，下一轮再试 */
     }
@@ -63,6 +69,7 @@ export default function useScan({ updateSetting, toast, onStatsRefresh }) {
       }
       if (scanning) return;
       setScanning(true);
+      sawRunningRef.current = false;
       setScanInfo({ ...DEFAULT_SCAN_INFO, current: '准备中...' });
       pollScanStatus();
       pollRef.current = setInterval(pollScanStatus, 1000);
