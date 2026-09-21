@@ -241,13 +241,18 @@ async fn touch_thumbnail_usage(state: &Arc<AppState>, id: i64) {
         .insert(id, std::time::Instant::now());
 }
 
-/// 生成缩略图后登记 thumbnail_path 并按需触发 LRU 淘汰（每分钟最多一次）。
+/// 生成封面缩略图后登记 thumbnail_path，并按磁盘预算触发封面 LRU 淘汰（每分钟最多一次）。
 async fn register_thumbnail(
     state: &Arc<AppState>,
     id: i64,
     thumb_dir_str: String,
     already_set: bool,
 ) {
+    if !already_set {
+        let dir = thumb_dir_str;
+        let _ = super::run_db(state, move |db| db.set_thumbnail_path(id, &dir)).await;
+    }
+
     let mut do_evict = false;
     {
         let mut last = state.last_thumb_eviction.lock().unwrap();
@@ -260,26 +265,61 @@ async fn register_thumbnail(
             do_evict = true;
         }
     }
+    if !do_evict {
+        return;
+    }
 
-    let evicted = if do_evict {
-        let dir = thumb_dir_str.clone();
-        super::run_db(state, move |db| {
-            db.set_thumbnail_path(id, &dir)?;
-            // 排除刚注册的档案，避免自淘汰刚写入的缩略图目录
-            db.evict_old_thumbnails(Some(id))
-        })
-        .await
-        .unwrap_or_default()
-    } else {
-        if !already_set {
-            let dir = thumb_dir_str.clone();
-            let _ = super::run_db(state, move |db| db.set_thumbnail_path(id, &dir)).await;
+    let root = state.data_dir.join("thumbnails");
+    let db = state.db.clone();
+    let evicted = tokio::task::spawn_blocking(move || {
+        crate::services::thumb_cache::evict_cover_dirs(
+            &db,
+            &root,
+            crate::services::thumb_cache::COVER_CACHE_BUDGET_BYTES,
+            Some(id),
+        )
+    })
+    .await
+    .unwrap_or_default();
+    for path in evicted {
+        let _ = tokio::fs::remove_dir_all(&path).await;
+    }
+}
+
+/// 页面缩略图 LRU 淘汰节流（每分钟最多一次），独立于封面淘汰。
+static PAGE_THUMB_EVICTION: std::sync::OnceLock<std::sync::Mutex<Option<std::time::Instant>>> =
+    std::sync::OnceLock::new();
+
+/// 生成页面缩略图后，按磁盘预算触发页面缩略图目录 LRU 淘汰（每分钟最多一次）。
+async fn register_page_thumb_eviction(state: &Arc<AppState>, id: i64) {
+    let due = {
+        let lock = PAGE_THUMB_EVICTION.get_or_init(|| std::sync::Mutex::new(None));
+        let mut last = lock.lock().unwrap();
+        let elapsed = last
+            .as_ref()
+            .map(|t| t.elapsed().as_secs() >= 60)
+            .unwrap_or(true);
+        if elapsed {
+            *last = Some(std::time::Instant::now());
         }
-        vec![]
+        elapsed
     };
+    if !due {
+        return;
+    }
 
-    for (_evicted_id, evicted_path) in evicted {
-        let _ = tokio::fs::remove_dir_all(&evicted_path).await;
+    let root = state.data_dir.join("page_thumbs");
+    let evicted = tokio::task::spawn_blocking(move || {
+        crate::services::thumb_cache::evict_page_thumb_dirs(
+            &root,
+            crate::services::thumb_cache::PAGE_THUMB_CACHE_BUDGET_BYTES,
+            Some(id),
+        )
+    })
+    .await
+    .unwrap_or_default();
+    for path in evicted {
+        let _ = tokio::fs::remove_dir_all(&path).await;
     }
 }
 
@@ -456,12 +496,14 @@ pub async fn get_archive(State(state): State<Arc<AppState>>, Path(id): Path<i64>
 
 pub async fn delete_archive(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
     let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
+    let page_thumb_dir = state.data_dir.join("page_thumbs").join(id.to_string());
     let extract_dir = state.data_dir.join("extract").join(id.to_string());
 
     match super::run_db(&state, move |db| db.delete_archive(id)).await {
         Ok(_) => {
-            // 删除缩略图目录与解压缓存目录
+            // 删除封面 / 页面缩略图目录与解压缓存目录
             let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
+            let _ = tokio::fs::remove_dir_all(&page_thumb_dir).await;
             let _ = tokio::fs::remove_dir_all(&extract_dir).await;
             Json(serde_json::json!({ "success": true })).into_response()
         }
@@ -486,10 +528,12 @@ pub async fn batch_delete_archives(
     let ids_db = ids.clone();
     match super::run_db(&state, move |db| db.batch_delete_archives(&ids_db)).await {
         Ok(affected) => {
-            // 逐个清理缩略图目录与解压缓存目录
+            // 逐个清理封面 / 页面缩略图目录与解压缓存目录
             for id in &ids {
                 let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
                 let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
+                let page_thumb_dir = state.data_dir.join("page_thumbs").join(id.to_string());
+                let _ = tokio::fs::remove_dir_all(&page_thumb_dir).await;
                 let extract_dir = state.data_dir.join("extract").join(id.to_string());
                 let _ = tokio::fs::remove_dir_all(&extract_dir).await;
             }
@@ -968,11 +1012,11 @@ pub async fn get_page_thumb(
         return error_response(StatusCode::BAD_REQUEST, "Page index must be non-negative");
     }
 
-    let (archive_path, archive_type, thumb_dir, thumb_already_set) =
+    let (archive_path, archive_type, thumb_dir) =
         match super::run_db(&state, move |db| db.get_archive(id)).await {
             Ok(Some(a)) => {
-                let dir = state.data_dir.join("thumbnails").join(id.to_string());
-                (a.path, a.archive_type, dir, a.thumbnail_path.is_some())
+                let dir = state.data_dir.join("page_thumbs").join(id.to_string());
+                (a.path, a.archive_type, dir)
             }
             Ok(None) => return error_response(StatusCode::NOT_FOUND, "Archive not found"),
             Err(e) => return internal_error(e),
@@ -1043,7 +1087,6 @@ pub async fn get_page_thumb(
             {
                 pairs.push(("ETag", format!("\"thumb-{}-{}\"", id, d.as_secs())));
             }
-            touch_thumbnail_usage(&state, id).await;
             return build_response(StatusCode::OK, pairs, data);
         }
     }
@@ -1104,13 +1147,9 @@ pub async fn get_page_thumb(
     match result {
         Ok(Ok((thumb_data, content_type, fresh))) => {
             if fresh {
-                // 首次成功生成 jpg，更新数据库记录；LRU 淘汰最多每分钟跑一次
-                let thumb_dir_str = thumb_dir.to_string_lossy().to_string();
-                register_thumbnail(&state, id, thumb_dir_str, thumb_already_set).await;
+                // 页面缩略图目录按磁盘预算做 LRU 淘汰（最多每分钟一次）
+                register_page_thumb_eviction(&state, id).await;
             }
-
-            // 记录一次访问（节流），让 LRU 保留真正在用的缩略图
-            touch_thumbnail_usage(&state, id).await;
 
             let mut pairs: Vec<(&'static str, String)> = vec![
                 ("Content-Type", content_type),

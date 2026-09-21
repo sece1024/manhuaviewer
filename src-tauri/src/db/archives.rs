@@ -549,12 +549,27 @@ impl Database {
     }
 
     // Thumbnail cache operations
-    const MAX_CACHED_ARCHIVES: i64 = 30;
-
     pub fn set_thumbnail_path(&self, archive_id: i64, thumb_path: &str) -> Result<()> {
         self.conn()?.execute(
             "UPDATE archives SET thumbnail_path = ? WHERE id = ?",
             (thumb_path, archive_id),
+        )?;
+        Ok(())
+    }
+
+    /// 清除若干档案的 `thumbnail_path`（供封面缓存 LRU 淘汰后登记）。
+    pub fn clear_thumbnail_paths(&self, ids: &[i64]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn()?;
+        let placeholders = vec!["?"; ids.len()].join(",");
+        conn.execute(
+            &format!(
+                "UPDATE archives SET thumbnail_path = NULL WHERE id IN ({})",
+                placeholders
+            ),
+            rusqlite::params_from_iter(ids.iter()),
         )?;
         Ok(())
     }
@@ -583,7 +598,7 @@ impl Database {
     }
 
     /// 所有存活档案的 id 集合，用于清理不再被任何档案引用的缓存目录
-    /// （extract/thumbnails 下的孤立子目录）。
+    /// （extract/thumbnails/page_thumbs 下的孤立子目录）。
     pub fn live_archive_ids(&self) -> Result<std::collections::HashSet<i64>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare("SELECT id FROM archives")?;
@@ -592,48 +607,6 @@ impl Database {
             .filter_map(log_and_skip)
             .collect();
         Ok(ids)
-    }
-
-    /// 淘汰超出上限的最旧缩略图目录。`exclude_id` 为刚写入的档案时跳过它，
-    /// 避免“注册后立刻把自己的目录淘汰掉”。
-    pub fn evict_old_thumbnails(&self, exclude_id: Option<i64>) -> Result<Vec<(i64, String)>> {
-        let cached_ids = self.get_cached_archive_ids()?;
-        if cached_ids.len() as i64 <= Self::MAX_CACHED_ARCHIVES {
-            return Ok(vec![]);
-        }
-
-        // 要淘汰的：超出限制的最旧条目
-        let to_evict: Vec<i64> = cached_ids[Self::MAX_CACHED_ARCHIVES as usize..]
-            .iter()
-            .copied()
-            .filter(|id| Some(*id) != exclude_id)
-            .collect();
-        if to_evict.is_empty() {
-            return Ok(vec![]);
-        }
-        let conn = self.conn()?;
-        let placeholders = vec!["?"; to_evict.len()].join(",");
-
-        // 一次 IN 读回路径 + 一次 IN 置空（替代逐 id 的 2N 次往返）
-        let mut stmt = conn.prepare(&format!(
-            "SELECT id, thumbnail_path FROM archives WHERE id IN ({})",
-            placeholders
-        ))?;
-        let evicted: Vec<(i64, String)> = stmt
-            .query_map(rusqlite::params_from_iter(to_evict.iter()), |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })?
-            .filter_map(log_and_skip)
-            .collect();
-        conn.execute(
-            &format!(
-                "UPDATE archives SET thumbnail_path = NULL WHERE id IN ({})",
-                placeholders
-            ),
-            rusqlite::params_from_iter(to_evict.iter()),
-        )?;
-
-        Ok(evicted)
     }
 
     /// 设置/清除手动封面页（cover_image 存档案内页面名；None 恢复默认首页）。

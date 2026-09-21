@@ -9,8 +9,8 @@ CREATE TABLE IF NOT EXISTS archives (
     cover_image TEXT,           -- 封面图片路径（相对于档案）
     remote_cover TEXT,          -- 远程封面 URL（可选的图片地址，优先级低于 cover_image）
     file_size INTEGER DEFAULT 0,
-    thumbnail_path TEXT,        -- 缩略图目录路径（thumbnails/{id}/）
-    thumb_accessed_at TEXT,     -- 缩略图最近被访问/生成时间，用于按真实使用做 LRU 淘汰
+    thumbnail_path TEXT,        -- 封面缩略图目录路径（thumbnails/{id}/），供封面 LRU 登记
+    thumb_accessed_at TEXT,     -- 封面缩略图最近被访问/生成时间，用于按真实使用做 LRU 淘汰
     group_id INTEGER REFERENCES archives(id) ON DELETE SET NULL,  -- 合并组主档案 id
     page_list_mtime INTEGER DEFAULT 0,  -- 缓存页面列表时的档案文件 mtime（秒），用于失效检测
     file_mtime INTEGER DEFAULT 0,  -- 最近一次入库/扫描时的档案文件 mtime（秒），供增量扫描跳过未变化档案

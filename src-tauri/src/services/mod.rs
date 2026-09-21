@@ -6,6 +6,7 @@ pub mod fs_ext;
 pub mod metadata;
 pub mod page_cache;
 pub mod scanner;
+pub mod thumb_cache;
 pub mod thumbnail;
 
 use std::path::Path;
