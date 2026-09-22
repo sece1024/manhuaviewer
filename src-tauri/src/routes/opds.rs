@@ -227,7 +227,9 @@ pub async fn catalog(
     let offset = (page - 1) * limit;
 
     match run_db(&state, move |db| {
-        db.list_archives(None, None, None, "updated", "desc", limit, offset)
+        db.list_archives(
+            None, None, None, None, None, "updated", "desc", limit, offset,
+        )
     })
     .await
     {
@@ -485,8 +487,17 @@ pub async fn category_archives(
 ) -> Response {
     let result = run_db(&state, move |db| {
         let category_name = db.get_category_name(category_id)?.unwrap_or_default();
-        let archives =
-            db.list_archives(None, None, Some(category_id), "updated", "desc", 200, 0)?;
+        let archives = db.list_archives(
+            None,
+            None,
+            Some(category_id),
+            None,
+            None,
+            "updated",
+            "desc",
+            200,
+            0,
+        )?;
         Ok((category_name, archives))
     })
     .await;

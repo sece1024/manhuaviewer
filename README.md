@@ -103,7 +103,8 @@ frontend/
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/archives` | GET | 档案列表（支持 search, tag, category_id, group_id, sort/sort_by, order/sort_order, page, limit） |
+| `/api/archives` | GET | 档案列表（支持 search, tag, category_id, group_id, sort/sort_by, order/sort_order, page, limit, added_from/added_to 按添加日期过滤，YYYY-MM-DD，from 含 to 不含） |
+| `/api/archives/added-tree` | GET | 按添加日期的年/月聚合（侧栏"日期"树；本机时区分桶，年降序、月升序） |
 | `/api/archives/:id` | GET | 档案详情 |
 | `/api/archives/:id` | DELETE | 删除档案 |
 | `/api/archives/:id/title` | PUT | 重命名档案 |

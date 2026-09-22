@@ -3,7 +3,7 @@ import api, { membershipGeneration } from '../utils/api';
 import { membershipChanged, idsWithin } from '../utils/listReconcile';
 
 // 会话缓存：{ [mode]: { archives, page, hasMore, search, sortBy, sortOrder,
-// selectedTag, selectedCategory, expandedGroup, groupMembers, scrollTop } }
+// selectedTag, selectedCategory, addedRange, expandedGroup, groupMembers, scrollTop } }
 // 模块级 —— Library 卸载（进入阅读器等路由）后保留，返回时可秒开旧列表。
 const librarySessions = {};
 
@@ -89,6 +89,8 @@ export default function useLibrarySession({
         ...(s.readFilter && s.readFilter !== 'all' ? { read: s.readFilter } : {}),
         ...(s.selectedTag ? { tag: s.selectedTag } : {}),
         ...(s.selectedCategory ? { category_id: s.selectedCategory } : {}),
+        // 日期过滤也要带上，否则比对会用未过滤列表顶掉会话里的过滤视图
+        ...(s.addedRange || {}),
       });
       if (!Array.isArray(data)) return;
       // 用户在比对期间已切换条件：丢弃过期结果
@@ -97,7 +99,8 @@ export default function useLibrarySession({
           filterRefs.searchRef.current !== s.search ||
           filterRefs.selectedTagRef.current !== s.selectedTag ||
           filterRefs.readFilterRef.current !== (s.readFilter || 'all') ||
-          filterRefs.selectedCategoryRef.current !== s.selectedCategory) {
+          filterRefs.selectedCategoryRef.current !== s.selectedCategory ||
+          (filterRefs.addedRangeRef ? filterRefs.addedRangeRef.current : null) !== (s.addedRange || null)) {
         return;
       }
       if (membershipChanged(idsWithin(s.archives, windowSize), idsWithin(data, windowSize))) {

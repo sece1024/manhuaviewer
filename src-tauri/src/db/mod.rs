@@ -382,7 +382,7 @@ mod tests {
             .unwrap();
 
         let archives = db
-            .list_archives(None, None, None, "title", "asc", 10, 0)
+            .list_archives(None, None, None, None, None, "title", "asc", 10, 0)
             .unwrap();
         assert_eq!(archives.len(), 3);
         assert_eq!(archives[0].title, "Manga A");
@@ -402,7 +402,17 @@ mod tests {
             .unwrap();
 
         let archives = db
-            .list_archives(Some("Naruto"), None, None, "title", "asc", 10, 0)
+            .list_archives(
+                Some("Naruto"),
+                None,
+                None,
+                None,
+                None,
+                "title",
+                "asc",
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(archives.len(), 1);
         assert_eq!(archives[0].title, "Naruto");
@@ -430,26 +440,66 @@ mod tests {
 
         // 普通关键词：匹配标题或标签名
         let r = db
-            .list_archives(Some("shonen"), None, None, "title", "asc", 10, 0)
+            .list_archives(
+                Some("shonen"),
+                None,
+                None,
+                None,
+                None,
+                "title",
+                "asc",
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(r.len(), 2);
 
         // tag:name —— 匹配特定标签
         let r = db
-            .list_archives(Some("tag:adventure"), None, None, "title", "asc", 10, 0)
+            .list_archives(
+                Some("tag:adventure"),
+                None,
+                None,
+                None,
+                None,
+                "title",
+                "asc",
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].title, "One Piece");
 
         // tag:ns:name —— 带命名空间
         let r = db
-            .list_archives(Some("tag:genre:shonen"), None, None, "title", "asc", 10, 0)
+            .list_archives(
+                Some("tag:genre:shonen"),
+                None,
+                None,
+                None,
+                None,
+                "title",
+                "asc",
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(r.len(), 2);
 
         // -排除 —— 从标题和标签中排除
         let r = db
-            .list_archives(Some("-Shippuden"), None, None, "title", "asc", 10, 0)
+            .list_archives(
+                Some("-Shippuden"),
+                None,
+                None,
+                None,
+                None,
+                "title",
+                "asc",
+                10,
+                0,
+            )
             .unwrap();
         assert!(r.iter().all(|a| a.title != "Naruto Shippuden"));
 
@@ -457,6 +507,8 @@ mod tests {
         let r = db
             .list_archives(
                 Some("Naruto tag:genre:shonen"),
+                None,
+                None,
                 None,
                 None,
                 "title",
@@ -587,20 +639,20 @@ mod tests {
 
         // 全量列表（书库主路径）按最近阅读排序
         let rows = db
-            .list_archives_all(None, None, None, None, "updated", "desc")
+            .list_archives_all(None, None, None, None, None, None, "updated", "desc")
             .unwrap();
         assert_eq!(rows[0].id, alpha, "最近读过的档案应排在第一位");
         assert_eq!(rows[1].title, "Beta");
 
         // 分页列表（OPDS 等路径）同样按最近阅读排序
         let rows = db
-            .list_archives(None, None, None, "updated", "desc", 10, 0)
+            .list_archives(None, None, None, None, None, "updated", "desc", 10, 0)
             .unwrap();
         assert_eq!(rows[0].id, alpha);
 
         // 其它排序方式不受 history 影响（如按名称）
         let rows = db
-            .list_archives_all(None, None, None, None, "name", "asc")
+            .list_archives_all(None, None, None, None, None, None, "name", "asc")
             .unwrap();
         assert_eq!(rows[0].title, "Alpha");
         assert_eq!(rows[1].title, "Beta");
@@ -614,20 +666,20 @@ mod tests {
         db.save_history(a, 3, 10).unwrap();
 
         let read = db
-            .list_archives_all(None, None, None, Some("read"), "name", "asc")
+            .list_archives_all(None, None, None, None, None, Some("read"), "name", "asc")
             .unwrap();
         assert_eq!(read.len(), 1);
         assert_eq!(read[0].id, a);
 
         let unread = db
-            .list_archives_all(None, None, None, Some("unread"), "name", "asc")
+            .list_archives_all(None, None, None, None, None, Some("unread"), "name", "asc")
             .unwrap();
         assert_eq!(unread.len(), 1);
         assert_eq!(unread[0].title, "Beta");
 
         // 随机排序不崩溃且返回全集
         let random = db
-            .list_archives_all(None, None, None, None, "random", "asc")
+            .list_archives_all(None, None, None, None, None, None, "random", "asc")
             .unwrap();
         assert_eq!(random.len(), 2);
     }
@@ -647,7 +699,7 @@ mod tests {
             .unwrap();
 
         let groups = db
-            .list_archives_grouped_page(None, None, None, None, "name", "asc", 50, 0)
+            .list_archives_grouped_page(None, None, None, None, None, None, "name", "asc", 50, 0)
             .unwrap();
         assert_eq!(groups.len(), 3, "自动组应把 2 话合并为 1 项");
 
@@ -677,25 +729,25 @@ mod tests {
 
         // 名称升序：A 组（成员 A/B，取 MIN title = "A"）最靠前，随后 C、D
         let page1 = db
-            .list_archives_grouped_page(None, None, None, None, "name", "asc", 1, 0)
+            .list_archives_grouped_page(None, None, None, None, None, None, "name", "asc", 1, 0)
             .unwrap();
         assert_eq!(page1.len(), 1);
         assert_eq!(page1[0].archive.id, a, "永久组代表应为主档案");
         assert_eq!(page1[0].chapter_count, 2);
 
         let page2 = db
-            .list_archives_grouped_page(None, None, None, None, "name", "asc", 1, 1)
+            .list_archives_grouped_page(None, None, None, None, None, None, "name", "asc", 1, 1)
             .unwrap();
         assert_eq!(page2[0].archive.id, c);
 
         let page3 = db
-            .list_archives_grouped_page(None, None, None, None, "name", "asc", 1, 2)
+            .list_archives_grouped_page(None, None, None, None, None, None, "name", "asc", 1, 2)
             .unwrap();
         assert_eq!(page3[0].archive.id, d);
 
         // 越界页返回空
         let empty = db
-            .list_archives_grouped_page(None, None, None, None, "name", "asc", 1, 5)
+            .list_archives_grouped_page(None, None, None, None, None, None, "name", "asc", 1, 5)
             .unwrap();
         assert!(empty.is_empty());
     }
@@ -780,7 +832,7 @@ mod tests {
 
         // Verify archives / tags / categories
         let archives = db2
-            .list_archives(None, None, None, "title", "asc", 10, 0)
+            .list_archives(None, None, None, None, None, "title", "asc", 10, 0)
             .unwrap();
         assert_eq!(archives.len(), 1);
         assert_eq!(archives[0].title, "Manga A");

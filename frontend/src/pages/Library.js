@@ -236,6 +236,11 @@ export default function Library({ mode = 'library', enableSession }) {
   });
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState(null);
+  // 日期过滤（按添加时间）：{ added_from, added_to } 本地日期边界（from 含、to 不含），
+  // 对象身份用于会话恢复比对；null = 不过滤
+  const [addedRange, setAddedRange] = useState(null);
+  const [expandedYears, setExpandedYears] = useState(() => new Set());
+  const [dateTree, setDateTree] = useState(null);
   const [showSidebar, setShowSidebar] = useState(true);
   const [showOpenModal, setShowOpenModal] = useState(false);
   const [openPath, setOpenPath] = useState('');
@@ -273,6 +278,7 @@ export default function Library({ mode = 'library', enableSession }) {
   const readFilterRef = useRef(readFilter);
   const typeFilterRef = useRef(typeFilter);
   const selectedCategoryRef = useRef(selectedCategory);
+  const addedRangeRef = useRef(addedRange);
   const searchRef = useRef(search);
   const requestIdRef = useRef(0);
   const appendLockRef = useRef(false); // 防触底自动加载与按钮点击重复追加同一页
@@ -295,9 +301,10 @@ export default function Library({ mode = 'library', enableSession }) {
     snapshot: {
       archives, page: pageRef.current, hasMore,
       search, sortBy, sortOrder, selectedTag, readFilter, typeFilter, selectedCategory,
+      addedRange,
       expandedGroup, groupMembers,
     },
-    filterRefs: { sortByRef, searchRef, selectedTagRef, readFilterRef, selectedCategoryRef },
+    filterRefs: { sortByRef, searchRef, selectedTagRef, readFilterRef, selectedCategoryRef, addedRangeRef },
     pageRef,
     pageSize: PAGE_SIZE,
     setArchives, setHasMore, setExpandedGroup, setGroupMembers,
@@ -310,11 +317,27 @@ export default function Library({ mode = 'library', enableSession }) {
   useEffect(() => { readFilterRef.current = readFilter; }, [readFilter]);
   useEffect(() => { typeFilterRef.current = typeFilter; }, [typeFilter]);
   useEffect(() => { selectedCategoryRef.current = selectedCategory; }, [selectedCategory]);
+  useEffect(() => { addedRangeRef.current = addedRange; }, [addedRange]);
   useEffect(() => { searchRef.current = search; }, [search]);
   useEffect(() => { expandedGroupRef.current = expandedGroup; }, [expandedGroup]);
 
   const reloadCategories = useCallback(() => {
     return api.getCategories().then(data => { setCategories(data); return data; }).catch(() => []);
+  }, []);
+
+  // 日期树（年 → 月计数）。Promise.resolve 包一层：测试的 automock 下方法返回
+  // undefined 而非 Promise，直接 .then 会崩；首次拿到树时默认展开最新一年。
+  const reloadDateTree = useCallback(() => {
+    return Promise.resolve(api.getAddedTree())
+      .then(t => {
+        const ok = t && Array.isArray(t.years) ? t : null;
+        setDateTree(ok);
+        setExpandedYears(prev => (prev.size === 0 && ok && ok.years.length > 0)
+          ? new Set([ok.years[0].year])
+          : prev);
+        return ok;
+      })
+      .catch(() => null);
   }, []);
 
   useEffect(() => {
@@ -330,12 +353,13 @@ export default function Library({ mode = 'library', enableSession }) {
       setReadFilter(s.readFilter || 'all'); readFilterRef.current = s.readFilter || 'all';
       setTypeFilter(s.typeFilter || 'all'); typeFilterRef.current = s.typeFilter || 'all';
       setSelectedCategory(s.selectedCategory); selectedCategoryRef.current = s.selectedCategory;
+      setAddedRange(s.addedRange || null); addedRangeRef.current = s.addedRange || null;
       // 记录本轮恢复写入的筛选值：上述 setState 提交后，“筛选变化重拉”effect 会看到
       // 与这里相同的值并跳过，避免把恢复好的分页/滚动位置覆盖成第 1 页
       restoredFiltersRef.current = {
         sortBy: s.sortBy, sortOrder: s.sortOrder, selectedTag: s.selectedTag,
         readFilter: s.readFilter || 'all', selectedCategory: s.selectedCategory,
-        typeFilter: s.typeFilter || 'all',
+        typeFilter: s.typeFilter || 'all', addedRange: s.addedRange || null,
       };
       setArchives(s.archives);
       pageRef.current = s.page;
@@ -356,6 +380,7 @@ export default function Library({ mode = 'library', enableSession }) {
       loadArchives();
     }
     reloadCategories();
+    reloadDateTree();
     // 每次进入书库刷新标签列表与计数（阅读器/设置页里的改动可能已过期）
     reloadTags();
     return () => clearTimeout(searchDebounceRef.current);
@@ -400,6 +425,11 @@ export default function Library({ mode = 'library', enableSession }) {
       if (readFilterRef.current && readFilterRef.current !== 'all') {
         baseParams.read = readFilterRef.current;
       }
+      const ar = addedRangeRef.current;
+      if (ar) {
+        baseParams.added_from = ar.added_from;
+        baseParams.added_to = ar.added_to;
+      }
       const data = await api.getArchives(baseParams);
       if (id !== requestIdRef.current) return;
       setArchives(prev => append ? [...prev, ...data] : data);
@@ -407,6 +437,9 @@ export default function Library({ mode = 'library', enableSession }) {
       setHasMore(data.length >= PAGE_SIZE);
       // 列表直接来自服务端（首次加载 / 筛选变化 / 写操作后重拉）：可作为会话基准写回
       markSessionVerified();
+      // 日期树随成员集合变化（新增/移除改计数）：首页拉取后顺带刷新，
+      // GET 缓存 30s + /archives 写失效，未变化时基本无开销
+      if (!append) reloadDateTree();
     } catch (e) {
       if (id === requestIdRef.current) toast(e.message, 'error');
     } finally {
@@ -429,7 +462,8 @@ export default function Library({ mode = 'library', enableSession }) {
       const r = restoredFiltersRef.current;
       const same = r.sortBy === sortBy && r.sortOrder === sortOrder &&
         r.selectedTag === selectedTag && r.readFilter === readFilter &&
-        r.selectedCategory === selectedCategory && r.typeFilter === typeFilter;
+        r.selectedCategory === selectedCategory && r.typeFilter === typeFilter &&
+        r.addedRange === addedRange;
       if (same) {
         // 仍是恢复写入的那组值：跳过重拉；用户一旦改动筛选，下次运行不再匹配即正常重拉
         return;
@@ -437,7 +471,7 @@ export default function Library({ mode = 'library', enableSession }) {
       restoredFiltersRef.current = null;
     }
     loadArchives({ search: searchRef.current, tag: selectedTag, category_id: selectedCategory });
-  }, [sortBy, sortOrder, selectedTag, readFilter, selectedCategory, typeFilter]);
+  }, [sortBy, sortOrder, selectedTag, readFilter, selectedCategory, typeFilter, addedRange]);
 
   const handleSearch = useCallback((val) => {
     setSearch(val);
@@ -471,6 +505,27 @@ export default function Library({ mode = 'library', enableSession }) {
     clearTimeout(searchDebounceRef.current);
     const next = selectedCategory === categoryId ? null : categoryId;
     setSelectedCategory(next);
+  };
+
+  // 日期过滤（按添加时间）：点年 = 整年，点月 = 单月；再点同一节点取消过滤。
+  // 边界在点击时一次性算成本地日期字符串，会话比对直接用对象身份。
+  const handleDateFilter = (year, month = null) => {
+    clearTimeout(searchDebounceRef.current);
+    const pad = n => String(n).padStart(2, '0');
+    const from = `${year}-${month ? pad(month) : '01'}-01`;
+    const to = month && month < 12 ? `${year}-${pad(month + 1)}-01` : `${year + 1}-01-01`;
+    setAddedRange(addedRange && addedRange.added_from === from
+      ? null
+      : { added_from: from, added_to: to });
+  };
+
+  // 展开/收起某年的月份列表（箭头点击，与整年过滤互不干扰）
+  const toggleYear = (year) => {
+    setExpandedYears(prev => {
+      const next = new Set(prev);
+      if (next.has(year)) next.delete(year); else next.add(year);
+      return next;
+    });
   };
 
   const handleOpenFile = async () => {
@@ -812,6 +867,56 @@ export default function Library({ mode = 'library', enableSession }) {
                   <span className="count">{c.archive_count}</span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* 日期过滤（按添加时间：年 → 月，本机时区分桶） */}
+          {dateTree && dateTree.years.length > 0 && (
+            <div className="filter-section">
+              <div className="filter-section-title">日期</div>
+              {dateTree.years.map(y => {
+                const yearFrom = `${y.year}-01-01`;
+                const yearActive = addedRange && addedRange.added_from === yearFrom;
+                const expanded = expandedYears.has(y.year);
+                return (
+                  <div key={y.year}>
+                    <div
+                      className={`filter-tag ${yearActive ? 'active' : ''}`}
+                      onClick={() => handleDateFilter(y.year)}
+                    >
+                      <span
+                        role="button"
+                        aria-label={expanded ? `收起 ${y.year} 年的月份` : `展开 ${y.year} 年的月份`}
+                        onClick={(e) => { e.stopPropagation(); toggleYear(y.year); }}
+                        style={{ flexShrink: 0, width: 12, cursor: 'pointer', opacity: 0.7 }}
+                      >
+                        {expanded ? '▾' : '▸'}
+                      </span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {y.year}年
+                      </span>
+                      <span className="count">{y.count}</span>
+                    </div>
+                    {expanded && y.months.map(m => {
+                      const monthFrom = `${y.year}-${String(m.month).padStart(2, '0')}-01`;
+                      const monthActive = addedRange && addedRange.added_from === monthFrom;
+                      return (
+                        <div
+                          key={m.month}
+                          className={`filter-tag ${monthActive ? 'active' : ''}`}
+                          style={{ paddingLeft: 24 }}
+                          onClick={() => handleDateFilter(y.year, m.month)}
+                        >
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {m.month}月
+                          </span>
+                          <span className="count">{m.count}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
             </div>
           )}
 

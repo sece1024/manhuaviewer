@@ -341,6 +341,8 @@ pub fn create_router(state: AppState) -> Router {
     let api_routes = Router::new()
         // Archives
         .route("/archives", get(archives::list_archives))
+        // 按添加日期的年/月聚合（侧栏"日期"树）；静态段优先于 /archives/:id
+        .route("/archives/added-tree", get(archives::added_tree))
         .route("/archives/:id", get(archives::get_archive))
         .route("/archives/:id", delete(archives::delete_archive))
         .route("/archives/:id/title", put(archives::update_archive_title))
@@ -708,6 +710,32 @@ mod tests {
         )
         .await;
         assert_eq!(status, 400, "空标签名应被结构校验拒绝");
+    }
+
+    /// 添加日期过滤与聚合端点：非法边界 400；added-tree 返回 years 结构；
+    /// 合法边界在空库上正常 200。
+    #[tokio::test]
+    async fn added_date_filter_and_tree() {
+        let (port, _dir) = spawn_server().await;
+
+        let (status, _) = get(port, "/api/archives?added_from=nope").await;
+        assert_eq!(status, 400, "非法日期格式应 400");
+
+        let (status, _) = get(port, "/api/archives?added_to=2026-13-01").await;
+        assert_eq!(status, 400, "月份越界应 400");
+
+        let (status, body) = get(port, "/api/archives/added-tree").await;
+        assert_eq!(status, 200);
+        let resp_body = body.split("\r\n\r\n").nth(1).unwrap_or("");
+        let root: serde_json::Value = serde_json::from_str(resp_body).unwrap();
+        assert!(root["years"].is_array(), "空库返回 years 空数组");
+
+        let (status, _) = get(
+            port,
+            "/api/archives?added_from=2026-01-01&added_to=2027-01-01",
+        )
+        .await;
+        assert_eq!(status, 200, "合法边界应放行");
     }
 
     /// 出站白名单必须拒绝 IPv4 映射的回环/链路本地（::ffff:127.0.0.1 等），

@@ -372,6 +372,9 @@ pub struct ArchiveQuery {
     pub title: Option<String>,
     /// 父目录路径（精确标题过滤时按此筛选同目录成员）
     pub parent: Option<String>,
+    /// 按添加日期过滤的本地日期边界（YYYY-MM-DD）：from 含、to 不含，可只给一边
+    pub added_from: Option<String>,
+    pub added_to: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -431,6 +434,21 @@ fn plain_list_items(
         .collect())
 }
 
+/// 纯判定：日期过滤边界必须是 YYYY-MM-DD，且月份 01–12、日 01–31。
+/// 只做结构与范围校验（日历精确性交给 SQLite——无效日期 `datetime()` 返回 NULL，
+/// 等价于空结果）；全部检查均为字节级，非 ASCII 输入在字符串切片前即被短路拒绝。
+pub fn valid_date_bound(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[5..7].iter().all(u8::is_ascii_digit)
+        && b[8..].iter().all(u8::is_ascii_digit)
+        && (1..=12).contains(&s[5..7].parse::<u32>().unwrap_or(0))
+        && (1..=31).contains(&s[8..10].parse::<u32>().unwrap_or(0))
+}
+
 pub async fn list_archives(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ArchiveQuery>,
@@ -438,6 +456,21 @@ pub async fn list_archives(
     enum ListResult {
         Raw(Vec<ListItem>),
         Grouped(Vec<ListItem>),
+    }
+
+    // 日期边界结构校验（对端可控输入）：非法直接 400，不让脏值进 SQL
+    for (label, value) in [
+        ("added_from", &query.added_from),
+        ("added_to", &query.added_to),
+    ] {
+        if let Some(d) = value {
+            if !valid_date_bound(d) {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    &format!("{label} 必须是 YYYY-MM-DD 格式的日期"),
+                );
+            }
+        }
     }
 
     let result = super::run_db(&state, move |db| {
@@ -477,6 +510,8 @@ pub async fn list_archives(
                 query.search.as_deref(),
                 query.tag.as_deref(),
                 query.category_id,
+                query.added_from.as_deref(),
+                query.added_to.as_deref(),
                 query.read.as_deref(),
                 sort,
                 order,
@@ -495,6 +530,8 @@ pub async fn list_archives(
                 query.search.as_deref(),
                 query.tag.as_deref(),
                 query.category_id,
+                query.added_from.as_deref(),
+                query.added_to.as_deref(),
                 query.read.as_deref(),
                 sort,
                 order,
@@ -527,6 +564,15 @@ pub async fn list_archives(
     match result {
         Ok(ListResult::Raw(archives)) => Json(archives).into_response(),
         Ok(ListResult::Grouped(items)) => Json(items).into_response(),
+        Err(e) => internal_error(e),
+    }
+}
+
+/// GET /api/archives/added-tree — 按添加日期的年/月聚合（侧栏"日期"树；
+/// 本机时区分桶，年降序、月升序）。空库返回 `{"years":[]}`。
+pub async fn added_tree(State(state): State<Arc<AppState>>) -> Response {
+    match super::run_db(&state, |db| db.added_tree()).await {
+        Ok(v) => Json(v).into_response(),
         Err(e) => internal_error(e),
     }
 }
@@ -1811,6 +1857,23 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
         }
+    }
+
+    /// 日期边界结构校验：YYYY-MM-DD + 月 01–12 + 日 01–31；垃圾输入全部拒绝。
+    #[test]
+    fn valid_date_bound_accepts_iso_rejects_garbage() {
+        assert!(valid_date_bound("2026-03-01"));
+        assert!(valid_date_bound("1999-12-31"));
+        assert!(!valid_date_bound(""));
+        assert!(!valid_date_bound("2026-3-1"));
+        assert!(!valid_date_bound("2026-13-01"));
+        assert!(!valid_date_bound("2026-00-10"));
+        assert!(!valid_date_bound("2026-02-32"));
+        assert!(!valid_date_bound("20260301"));
+        assert!(!valid_date_bound("2026-03-01x"));
+        assert!(!valid_date_bound("abc"));
+        // 非 ASCII：字节检查短路，切片不 panic
+        assert!(!valid_date_bound("二〇二六-03-01"));
     }
 
     #[test]

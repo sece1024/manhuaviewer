@@ -255,6 +255,9 @@ const api = {
       archives.map(a => ({ ...a, cover_url: a.cover_url ? fixUrl(a.cover_url) : `${BASE}/archives/${a.id}/cover` }))
     );
   },
+  // 按添加日期的年/月聚合（侧栏"日期"树）。缓存键 /archives/added-tree 落在
+  // _invalidate('/archives') 的前缀规则内：任何档案写操作都会自动作废它。
+  getAddedTree: () => request('/archives/added-tree'),
   getPages: (archiveId) => request(`/archives/${archiveId}/pages`).then(data => ({
     ...data,
     pages: data.pages.map(p => ({ ...p, url: fixUrl(p.url), thumb_url: fixUrl(p.thumb_url) })),

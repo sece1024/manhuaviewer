@@ -168,6 +168,8 @@ impl Database {
         search: Option<&str>,
         tag: Option<&str>,
         category_id: Option<i64>,
+        added_from: Option<&str>,
+        added_to: Option<&str>,
         sort: &str,
         order: &str,
         limit: i64,
@@ -175,7 +177,7 @@ impl Database {
     ) -> Result<Vec<ArchiveRow>> {
         let conn = self.conn()?;
         let (join_clause, where_clause, mut params) =
-            Self::build_archive_filters(&conn, search, tag, category_id)?;
+            Self::build_archive_filters(&conn, search, tag, category_id, added_from, added_to)?;
 
         let order_clause = order_expr_for(sort);
         let direction = if order == "asc" { "ASC" } else { "DESC" };
@@ -208,13 +210,15 @@ impl Database {
         search: Option<&str>,
         tag: Option<&str>,
         category_id: Option<i64>,
+        added_from: Option<&str>,
+        added_to: Option<&str>,
         read: Option<&str>,
         sort: &str,
         order: &str,
     ) -> Result<Vec<ArchiveRow>> {
         let conn = self.conn()?;
         let (join_clause, mut where_clause, params) =
-            Self::build_archive_filters(&conn, search, tag, category_id)?;
+            Self::build_archive_filters(&conn, search, tag, category_id, added_from, added_to)?;
 
         let read_clause = match read {
             Some("read") => " AND EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)",
@@ -260,6 +264,8 @@ impl Database {
         search: Option<&str>,
         tag: Option<&str>,
         category_id: Option<i64>,
+        added_from: Option<&str>,
+        added_to: Option<&str>,
         read: Option<&str>,
         sort: &str,
         order: &str,
@@ -268,7 +274,7 @@ impl Database {
     ) -> Result<Vec<GroupedArchiveRow>> {
         let conn = self.conn()?;
         let (join_clause, mut where_clause, mut params) =
-            Self::build_archive_filters(&conn, search, tag, category_id)?;
+            Self::build_archive_filters(&conn, search, tag, category_id, added_from, added_to)?;
 
         let read_clause = match read {
             Some("read") => " AND EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)",
@@ -336,12 +342,16 @@ impl Database {
         Ok(rows)
     }
 
-    /// 构造档案列表查询的 JOIN / WHERE 片段与参数（供 list_archives 与 list_archives_all 共用）。
+    /// 构造档案列表查询的 JOIN / WHERE 片段与参数（供 list_archives / list_archives_all /
+    /// list_archives_grouped_page 共用）。
+    /// `added_from`/`added_to`：按添加日期过滤的本地日期边界（from 含、to 不含）。
     fn build_archive_filters(
         conn: &rusqlite::Connection,
         search: Option<&str>,
         tag: Option<&str>,
         category_id: Option<i64>,
+        added_from: Option<&str>,
+        added_to: Option<&str>,
     ) -> Result<ArchiveFilters> {
         let mut where_clause = String::from("WHERE 1=1");
         let mut join_clause = String::new();
@@ -426,6 +436,18 @@ impl Database {
                     params.push(Box::new(cid));
                 }
             }
+        }
+
+        // 按添加日期过滤：本地日期边界（from 含、to 不含）。created_at 存的是 UTC
+        // 无时区标记串，用 SQLite 'utc' 修饰符把本地日期换算成 UTC 后做**裸列**范围
+        // 比较——左值不包函数，仍能走 idx_archives_created_at 索引。
+        if let Some(from) = added_from.filter(|s| !s.is_empty()) {
+            where_clause.push_str(" AND a.created_at >= datetime(?, 'utc')");
+            params.push(Box::new(from.to_string()));
+        }
+        if let Some(to) = added_to.filter(|s| !s.is_empty()) {
+            where_clause.push_str(" AND a.created_at < datetime(?, 'utc')");
+            params.push(Box::new(to.to_string()));
         }
 
         Ok((join_clause, where_clause, params))
@@ -789,5 +811,149 @@ impl Database {
             ),
             None => conn.execute("UPDATE archives SET remote_cover = NULL WHERE id = ?", [id]),
         }
+    }
+
+    /// 按添加日期聚合：年 → 月 → 数量，供侧栏"日期"树使用。
+    /// 按**本机时区**分桶（created_at 为 UTC，datetime(..., 'localtime') 转本地后再取年月），
+    /// 与前端卡片展示的本地日期一致；年降序（最新在前）、月升序（1~12）。
+    /// 空库/日期异常的行（NULL、空串 → strftime 为 NULL）自动跳过，返回 `{"years":[]}`。
+    pub fn added_tree(&self) -> Result<serde_json::Value> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT strftime('%Y', datetime(created_at, 'localtime')),
+                    CAST(strftime('%m', datetime(created_at, 'localtime')) AS INTEGER),
+                    COUNT(*)
+             FROM archives
+             WHERE created_at IS NOT NULL AND created_at != ''
+             GROUP BY 1, 2
+             ORDER BY 1 DESC, 2 ASC",
+        )?;
+        let rows: Vec<(String, i64, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .filter_map(log_and_skip)
+            .collect();
+
+        // 行已按年降序、月升序排好：连续同年的行并入当前组
+        let mut years: Vec<serde_json::Value> = Vec::new();
+        let mut cur: Option<(i64, i64, Vec<serde_json::Value>)> = None;
+        for (y_str, month, count) in rows {
+            let Ok(year) = y_str.parse::<i64>() else {
+                continue;
+            };
+            match &mut cur {
+                Some((cy, total, months)) if *cy == year => {
+                    *total += count;
+                    months.push(serde_json::json!({ "month": month, "count": count }));
+                }
+                _ => {
+                    if let Some((cy, total, months)) = cur.take() {
+                        years.push(
+                            serde_json::json!({ "year": cy, "count": total, "months": months }),
+                        );
+                    }
+                    cur = Some((
+                        year,
+                        count,
+                        vec![serde_json::json!({ "month": month, "count": count })],
+                    ));
+                }
+            }
+        }
+        if let Some((cy, total, months)) = cur {
+            years.push(serde_json::json!({ "year": cy, "count": total, "months": months }));
+        }
+        Ok(serde_json::json!({ "years": years }))
+    }
+}
+
+#[cfg(test)]
+mod added_date_tests {
+    use super::*;
+
+    fn setup() -> Database {
+        // 与 db::tests::setup_test_db 同款：连接打开后 NamedTempFile 被 drop（Unix 上
+        // 文件被 unlink，SQLite 连接仍持有 fd 可正常读写），测试结束自动回收。
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let db = Database::new(temp_file.path().to_str().unwrap()).unwrap();
+        db.init().unwrap();
+        db
+    }
+
+    /// 造一个指定 created_at 的档案（中间日期 12:00，任何时区下本地日期都同一天，
+    /// 保证分桶断言与运行机时区无关）。
+    fn insert_with_date(db: &Database, title: &str, date: &str) -> i64 {
+        let id = db
+            .upsert_scanned_archive(title, &format!("/x/{title}.cbz"), "cbz", 5, 10, 1)
+            .unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE archives SET created_at = ? WHERE id = ?",
+                rusqlite::params![date, id],
+            )
+            .unwrap();
+        id
+    }
+
+    /// 年/月分桶与计数：年降序（2026 在前）、月升序（3 月在 7 月前）。
+    #[test]
+    fn added_tree_buckets_by_year_and_month() {
+        let db = setup();
+        insert_with_date(&db, "春书", "2026-03-15 12:00:00");
+        insert_with_date(&db, "夏书", "2026-07-02 12:00:00");
+        insert_with_date(&db, "冬书", "2025-12-31 12:00:00");
+
+        let tree = db.added_tree().unwrap();
+        let years = tree["years"].as_array().unwrap();
+        assert_eq!(years.len(), 2);
+        assert_eq!(years[0]["year"], 2026);
+        assert_eq!(years[0]["count"], 2);
+        let months = years[0]["months"].as_array().unwrap();
+        assert_eq!(months.len(), 2);
+        assert_eq!(months[0]["month"], 3);
+        assert_eq!(months[0]["count"], 1);
+        assert_eq!(months[1]["month"], 7);
+        assert_eq!(years[1]["year"], 2025);
+        assert_eq!(years[1]["count"], 1);
+    }
+
+    /// 空库返回空 years 数组（前端据此隐藏"日期"段）。
+    #[test]
+    fn added_tree_empty_db_returns_empty_years() {
+        let db = setup();
+        let tree = db.added_tree().unwrap();
+        assert!(tree["years"].as_array().unwrap().is_empty());
+    }
+
+    /// 日期范围过滤：from 含、to 不含；可只给单边边界；不给 = 全部。
+    #[test]
+    fn added_range_filter_selects_by_bounds() {
+        let db = setup();
+        insert_with_date(&db, "三月书", "2026-03-15 12:00:00");
+        insert_with_date(&db, "四月书", "2026-04-15 12:00:00");
+
+        let titles = |from: Option<&str>, to: Option<&str>| -> Vec<String> {
+            db.list_archives(None, None, None, from, to, "created", "desc", 50, 0)
+                .unwrap()
+                .into_iter()
+                .map(|a| a.title)
+                .collect()
+        };
+        assert_eq!(
+            titles(Some("2026-03-01"), Some("2026-04-01")),
+            vec!["三月书"],
+            "3月区间：from 含、to 不含"
+        );
+        assert_eq!(
+            titles(Some("2026-04-01"), None),
+            vec!["四月书"],
+            "只给下界：不含更早的三月书"
+        );
+        assert_eq!(
+            titles(None, Some("2026-04-01")),
+            vec!["三月书"],
+            "只给上界：不含四月书"
+        );
+        assert_eq!(titles(None, None).len(), 2, "无日期参数 = 全部");
     }
 }

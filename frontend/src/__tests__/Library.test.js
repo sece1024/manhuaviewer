@@ -80,6 +80,30 @@ describe('Library 页面', () => {
     expect(screen.queryByText(/· \d{4}-\d{2}-\d{2}/)).not.toBeInTheDocument();
   });
 
+  test('日期树：展开月份并点选后按添加日期过滤', async () => {
+    api.getAddedTree.mockResolvedValue({
+      years: [{ year: 2026, count: 3, months: [{ month: 4, count: 2 }, { month: 5, count: 1 }] }],
+    });
+    renderLibrary();
+    await waitFor(() => {
+      expect(screen.getByText('2026年')).toBeInTheDocument();
+    });
+    // 默认自动展开最新一年 → 点 4月 → 请求带上本地日期边界（from 含、to 不含）
+    fireEvent.click(await screen.findByText('4月'));
+    await waitFor(() => {
+      expect(api.getArchives).toHaveBeenCalledWith(
+        expect.objectContaining({ added_from: '2026-04-01', added_to: '2026-05-01' })
+      );
+    });
+    // 再点同一节点 → 取消过滤 → 请求不再带日期参数
+    fireEvent.click(screen.getByText('4月'));
+    await waitFor(() => {
+      expect(api.getArchives).toHaveBeenCalledWith(
+        expect.not.objectContaining({ added_from: expect.anything() })
+      );
+    });
+  });
+
   test('搜索输入框存在', async () => {
     renderLibrary();
     await waitFor(() => {
