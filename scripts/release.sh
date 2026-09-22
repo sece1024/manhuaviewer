@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # scripts/release.sh — 一键发版：bump → changelog → commit → tag → push
-# 用法: ./scripts/release.sh <新版本号> [-y] [--no-push]
+# 用法: ./scripts/release.sh <新版本号> [-y] [--check] [--no-push]
 # 示例: ./scripts/release.sh 3.5.4        # 交互确认后推送（触发 release.yml 打包）
 #       ./scripts/release.sh 3.5.4 -y     # 免确认
+#       ./scripts/release.sh 3.5.4 --check   # 打 tag 前先跑 lint/fmt/build/测试，全绿才继续
 #       ./scripts/release.sh 3.5.4 --no-push   # 只做到本地 commit + tag，不推送
 #
 # 防呆检查（全部通过才会改动任何文件）：
@@ -11,6 +12,7 @@
 #   - 工作区干净（src-tauri/gen/schemas/ 的固有改动除外，仓库约定不提交它）
 #   - git-cliff 已安装（pnpm changelog 依赖）
 #   - 目标 tag v<版本> 尚不存在
+#   - --check 指定时：lint / fmt / build / 前端测试 / cargo test 全绿
 #
 # 注意：脚本只 stage 版本三文件 + CHANGELOG.md，绝不用 `git add -A`，
 # 避免把 gen/schemas 等游离改动带进 release 提交。
@@ -18,8 +20,8 @@
 set -euo pipefail
 
 usage() {
-  echo "用法: $0 <版本号> [-y] [--no-push]"
-  echo "示例: $0 3.5.4 -y"
+  echo "用法: $0 <版本号> [-y] [--check] [--no-push]"
+  echo "示例: $0 3.5.4 -y --check"
   exit 1
 }
 
@@ -31,10 +33,12 @@ die() {
 VERSION=""
 ASSUME_YES=0
 NO_PUSH=0
+DO_CHECK=0
 for arg in "$@"; do
   case "$arg" in
     -y | --yes) ASSUME_YES=1 ;;
     --no-push) NO_PUSH=1 ;;
+    --check) DO_CHECK=1 ;;
     -h | --help) usage ;;
     *)
       [ -z "$VERSION" ] || usage
@@ -69,6 +73,23 @@ CURRENT="$(node -p "require('./package.json').version")"
 [ "$CURRENT" != "$VERSION" ] || die "版本号与当前相同（${CURRENT}），无需发版"
 
 git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null && die "tag v$VERSION 已存在，可能已发过这个版"
+
+# --check：本地验证门禁。放在确认之前——先花几分钟跑测试，
+# 最后的 y/N 才是干净的"最后一步"；任何一步失败即中止，此时还没改动任何文件。
+if [ "$DO_CHECK" = "1" ]; then
+  echo "🔍 --check：运行验证套件（lint / fmt / build / 前端测试 / cargo test）..."
+  if ! (
+    pnpm lint &&
+      pnpm format:check &&
+      pnpm --filter manhuaviewer-frontend build &&
+      (cd frontend && CI=true pnpm test) &&
+      cargo test --manifest-path src-tauri/Cargo.toml
+  ); then
+    die "验证未通过，未做任何改动"
+  fi
+  echo "✅ 验证全绿"
+  echo ""
+fi
 
 # ── 确认 ──
 echo "📋 发版计划:"

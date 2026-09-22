@@ -18,6 +18,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      # tag 与三处版本号一致性断言：手动发版打岔时 fail fast，避免产物与
+      # Release 标题（取自 tauri.conf.json）跟 tag 版本错位
+      - name: Assert tag matches manifest versions
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          fail=0
+          check() {
+            if [ "$1" != "$TAG" ]; then
+              echo "❌ $2 版本 $1 与 tag v$TAG 不一致"
+              fail=1
+            fi
+          }
+          check "$(node -p "require('./package.json').version")" "package.json"
+          check "$(node -p "require('./src-tauri/tauri.conf.json').version")" "tauri.conf.json"
+          check "$(grep -m1 '^version' src-tauri/Cargo.toml | cut -d'"' -f2)" "Cargo.toml"
+          if [ "$fail" != "0" ]; then exit 1; fi
+          echo "✅ tag v$TAG 与三处版本号一致"
+
       - name: Generate release notes
         id: git-cliff
         uses: orhun/git-cliff-action@v4

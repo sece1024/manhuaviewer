@@ -1,0 +1,26 @@
+# Dependabot：自动升级 GitHub Actions 与 pnpm 依赖（每周检查，分组降噪）。
+# pnpm workspace：根 pnpm-lock.yaml 覆盖 frontend/ 成员。
+version: 2
+updates:
+  # GitHub Actions（ci.yml / release.yml 用到的 actions/*、tauri-action、
+  # rust-cache、git-cliff-action 等）——全部并成每周一个分组 PR
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # npm/pnpm 依赖：minor/patch 并成一个 PR，major 单独提（CRA 时代的老依赖
+  # 大版本升级需要人工审，不跟小升级混在一起）
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
