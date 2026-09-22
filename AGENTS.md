@@ -20,9 +20,10 @@ cd src-tauri && cargo test test_name               # single backend test (use fu
 pnpm lint                      # cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 pnpm format:check              # cargo fmt --manifest-path src-tauri/Cargo.toml --check
 pnpm format                    # cargo fmt (auto-fix)
+pnpm changelog                 # git-cliff: 重新生成 CHANGELOG.md（配置见 cliff.toml）
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every push/PR to `main`. It runs `pnpm --filter manhuaviewer-frontend build` (compile + ESLint) **and frontend tests** (`cd frontend && pnpm test`). Rust CI runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`. Run these locally before pushing.
+CI (`.github/workflows/ci.yml`) runs on every push/PR to `main`. It runs `pnpm --filter manhuaviewer-frontend build` (compile + ESLint) **and frontend tests** (`cd frontend && pnpm test`). Rust CI runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`. Run these locally before pushing. The rust job does **not** build the frontend — backend code must still compile with `frontend/build` absent (debug builds read embedded assets from disk at runtime, not compile time).
 
 ## Architecture
 
@@ -31,27 +32,35 @@ CI (`.github/workflows/ci.yml`) runs on every push/PR to `main`. It runs `pnpm -
 - **Database**: SQLite via rusqlite, file at `<data_dir>/manhuaviewer.db`. Default `data_dir` is `~/Library/Application Support/MangaViewer/data` on macOS (other platforms via `dirs::data_dir()`). Overridable via the `DATA_DIR` env var (use this for isolated test/dev runs). HTTP port overridable via `PORT` (default `5002`).
 - **Platforms**: macOS, Windows, Linux (Tauri 2.0; Linux build needs `libwebkit2gtk-4.1-dev` etc. — see `CONTRIBUTING.md`).
 - **Two archive types**: `folder` (directory read at request time, no pages in DB) vs compressed (`zip`/`cbz`/`rar`/`cbr`/`7z` — page list cached in DB, files extracted on demand via `tempfile::tempdir()`).
+- **Startup side effects** (`main.rs`): after DB init, `services::cleanup::cleanup_caches` prunes `extract/`, `thumbnails/`, and `page_thumbs/` subdirectories whose archive IDs no longer exist, and enforces the byte-budget LRU for covers, page thumbnails, and extract caches (`services/cache_budget.rs`). A scheduled auto-backup task also starts here (hourly check, off by default).
+- **LAN auth** (`routes/auth.rs`): a `from_fn` middleware over `/api` + `/opds`. Empty `server_token` setting = auth disabled (default single-machine behavior). When set, **every non-loopback request** (reads, writes, OPDS, page images) requires the token via `Authorization: Bearer <t>` or `?token=<t>`; loopback is always allowed so the desktop app can't lock itself out. Pure decision functions (`request_allowed`, `token_authorized`, `peer_is_loopback`) sit at the top of the file and are unit-tested directly.
+- **LAN response redaction** (`routes/mod.rs`): non-loopback JSON responses are passed through `strip_private_fields` (host paths, cover/thumbnail paths, root dirs, `server_token`/`server_bind` are removed); OPDS XML links get `?token=` appended so readers can follow them. Outbound URLs from the sync client and remote-cover fetch must pass `validate_outbound_url` (http(s) only, no loopback/link-local — SSRF guard).
 
 ## Key Conventions
 
-- All frontend HTTP calls go through `frontend/src/utils/api.js` — never `fetch` directly. This module resolves base URL (dev proxy vs Tauri prod `http://127.0.0.1:5002`), retries GETs up to 3×, and rewrites relative image URLs via `fixUrl()`.
+- All frontend HTTP calls go through `frontend/src/utils/api.js` — never `fetch` directly. This module resolves base URL (dev proxy vs Tauri prod `http://127.0.0.1:5002`), retries GETs up to 3×, rewrites relative image URLs via `fixUrl()`, and attaches the LAN `Authorization` header when a token is configured (don't add token handling in components).
+- **Client cache**: `api.js` keeps an in-memory GET cache (30s default TTL, 60s for `/settings` and `/tags`, max 200 entries) plus in-flight dedup. Writes call `_invalidate(pattern)`, which bumps a generation counter so responses from requests started before the invalidation are not written back. When adding a mutating API method, invalidate the affected prefixes; page-image endpoints (`/pages/{n}` and `/thumb`) are deliberately excluded and rely on browser caching.
 - API routes mount at `/api`, OPDS routes at `/opds` (see `src-tauri/src/routes/mod.rs`). These namespaces must not collide with each other or with static file serving.
 - Settings are key-value rows in the `settings` table; unified via the `useSettings` hook + `SettingsContext`. Server is the source of truth; `localStorage` is only an optimistic cache to prevent first-paint flicker.
 - Theme is the only purely client-side setting (`localStorage` → `data-theme` attribute on `<html>`).
 - Backend errors: use `routes::error_response(StatusCode, &str)` (in `routes/mod.rs`) which returns `{"error": "..."}` JSON — don't return `String`/`Html` directly from handlers.
 - Blocking I/O (archive extraction, thumbnail generation) **must** use `tokio::task::spawn_blocking` to avoid starving the tokio runtime.
+- **Testable pure functions**: backend logic that can be tested without a DB or filesystem (version comparison in `update.rs`, auth predicates in `auth.rs`, response parsing in `services/metadata.rs`) is factored into free functions at the top of the module with `#[cfg(test)]` tests below. Follow that split when adding similar logic.
+- **Code comments are written in Chinese** throughout both the Rust and JS sources — match the surrounding language when editing.
 - Search filtering is a server-side `LIKE` match against **title OR tag name** (space-separated terms are AND-ed, a `-term` prefix excludes); tag filters accept `namespace:name` syntax; categories are either static (join table) or dynamic (a `search` expression matched against title).
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `ci:`, `chore:`).
 
 ## Testing
 
-Frontend tests live in `frontend/src/__tests__/` and use React Testing Library via react-scripts (CRA's Jest runner). Every page test must wrap the component in the same providers used by `App.js`: `SettingsProvider`, `TagsProvider`, `ToastProvider`, and `MemoryRouter`. Tests mock the API with `jest.mock('../utils/api')` (no factory), so Jest **automocks** the real module — every method becomes a `jest.fn()` and each test sets return values in `beforeEach` via `api.xxx.mockResolvedValue(...)`. (There is intentionally **no** `__mocks__/api.js` — the old one was dead code and has been deleted.) Frontend `package.json` also has a `moduleNameMapper` for `react-router-dom` to work around CRA's bundling.
+Frontend tests live in `frontend/src/__tests__/` and use React Testing Library via react-scripts (CRA's Jest runner). Every page test must wrap the component in the same providers used by `App.js`: `SettingsProvider`, `TagsProvider`, `ToastProvider`, and `MemoryRouter`. Tests mock the API with `jest.mock('../utils/api')` (no factory), so Jest **automocks** the real module — every method becomes a `jest.fn()` and each test sets return values in `beforeEach` via `api.xxx.mockResolvedValue(...)`. (There is intentionally **no** `__mocks__/api.js` — the old one was dead code and has been deleted.) Frontend `package.json` also has a `moduleNameMapper` for `react-router-dom` to work around CRA's bundling — don't remove it.
+
+Backend tests are inline `#[cfg(test)]` modules. Prefer testing pure helpers; tests that need a DB should point `DATA_DIR` at a temp directory.
 
 ## Adding a new API route
 
 1. Add the handler in the appropriate `src-tauri/src/routes/<file>.rs` (use `error_response` for failures).
 2. Register it in `src-tauri/src/routes/mod.rs` via `Router::new().route(...)` (under `/api` unless it's OPDS).
-3. Add a client method in `frontend/src/utils/api.js`.
+3. Add a client method in `frontend/src/utils/api.js`; for mutating calls, invalidate the affected cache prefixes.
 
 ## Implementation workflow
 
@@ -66,7 +75,7 @@ Every completed change MUST be committed with `git commit` — never leave work 
 
 ## Releasing
 
-Versions live in three places and must be kept in sync: `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`. Use `./scripts/bump-version.sh <x.y.z>` to update all three at once. Then `git tag v<x.y.z>` and push — `.github/workflows/release.yml` builds macOS arm64 + Windows x64 installers and creates a **draft** GitHub Release (manually publish from the Releases page). Full flow: see `CONTRIBUTING.md`.
+Versions live in three places and must be kept in sync: `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`. Use `./scripts/bump-version.sh <x.y.z>` to update all three at once. Then regenerate the changelog with `pnpm changelog` (git-cliff; requires `git-cliff` on PATH, e.g. `brew install git-cliff`), commit `CHANGELOG.md`, tag `v<x.y.z>` and push — `.github/workflows/release.yml` builds macOS arm64 + Windows x64 installers and creates a **draft** GitHub Release whose body is generated by git-cliff (`--latest --strip header`, config in `cliff.toml`) (manually publish from the Releases page). Full flow: see `CONTRIBUTING.md`.
 
 `frontend/package.json` has its own separate version (`2.0.0`, `private`) that is intentionally **not** synced and not touched by `bump-version.sh` — don't "fix" the mismatch.
 
@@ -84,6 +93,7 @@ Versions live in three places and must be kept in sync: `package.json`, `src-tau
 
 ## Reference
 
-- `.github/copilot-instructions.md` — overlapping guidance (single-test commands, OPDS notes, backup/restore endpoints), kept in sync.
+- `.github/copilot-instructions.md` — thin Copilot entry point (commands + finishing checklist) that defers to **this file** as the canonical text; add new conventions here, not there.
 - `CONTRIBUTING.md` — environment setup, Linux deps, platform-specific build targets, release flow.
 - `README.md` — API endpoint table, keyboard shortcuts, project tree.
+- `CHANGELOG.md` / `cliff.toml` — git-cliff generated changelog; regenerate with `pnpm changelog`, never hand-edit.
