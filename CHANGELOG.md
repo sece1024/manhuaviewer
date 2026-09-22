@@ -8,9 +8,32 @@
 
 ## 未发布
 
+### 🚀 新特性
+
+- *(sync)* 同步收尾回传标签镜像（POST /api/sync/push，替换语义）([34cd474](https://github.com/sece1024/manhuaviewer/commit/34cd4749fb971ea3f887a2580da97475bb4b49a6))
+- *(library)* 卡片与列表显示漫画添加时间，并修正 DB 时间的 UTC 解析([0d1ab43](https://github.com/sece1024/manhuaviewer/commit/0d1ab43913d2c016643769116e2b70b047a62bbd))
+- *(library)* 侧栏新增日期分组（年 → 月）按添加时间过滤浏览([58d989b](https://github.com/sece1024/manhuaviewer/commit/58d989bc622b53ce79d873dbed42c4456d0ee66c))
+
+
+### 🐛 修复
+
+- *(security)* 增加 Host/Origin 主机形态校验，防 DNS 重绑定([e0dbf4d](https://github.com/sece1024/manhuaviewer/commit/e0dbf4d22832af42fda348d983d885c0913da762))
+- *(security)* 敏感设置仅回环可写，备份导入校验档案类型与扩展名([6cdce9f](https://github.com/sece1024/manhuaviewer/commit/6cdce9f9a0221c25aba442187a71d2c06c5fa165))
+- *(security)* 文件回传魔数校验、禁止跟随重定向并为同步下载加字节上限([040ba9d](https://github.com/sece1024/manhuaviewer/commit/040ba9df6fa0fb49fb302e7b7098612f35e20344))
+
+
 ### 📚 文档
 
 - 校正四份文档中与代码脱节的事实([e37bccb](https://github.com/sece1024/manhuaviewer/commit/e37bccb061cf71d8c8d643573c6159bde2e74e4e))
+- 收敛 agent 指南至 AGENTS.md 唯一正文([b22c277](https://github.com/sece1024/manhuaviewer/commit/b22c277dcf6431e36c1992d7bf3117e07962ea60))
+- 补充 DNS 重绑定防护与局域网设置限制说明([818fbc6](https://github.com/sece1024/manhuaviewer/commit/818fbc611472e5f4f835d536a159f9b820f31b3a))
+
+
+### ⚙️ 杂项
+
+- *(release)* 引入 git-cliff 自动生成 CHANGELOG 与 Release 正文([76fd782](https://github.com/sece1024/manhuaviewer/commit/76fd7821390d93a630f6f40429179eaa62d5a549))
+- *(scripts)* 一键发版脚本 release.sh（bump → changelog → commit → tag → push）([6d7eaf3](https://github.com/sece1024/manhuaviewer/commit/6d7eaf3583fdeb4894d2b73e9f48591a36ad9da5))
+- *(release)* 发版加固——tag 版本断言、release.sh --check 门禁、Dependabot([c301c1d](https://github.com/sece1024/manhuaviewer/commit/c301c1d4f828da769ab01afb8faf2caeba80838a))
 
 ## [3.5.3](https://github.com/sece1024/manhuaviewer/releases/tag/v3.5.3) - 2026-09-21
 
