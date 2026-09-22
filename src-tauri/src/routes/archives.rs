@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use super::{error_response, internal_error};
 
@@ -645,14 +646,33 @@ fn remote_cover_bytes(id: i64, url: &str, covers_dir: &std::path::Path) -> anyho
     std::fs::create_dir_all(covers_dir)?;
     let dest = covers_dir.join(format!("{}.img", id));
     if !dest.is_file() {
-        let status = std::process::Command::new("curl")
-            .args(["-fsSL", "--max-time", "25", "-o"])
+        // 不跟随重定向（去 -L）：URL 由用户输入，302 可把下载牵到回环/内网（SSRF）。
+        // -f 只挡 >=400，3xx 会"成功"存下重定向响应体——故用 -w 回传状态码判 2xx
+        //（body 已被 -o 分走，stdout 只剩状态码）。顺带限 20MB，防超大响应撑爆内存。
+        let output = std::process::Command::new("curl")
+            .args([
+                "-fsS",
+                "--max-time",
+                "25",
+                "--max-filesize",
+                "20971520",
+                "-o",
+            ])
             .arg(&dest)
+            .args(["-w", "%{http_code}"])
             .arg(url)
-            .status()?;
-        if !status.success() || !dest.is_file() {
+            .output()?;
+        let code = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let ok = output.status.success() && code.starts_with('2') && dest.is_file();
+        if !ok {
             let _ = std::fs::remove_file(&dest);
-            anyhow::bail!("failed to download remote cover");
+            if code.starts_with('3') {
+                anyhow::bail!("远程封面地址发生重定向（HTTP {code}），已拒绝跟随——请使用直链");
+            }
+            anyhow::bail!(
+                "failed to download remote cover (curl exit {:?}, HTTP {code})",
+                output.status.code()
+            );
         }
     }
     Ok(std::fs::read(&dest)?)
@@ -1256,7 +1276,24 @@ pub async fn download_archive_file(
         // 压缩包：直接流式回传原文件（不解包、不重打包），源文件 mtime 随响应头带回
         let source_mtime = archive_mtime_secs(&archive_path);
         match tokio::fs::File::open(&archive_path).await {
-            Ok(file) => {
+            Ok(mut file) => {
+                // 魔数校验：path 可能来自被篡改的恢复备份（旧版不校验即可入库），
+                // 回传前确认文件真是对应归档格式，否则任意磁盘文件都能被当漫画拉走；
+                // 通过后回绕到文件开头再流式回传。
+                let mut header = [0u8; 8];
+                let n = match file.read(&mut header).await {
+                    Ok(n) => n,
+                    Err(e) => return internal_error(e),
+                };
+                if !crate::services::archive::magic_matches(&archive_type, &header[..n]) {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "文件内容与档案类型不符，已拒绝回传",
+                    );
+                }
+                if let Err(e) = file.seek(std::io::SeekFrom::Start(0)).await {
+                    return internal_error(e);
+                }
                 let base = std::path::Path::new(&archive_path)
                     .file_name()
                     .map(|s| s.to_string_lossy().into_owned())

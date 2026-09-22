@@ -220,18 +220,32 @@ fn authorized(mut req: ureq::Request, token: &str) -> ureq::Request {
     req
 }
 
+/// 同步客户端专用 Agent：禁用重定向跟随——被劫持/恶意的远端可 302 把同步流量
+/// 牵到回环或内网（SSRF）。注意 3xx 在 redirects(0) 下由 ureq 原样返回
+/// （其 Err 只覆盖 >=400），因此两处调用都必须显式检查 2xx，
+/// 否则会把重定向响应体当数据/清单落地。
+fn sync_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new().redirects(0).build()
+}
+
 /// manifest 是远端可控数据：读取设 32MB 上限，防止恶意/异常远端撑爆内存。
 const MANIFEST_MAX_BYTES: usize = 32 * 1024 * 1024;
 
 fn fetch_manifest(url: &str, token: &str) -> anyhow::Result<serde_json::Value> {
     let req = authorized(
-        ureq::get(&format!("{}/api/sync/manifest", base_url(url))),
+        sync_agent().get(&format!("{}/api/sync/manifest", base_url(url))),
         token,
     )
     .timeout(std::time::Duration::from_secs(60));
     let resp = req
         .call()
         .map_err(|e| anyhow::anyhow!("拉取远端清单失败: {e}"))?;
+    if !(200..300).contains(&resp.status()) {
+        anyhow::bail!(
+            "拉取远端清单失败: 远端返回 HTTP {}（不跟随重定向，请检查同步地址）",
+            resp.status()
+        );
+    }
     let reader = resp.into_reader();
     let mut body = String::new();
     reader
@@ -247,22 +261,42 @@ fn fetch_manifest(url: &str, token: &str) -> anyhow::Result<serde_json::Value> {
     Ok(serde_json::from_str(&body)?)
 }
 
+/// 下载字节上限（纯计算便于单测）：期望大小已知时留 10%（至少 4MiB）容差——
+/// 清单生成与实际下载之间远端文件可能长大；未知时（文件夹档案恒 0，服务端就地
+/// 打包、大小事先算不出）退到 64GiB 全局硬顶。恶意/异常远端谎报小尺寸或无限
+/// 灌流时，写到上限即中止，防同步目录被写满。
+fn download_byte_cap(expected_size: i64) -> u64 {
+    if expected_size > 0 {
+        expected_size as u64 + (expected_size as u64 / 10).max(4 * 1024 * 1024)
+    } else {
+        64 * 1024 * 1024 * 1024
+    }
+}
+
 fn download_archive(
     url: &str,
     token: &str,
     id: i64,
     local_path: &Path,
     fallback_mtime: i64,
+    expected_size: i64,
     cancel: &AtomicBool,
 ) -> anyhow::Result<()> {
     let req = authorized(
-        ureq::post(&format!("{}/api/archives/{}/file", base_url(url), id)),
+        sync_agent().post(&format!("{}/api/archives/{}/file", base_url(url), id)),
         token,
     )
     .timeout(std::time::Duration::from_secs(30 * 60));
     let resp = req
         .call()
         .map_err(|e| anyhow::anyhow!("下载档案 {id} 失败: {e}"))?;
+    // redirects(0) 下 3xx 会以 Ok 返回：必须在此挡住，否则重定向响应体被当档案落地
+    if !(200..300).contains(&resp.status()) {
+        anyhow::bail!(
+            "下载档案 {id} 失败: 远端返回 HTTP {}（不跟随重定向，请检查同步地址）",
+            resp.status()
+        );
+    }
     // 远端原始 mtime（秒）：优先用响应头；旧版远端没有该头时回退到清单里的 file_mtime
     let source_mtime = resp
         .header("X-Source-Mtime")
@@ -274,6 +308,8 @@ fn download_archive(
     // 原子写：先写 .part 再 rename，避免半截文件被当成“已同步”。
     // 分块拷贝，每块后检查取消——取消立即中断并删除 .part，不留残留。
     let part = local_path.with_extension("part");
+    let max_bytes = download_byte_cap(expected_size);
+    let mut written: u64 = 0;
     let write_result: anyhow::Result<()> = (|| {
         let mut out = std::fs::File::create(&part)?;
         let mut buf = vec![0u8; 256 * 1024];
@@ -286,6 +322,11 @@ fn download_archive(
                 .map_err(|e| anyhow::anyhow!("读取下载流失败: {e}"))?;
             if n == 0 {
                 break;
+            }
+            written += n as u64;
+            if written > max_bytes {
+                let _ = std::fs::remove_file(&part);
+                anyhow::bail!("下载超出大小上限（{written} > {max_bytes} 字节），已中止");
             }
             out.write_all(&buf[..n])?;
         }
@@ -530,6 +571,7 @@ fn run_sync_job(
                     item.archive.id,
                     &local_path,
                     item.archive.file_mtime,
+                    item.archive.file_size,
                     &job.cancel,
                 )?;
                 register_local(&db, &item.archive, &local_path)
@@ -749,6 +791,15 @@ mod tests {
     }
 
     /// 计划分类：新增 / 更新（同名不同大小）/ 已最新（同名同大小）。
+    /// 下载字节上限：期望大小已知 → +10%（至少 4MiB）容差；未知/非法 → 64GiB 硬顶。
+    #[test]
+    fn download_cap_slack_and_hard_ceiling() {
+        assert_eq!(download_byte_cap(100 * 1024 * 1024), 110 * 1024 * 1024);
+        assert_eq!(download_byte_cap(1000), 1000 + 4 * 1024 * 1024);
+        assert_eq!(download_byte_cap(0), 64 * 1024 * 1024 * 1024);
+        assert_eq!(download_byte_cap(-5), 64 * 1024 * 1024 * 1024);
+    }
+
     #[test]
     fn build_plan_classifies_new_changed_up_to_date() {
         let dir = tempfile::tempdir().unwrap();

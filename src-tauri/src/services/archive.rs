@@ -116,14 +116,30 @@ fn write_extract_marker(dir: &Path, sig: (i64, u64)) -> Result<()> {
 /// 页面名是否安全（可安全 join 进缓存目录）。
 /// 拒绝绝对路径、`..` 逃逸与反斜杠：unrar/7z 同时把 '/' 和 '\' 当分隔符，
 /// Unix 上 "a\..\b.jpg" 在 Path::components 里只是普通文件名，却能被外部工具解出逃逸路径。
+/// 另拒绝前导 '-'（unrar/7z 把 `-o+`、`-y` 之类当开关参数而非文件名——参数注入）
+/// 与前导 '/'（Windows 上 7z 同样认 '/' 开关；Unix 上本就属绝对路径，行为对齐）。
 fn is_safe_page_name(name: &str) -> bool {
-    if name.is_empty() || name.contains('\\') {
+    if name.is_empty() || name.contains('\\') || name.starts_with('-') || name.starts_with('/') {
         return false;
     }
     let p = Path::new(name);
     !p.is_absolute()
         && p.components()
             .all(|c| !matches!(c, std::path::Component::ParentDir))
+}
+
+/// 文件头魔数是否与档案类型相符：`/archives/:id/file` 按 DB 里的 path 原样
+/// 回传文件字节，而 path 可能来自被篡改的恢复备份——回传前确认它真是对应
+/// 归档格式，否则任意磁盘文件（私钥、数据库…）都能被当漫画拉走。
+/// 放行 MZ（DOS/PE stub）：zip/rar/7z 均有 Windows 自解压（SFX）变体，内容仍是归档。
+pub fn magic_matches(archive_type: &str, header: &[u8]) -> bool {
+    let sfx = header.starts_with(b"MZ");
+    match archive_type {
+        "zip" | "cbz" => header.starts_with(b"PK") || sfx,
+        "rar" | "cbr" => header.starts_with(b"Rar!") || sfx,
+        "7z" => header.starts_with(b"7z\xBC\xAF\x27\x1C") || sfx,
+        _ => false, // folder 走就地重打包，不读源文件头
+    }
 }
 
 /// 带上限地读取解压产物：超过 MAX_PAGE_BYTES 直接拒绝，避免整页超大文件撑爆内存。
@@ -786,6 +802,29 @@ mod tests {
         assert!(!is_safe_page_name("folder\\..\\evil.jpg"));
         assert!(!is_safe_page_name("a\\b.jpg"));
         assert!(!is_safe_page_name(""));
+        // 前导 '-'/'/'：unrar/7z 解析成开关参数（参数注入），拒绝；
+        // 中段的 '-' 与子目录内的 '-x.jpg' 不构成开关，正常放行
+        assert!(!is_safe_page_name("-o+"));
+        assert!(!is_safe_page_name("-y.jpg"));
+        assert!(!is_safe_page_name("/abs.jpg"));
+        assert!(is_safe_page_name("folder/-x.jpg"));
+        assert!(is_safe_page_name("a-b.jpg"));
+    }
+
+    /// /file 回传前的魔数校验：类型与文件头必须相符（含 SFX 的 MZ 放行）。
+    #[test]
+    fn magic_matches_archive_type() {
+        assert!(magic_matches("zip", b"PK\x03\x04rest"));
+        assert!(magic_matches("cbz", b"PK\x05\x06")); // 空 zip
+        assert!(magic_matches("rar", b"Rar!\x1a\x07\x00")); // RAR4
+        assert!(magic_matches("cbr", b"Rar!\x1a\x07\x01\x00")); // RAR5
+        assert!(magic_matches("7z", b"7z\xBC\xAF\x27\x1C"));
+        assert!(magic_matches("zip", b"MZ\x90\x00")); // SFX 自解压
+        assert!(!magic_matches("zip", b"SQLite format 3\x00"));
+        assert!(!magic_matches("cbz", b"-----BEGIN RSA-----"));
+        assert!(!magic_matches("rar", b"")); // 空文件
+        assert!(!magic_matches("7z", b"PK\x03\x04")); // 类型不符
+        assert!(!magic_matches("folder", b"PK\x03\x04")); // folder 不走该检查
     }
 
     /// zip 分块流式：内容与 extract_page 完全一致，且确实按 64KB 分块而非一次读完。
