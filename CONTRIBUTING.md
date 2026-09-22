@@ -109,7 +109,19 @@ pnpm tauri build
 
 ### 触发方式
 
-推送一个 `v` 开头的 Git 标签即可触发：
+推送一个 `v` 开头的 Git 标签即可触发。**推荐一键发版：**
+
+```bash
+# 一条命令完成：bump 三处版本号 → pnpm changelog → commit → tag → push
+./scripts/release.sh 3.5.4
+#   -y        免交互确认
+#   --no-push 只做到本地 commit + tag，不推送（稍后手动 git push origin main v3.5.4）
+# 内置防呆：必须在 main、工作区干净（src-tauri/gen/schemas/ 固有改动豁免）、
+#           git-cliff 已安装、目标 tag 不存在、版本号与当前不同
+# 脚本只 stage 版本三文件 + CHANGELOG.md，不会用 git add -A 卷入游离改动
+```
+
+手动分步（等价于脚本内部步骤）：
 
 ```bash
 # 1. 同步三处版本号（package.json / src-tauri/tauri.conf.json / src-tauri/Cargo.toml）
@@ -121,10 +133,10 @@ pnpm tauri build
 pnpm changelog
 
 # 3. 提交并打标签
-git add -A
+git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml CHANGELOG.md
 git commit -m "chore: release v3.5.4"
 git tag v3.5.4
-git push origin main --tags
+git push origin main v3.5.4
 ```
 
 ### 构建矩阵
