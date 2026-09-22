@@ -482,6 +482,10 @@ pub fn create_router(state: AppState) -> Router {
         // OPDS XML 站内链接透传口令（口令模式下阅读器才能继续翻页/取图）
         .layer(opds_layer)
         .fallback(serve_frontend)
+        // 最外层：DNS 重绑定防护——Host/Origin 主机形态校验，覆盖上面全部路由与
+        // 静态兜底（axum 的 layer 会同时包住 path_router、fallback 与 catch-all）。
+        // 攻击域名连 SPA 都拿不到，更无法借"回环放行"读写本地 API。
+        .layer(middleware::from_fn(auth::security_guard))
         .with_state(Arc::new(state))
 }
 
@@ -521,15 +525,20 @@ mod tests {
     }
 
     async fn get(port: u16, path: &str) -> (u16, String) {
+        get_with(port, path, "127.0.0.1", None).await
+    }
+
+    /// 裸 TCP GET，可自定义 Host/Origin 头（DNS 重绑定防护用例）。
+    async fn get_with(port: u16, path: &str, host: &str, origin: Option<&str>) -> (u16, String) {
         let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
             .unwrap();
-        s.write_all(
-            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-                .as_bytes(),
-        )
-        .await
-        .unwrap();
+        let mut req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\n");
+        if let Some(o) = origin {
+            req.push_str(&format!("Origin: {o}\r\n"));
+        }
+        req.push_str("Connection: close\r\n\r\n");
+        s.write_all(req.as_bytes()).await.unwrap();
         let mut buf = Vec::new();
         s.read_to_end(&mut buf).await.unwrap();
         let raw = String::from_utf8_lossy(&buf).to_string();
@@ -606,6 +615,40 @@ mod tests {
             let (status, _) = get(port, path).await;
             assert_eq!(status, 200, "{path} 应可访问 OPDS 根目录");
         }
+    }
+
+    /// DNS 重绑定回归：即使对端是回环（口令规则一律放行的那类），
+    /// Host/Origin 为公网域名的请求也必须 403；合法 Host 不受影响。
+    #[tokio::test]
+    async fn rebinding_host_and_origin_rejected() {
+        let (port, _dir) = spawn_server().await;
+
+        // Host 是重绑定域名 → 403（攻击页面把 evil.com 指到回环后的形态）
+        let (status, body) = get_with(port, "/api/settings", "evil.example.com:5002", None).await;
+        assert_eq!(status, 403, "重绑定域名 Host 应被拒");
+        assert!(body.contains("\"error\""), "403 应为 JSON 错误体");
+
+        // Host 正常但 Origin 是攻击者页面（跨站 POST 的形态）→ 403
+        let (status, _) = get_with(
+            port,
+            "/api/settings",
+            "127.0.0.1",
+            Some("http://evil.example.com"),
+        )
+        .await;
+        assert_eq!(status, 403, "重绑定 Origin 应被拒");
+
+        // 合法形态照常放行：IP Host、桌面端 Origin
+        let (status, _) = get_with(port, "/api/settings", "127.0.0.1", None).await;
+        assert_eq!(status, 200, "回环 IP Host 应放行");
+        let (status, _) = get_with(
+            port,
+            "/api/settings",
+            "127.0.0.1",
+            Some("tauri://localhost"),
+        )
+        .await;
+        assert_eq!(status, 200, "桌面端 tauri Origin 应放行");
     }
 
     /// 出站白名单必须拒绝 IPv4 映射的回环/链路本地（::ffff:127.0.0.1 等），

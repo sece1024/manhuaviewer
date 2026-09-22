@@ -1,13 +1,16 @@
-//! 局域网安全：可选口令鉴权（可配置）。
+//! 局域网安全：可选口令鉴权（可配置）+ DNS 重绑定防护。
 //! 纯判定逻辑放最上面方便单测；`lan_guard_core` 供 `from_fn` 包裹后挂到 /api。
 //! 语义（不影响单机默认体验）：server_token 为空 = 关闭鉴权（保持旧行为）；
 //! 非空时，局域网（非回环）的**一切**请求——读、写、OPDS、逐页图片——都需校验口令
 //! （本机回环始终放行，防锁死桌面端）。详见 `request_allowed` 上方注释与单测。
+//! 另有最外层守卫 `security_guard`（Host/Origin 主机形态校验）：攻击者把 evil.com
+//! 先指到自己再改指回环（DNS 重绑定）后，浏览器会带 `Host: evil.com:5002` 访问本服务，
+//! 而回环对端在上面的口令规则里始终放行——没有该守卫时本地 API 等于全开。
 
 use std::sync::Arc;
 
 use axum::extract::{ConnectInfo, Request};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -82,6 +85,89 @@ pub fn request_allowed(
     token_authorized(authz, query_token, expected_token)
 }
 
+// ── DNS 重绑定防护：Host/Origin 主机形态校验（纯判定，与口令守卫同文件单测）──
+
+/// 从 Host/authority 剥掉端口与 IPv6 方括号，取出主机名：
+/// `"nas:5002" → "nas"`、`"[::1]:5002" → "::1"`、`"127.0.0.1 → "127.0.0.1"`。
+fn hostname_of(host: &str) -> &str {
+    if let Some(rest) = host.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    match host.rsplit_once(':') {
+        Some((h, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => h,
+        _ => host,
+    }
+}
+
+/// 主机名（可含端口）是否为"本机/局域网"形态：字面 IP、`localhost`
+/// （RFC 6761 保证 `*.localhost` 也恒解析到本机，覆盖 Windows WebView 的
+/// `tauri.localhost`）、mDNS `*.local` 或无点的单标签短名（nas、manga）。
+/// 其余带点域名一律拒绝：公网 DNS 域名都能被攻击者先指到自己页面、再改指
+/// 回环（DNS 重绑定）；`127.0.0.1.nip.io` 这类"回环到域名"的花样也因
+/// 带点且非 .local/.localhost 被挡下。访问方式因此限定为 IP/短名（见 README）。
+fn is_localish_hostname(authority: &str) -> bool {
+    let name = hostname_of(authority);
+    if name.is_empty() {
+        return false;
+    }
+    // 字面 IP（含裸 IPv6）：浏览器的 Host 来自所连 URL，攻击者无法让
+    // 浏览器对本服务伪造出"公网域名"以外的字面量；裸 IPv6 也可能被 rsplit
+    // 截成 "::"，仍是 IP 字面量而非域名，同样安全。
+    if name.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    if name.contains(':') {
+        return false; // 残缺/畸形的冒号形态（如 "evil:com"）不猜、直接拒
+    }
+    let lower = name.to_ascii_lowercase();
+    lower == "localhost"
+        || lower.ends_with(".localhost")
+        || lower.ends_with(".local")
+        || !lower.contains('.')
+}
+
+/// Host 头是否可接受。缺失时放行：浏览器发起的 HTTP/1.1 请求必带 Host，
+/// 重绑定攻击换不来"无 Host"的请求；不带 Host 的只有 curl/脚本等非浏览器
+/// 客户端，它们照常走口令鉴权，不构成重绑定向量（同时兼容 HTTP/2 的
+/// `:authority` 未被映射为 Host 的情形）。
+pub fn host_allowed(host: Option<&str>) -> bool {
+    match host {
+        None => true,
+        Some(h) => is_localish_hostname(h),
+    }
+}
+
+/// Origin 头是否可接受：无 Origin（curl、OPDS 阅读器、页面导航）放行；有则
+/// 解析 `scheme://host[:port]` 并按同一主机形态规则判定。`null`（沙盒 iframe
+/// 等不透明来源）与非 http(s)/tauri 的 scheme（chrome-extension:// 等）拒绝。
+pub fn origin_allowed(origin: Option<&str>) -> bool {
+    let Some(o) = origin.map(str::trim).filter(|s| !s.is_empty()) else {
+        return true;
+    };
+    if o == "null" {
+        return false;
+    }
+    let Some((scheme, rest)) = o.split_once("://") else {
+        return false;
+    };
+    if !matches!(scheme, "http" | "https" | "tauri") {
+        return false;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    is_localish_hostname(authority)
+}
+
+/// 整请求判定（守卫与单测共用）：Host 与 Origin（若存在）都必须是本机/局域网形态。
+pub fn request_host_origin_ok(headers: &HeaderMap) -> bool {
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok());
+    let origin = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok());
+    host_allowed(host) && origin_allowed(origin)
+}
+
 /// 读取当前局域网口令（供守卫与 OPDS 链接透传共用）。rusqlite 是同步 I/O，
 /// 必须 offload 到阻塞线程，否则每个请求都会在 Tokio worker 上阻塞式取池连接。
 pub(crate) async fn current_token(db: Arc<Database>) -> String {
@@ -110,6 +196,19 @@ pub async fn lan_guard_core(db: Arc<Database>, req: Request, next: Next) -> Resp
             Json(serde_json::json!({ "error": "需要局域网访问口令 (server_token)" })),
         )
             .into_response()
+    }
+}
+
+/// DNS 重绑定守卫（挂最外层，覆盖 /api、/opds 与静态兜底）：主机形态不符一律 403。
+/// 没有它，重绑定页面作为"回环本机"在口令规则下始终放行，可直接读写本地 API。
+pub async fn security_guard(req: Request, next: Next) -> Response {
+    if request_host_origin_ok(req.headers()) {
+        next.run(req).await
+    } else {
+        super::error_response(
+            StatusCode::FORBIDDEN,
+            "拒绝以该 Host/Origin 访问（防 DNS 重绑定），请改用 IP/localhost/局域网短名",
+        )
     }
 }
 
@@ -198,5 +297,69 @@ mod tests {
             .body(axum::body::Body::empty())
             .unwrap();
         assert!(peer_is_loopback(&req2));
+    }
+
+    #[test]
+    fn host_guard_allows_local_forms_rejects_rebind_domains() {
+        // 本机/局域网形态放行：字面 IP（含端口/IPv6 括号）、localhost 族、mDNS、单标签短名
+        assert!(host_allowed(Some("127.0.0.1:5002")));
+        assert!(host_allowed(Some("127.0.0.1")));
+        assert!(host_allowed(Some("192.168.1.5:5002")));
+        assert!(host_allowed(Some("[::1]:5002")));
+        assert!(host_allowed(Some("[fd00::1]")));
+        assert!(host_allowed(Some("localhost:3000")));
+        assert!(host_allowed(Some("LocalHost")));
+        assert!(host_allowed(Some("tauri.localhost:5002")));
+        assert!(host_allowed(Some("nas:5002"))); // 无点局域网短名
+        assert!(host_allowed(Some("manga.local:5002"))); // mDNS
+        assert!(host_allowed(None)); // 无 Host：非浏览器客户端，不构成重绑定
+
+        // 重绑定域名与残缺形态拒绝
+        assert!(!host_allowed(Some("evil.com:5002")));
+        assert!(!host_allowed(Some("evil.com")));
+        assert!(!host_allowed(Some("127.0.0.1.nip.io:5002"))); // "回环到域名"花样
+        assert!(!host_allowed(Some("localhost.evil.com")));
+        assert!(!host_allowed(Some("evil:com")));
+        assert!(!host_allowed(Some("")));
+    }
+
+    #[test]
+    fn origin_guard_allows_local_tauri_rejects_rebind() {
+        // 无 Origin（curl/OPDS/导航）与本机/局域网来源放行
+        assert!(origin_allowed(None));
+        assert!(origin_allowed(Some("")));
+        assert!(origin_allowed(Some("http://192.168.1.5:5002")));
+        assert!(origin_allowed(Some("http://127.0.0.1:5002")));
+        assert!(origin_allowed(Some("http://localhost:3000")));
+        assert!(origin_allowed(Some("tauri://localhost"))); // macOS/Linux 桌面端
+        assert!(origin_allowed(Some("http://tauri.localhost"))); // Windows WebView
+        assert!(origin_allowed(Some("http://nas:5002")));
+
+        // 重绑定来源、不透明来源与外来 scheme 拒绝
+        assert!(!origin_allowed(Some("http://evil.com:5002")));
+        assert!(!origin_allowed(Some("https://attacker.example")));
+        assert!(!origin_allowed(Some("null")));
+        assert!(!origin_allowed(Some("file://")));
+        assert!(!origin_allowed(Some("chrome-extension://abcdefghijklmnop")));
+        assert!(!origin_allowed(Some("evil.com"))); // 无 scheme
+    }
+
+    #[test]
+    fn request_host_origin_ok_combines_both_headers() {
+        let ok = |host: &str, origin: Option<&str>| {
+            let mut b = axum::http::Request::builder().header("host", host);
+            if let Some(o) = origin {
+                b = b.header("origin", o);
+            }
+            let req = b.body(()).unwrap();
+            request_host_origin_ok(req.headers())
+        };
+        assert!(ok("127.0.0.1:5002", Some("tauri://localhost")));
+        assert!(ok("192.168.1.5:5002", None));
+        assert!(!ok("evil.com:5002", None), "重绑定 Host 单独就该拒");
+        assert!(
+            !ok("127.0.0.1:5002", Some("http://evil.com")),
+            "恶意 Origin 单独就该拒"
+        );
     }
 }
