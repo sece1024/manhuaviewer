@@ -24,8 +24,11 @@ export default function Reader() {
   const [chapters, setChapters] = useState(null); // 组内章节列表（仅 group 主档案）
   const [currentIndex, setCurrentIndex] = useState(0);
   const currentIndexRef = useRef(0);
-  const [doublePage, setDoublePage] = useState(false);
-  const [longImage, setLongImage] = useState(false);
+  // 双页/长图初始态直接从（localStorage 预置的）服务端设置读取，与下方恢复
+  // effect 的互斥/窄窗规则一致：避免"单页先显示、设置异步到达后切成双页"
+  // 的启动闪烁（每次应用启动后打开第一本漫画都会发生）
+  const [doublePage, setDoublePage] = useState(() => settings.reader_double === '1');
+  const [longImage, setLongImage] = useState(() => settings.reader_long === '1' && settings.reader_double !== '1');
   const [scale, setScale] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [fitMode, setFitMode] = useState(() => settings.reader_fit || 'height');
@@ -963,7 +966,23 @@ export default function Reader() {
             onImageLoad={handleImageLoad}
           />
         ) : doublePage && (doubleLeft || doubleRight) && !wideSpread ? (
-          <div style={{ display: 'flex', gap: 4, height: '100%', alignItems: 'center' }}>
+          /*
+           * 双页布局：左右两个等宽侧栏盒（flex: 1 1 0）固定占位，图片在盒内
+           * contain 适配。侧栏盒尺寸不依赖图片解码状态，解码/换页期间整跨页
+           * 不再发生位移或重心跳动（此前 <img> 直接作为行内 flex 子项，解码前
+           * 为 0 尺寸，行随解码生长再被容器居中，Windows 上解码慢时每次翻页
+           * 都表现为"阅读区反复跳"）。
+           *
+           * 图片不透明度交给 CSS 类：就绪（.ready，opacity 1 且无过渡 = 原子呈现）；
+           * 加载中 opacity 0 藏在 spinner 之后。仅"冷加载"（就绪标志从 false 变
+           * true）触发 0.2s 淡入；翻到已就绪跨页时 opacity 从未变过，不会触发
+           * 过渡，也绝不经历空白帧。
+           *
+           * decoding 跟随就绪态：就绪跨页用 sync 解码，<img> 挂载的同一帧完成
+           * 解码并绘制，杜绝"先露背景、图片后弹出"的闪烁帧；真正冷加载时用
+           * async，主线程不被阻塞，onLoad 后再淡入。
+           */
+          <div className="reader-spread">
             {/* 加载占位：与单页模式一致，双页空白期不再直接暴露背景色 */}
             {!doubleLoaded && !doubleFailed && (
               <div className="reader-page-loading">
@@ -975,29 +994,38 @@ export default function Reader() {
                 <div className="reader-page-error">图片加载失败</div>
               </div>
             )}
-            {[doubleLeft, doubleRight].map((p) =>
-              p ? (
-                <img
-                  key={p.id}
-                  src={p.url}
-                  alt={p.filename}
-                  className="reader-image"
-                  decoding="async"
-                  draggable={false}
-                  style={{ ...imgStyle, opacity: doubleLoaded && !doubleFailed ? 1 : 0, transition: 'opacity 0.25s ease' }}
-                  onLoad={(e) => {
-                    const el = e.currentTarget;
-                    if (el.naturalWidth > 0) pageDimsRef.current[p.id] = { w: el.naturalWidth, h: el.naturalHeight };
-                    loadedPageIdsRef.current.add(p.id);
-                    setDoubleLoaded(true);
-                  }}
-                  onError={() => { setDoubleLoaded(true); setDoubleFailed(true); }}
-                />
-              ) : (
-                // 末页缺一张时保留双页布局（空位占位），避免双页↔单页布局来回切换的闪烁
-                <div key="empty-side" aria-hidden="true" style={{ flex: 1, height: '100%' }} />
-              )
-            )}
+            {[doubleLeft, doubleRight].map((p, i) => (
+              <div
+                key={p ? p.id : `empty-${i}`}
+                className="reader-spread-side"
+                aria-hidden={p ? undefined : 'true'}
+              >
+                {p ? (
+                  <img
+                    src={p.url}
+                    alt={p.filename}
+                    className={
+                      doubleLoaded && !doubleFailed
+                        ? 'reader-image reader-spread-img ready'
+                        : 'reader-image reader-spread-img'
+                    }
+                    decoding={doubleLoaded && !doubleFailed ? 'sync' : 'async'}
+                    draggable={false}
+                    style={{ ...imgStyle, transition: 'opacity 0.2s ease' }}
+                    onLoad={(e) => {
+                      const el = e.currentTarget;
+                      if (el.naturalWidth > 0) pageDimsRef.current[p.id] = { w: el.naturalWidth, h: el.naturalHeight };
+                      loadedPageIdsRef.current.add(p.id);
+                      setDoubleLoaded(true);
+                    }}
+                    onError={() => { setDoubleLoaded(true); setDoubleFailed(true); }}
+                  />
+                ) : (
+                  // 末页缺一张时保留双页布局（空位侧栏盒），避免双页↔单页布局来回切换的闪烁
+                  null
+                )}
+              </div>
+            ))}
           </div>
         ) : (
           <div className="reader-page-wrapper">
@@ -1015,7 +1043,8 @@ export default function Reader() {
               src={pages[currentIndex]?.url}
               alt={pages[currentIndex]?.filename}
               className="reader-image"
-              decoding="async"
+              // 就绪页同步解码：挂载同帧绘制，避免"先露背景、图片后弹出"的闪烁帧
+              decoding={imageLoaded && !imageFailed ? 'sync' : 'async'}
               style={{ ...imgStyle, opacity: imageLoaded && !imageFailed ? 1 : 0, transition: 'opacity 0.2s ease' }}
               draggable={false}
               onLoad={(e) => {

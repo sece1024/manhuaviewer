@@ -4,9 +4,14 @@ import api, { localStorageGet, localStorageSet } from '../utils/api';
 const SettingsContext = createContext(null);
 
 // localStorage fallback 仅用于首次加载时的 optimistic 初始化
+// （阅读器双页/长图/过宽降级也预置，避免应用启动后首次打开漫画时
+//  "单页先显示、服务端设置到达后切成双页"的布局闪烁）
 const LS_FALLBACKS = {
   reader_fit: 'readerFit',
   page_direction: 'pageDirection',
+  reader_double: 'readerDouble',
+  reader_long: 'readerLong',
+  reader_auto_single: 'readerAutoSingle',
   view_mode: 'viewMode',
   card_density: 'cardDensity',
   type_filter: 'typeFilter',

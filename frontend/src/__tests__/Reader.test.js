@@ -76,6 +76,35 @@ describe('Reader 双页模式', () => {
     expect(container.querySelector('.reader-page-wrapper')).toBeNull(); // 不是单页布局
   });
 
+  test('双页跨页两张图各占一个固定侧栏盒：就绪后 .ready（不透明度 1、无空白帧）原子呈现', async () => {
+    const { container } = renderReader();
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: /页面阅读区/ })).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('启用双页模式'));
+    });
+
+    // 加载完成前：两张图分别位于独立的等宽侧栏盒内（跨页布局不随解码尺寸跳动），
+    // 且不透明度为 0（藏在加载占位之后，不露背景）
+    const spread = container.querySelector('.reader-spread');
+    expect(spread).not.toBeNull();
+    expect(spread.querySelectorAll('.reader-spread-side').length).toBe(2);
+    const imgs = spread.querySelectorAll('.reader-spread-side img.reader-spread-img');
+    expect(imgs.length).toBe(2);
+    for (const img of imgs) {
+      expect(img.closest('.reader-spread-side')).not.toBeNull();
+      expect(img.classList.contains('ready')).toBe(false);
+    }
+
+    // 两张图加载完成 → 跨页就绪：两张图同时带 .ready 原子呈现（无淡入过渡/空白帧）
+    await act(async () => {
+      fireEvent.load(imgs[0]);
+      fireEvent.load(imgs[1]);
+    });
+    expect(spread.querySelectorAll('.reader-spread-img.ready').length).toBe(2);
+  });
+
   test('双页模式翻页仍保持双页布局，步进 2 页', async () => {
     const { container } = renderReader();
     await waitFor(() => {
@@ -104,10 +133,11 @@ describe('Reader 双页模式', () => {
     pressKey('End'); // 跳到最后一页（index 5），RTL 下仅右页存在
 
     const lone = screen.getByAltText('page-6.jpg');
-    const row = lone.parentElement;
-    // 双页 flex 行：1 张图 + 1 个末页空位占位（aria-hidden），不存在第二张图
-    expect(row.querySelectorAll('img').length).toBe(1);
-    expect(row.querySelector('div[aria-hidden="true"]')).not.toBeNull();
+    const spread = lone.closest('.reader-spread');
+    // 双页布局：两个等宽侧栏盒，末页缺一张时空位侧栏盒占位（aria-hidden）
+    expect(spread.querySelectorAll('.reader-spread-side').length).toBe(2);
+    expect(spread.querySelectorAll('img').length).toBe(1);
+    expect(container.querySelector('.reader-spread-side[aria-hidden="true"]')).not.toBeNull();
     expect(container.querySelector('.reader-page-wrapper')).toBeNull(); // 未回退到单页
   });
 

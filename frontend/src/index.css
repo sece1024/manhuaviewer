@@ -1070,6 +1070,34 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   pointer-events: none;
 }
 
+/* 双页跨页布局：左右等宽侧栏盒固定占位，尺寸不随图片解码状态跳动——
+   此前 <img> 直接作为行内 flex 子项，解码前为 0 尺寸、行随解码生长再被整体
+   居中，Windows 上解码慢时每次翻页都出现整行位移/重心跳动与空白闪烁帧 */
+.reader-spread {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  gap: 4px;
+}
+.reader-spread-side {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+/* 就绪（.ready）才有不透明度；过渡只发生在"冷加载"（opacity 0 → 1）时，
+   翻到已就绪跨页 opacity 从未变化、不触发过渡，配合 sync 解码原子绘制 */
+.reader-spread-img {
+  opacity: 0;
+}
+.reader-spread-img.ready {
+  opacity: 1;
+}
+
 .reader-page-wrapper {
   position: relative;
   display: flex;
