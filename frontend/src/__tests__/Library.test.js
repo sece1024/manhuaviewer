@@ -57,6 +57,29 @@ describe('Library 页面', () => {
     expect(api.getArchives).toHaveBeenCalled();
   });
 
+  test('卡片元信息显示添加时间（created_at 按本地时区展示）', async () => {
+    api.getArchives.mockResolvedValue([
+      { id: 5, title: '带时间的漫画', archive_type: 'cbz', page_count: 10, cover_url: '/api/archives/5/cover', tags: [], created_at: '2026-04-30 12:00:00' },
+    ]);
+    renderLibrary();
+    await waitFor(() => {
+      expect(screen.getByText('带时间的漫画')).toBeInTheDocument();
+    });
+    // 期望日期 = 同一 UTC 时刻按运行机时区格式化，断言与时区无关
+    const d = new Date('2026-04-30T12:00:00Z');
+    const pad = n => String(n).padStart(2, '0');
+    const expected = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    expect(screen.getByText(`· ${expected}`)).toBeInTheDocument();
+  });
+
+  test('无 created_at 的旧数据不渲染日期（兼容旧接口载荷）', async () => {
+    renderLibrary();
+    await waitFor(() => {
+      expect(screen.getByText('测试漫画')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/· \d{4}-\d{2}-\d{2}/)).not.toBeInTheDocument();
+  });
+
   test('搜索输入框存在', async () => {
     renderLibrary();
     await waitFor(() => {

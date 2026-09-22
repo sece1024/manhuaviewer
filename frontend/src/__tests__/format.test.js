@@ -1,4 +1,4 @@
-import { formatSize, formatDate, splitPathParts, lastPathPart } from '../utils/format';
+import { formatSize, formatDate, formatDateShort, splitPathParts, lastPathPart } from '../utils/format';
 
 describe('formatSize', () => {
   test('空值返回空字符串', () => {
@@ -39,6 +39,31 @@ describe('formatDate', () => {
 
   test('无效日期返回原值', () => {
     expect(formatDate('not-a-date')).toBe('not-a-date');
+  });
+});
+
+// 后端时间列由 SQLite datetime('now') 写入 = UTC 无时区标记；
+// 下列断言全部用「同一时刻的两种写法结果一致」的形式，与运行机时区无关。
+describe('数据库时间的 UTC 解析', () => {
+  test('naive 空格分隔与 T 分隔 + Z 是同一时刻', () => {
+    expect(formatDate('2026-04-30 12:00:00')).toBe(formatDate('2026-04-30T12:00:00Z'));
+    expect(formatDateShort('2026-04-30 12:00:00')).toBe(formatDateShort('2026-04-30T12:00:00Z'));
+  });
+
+  test('已带时区标记的字符串不做二次修正', () => {
+    // 2026-04-30T04:00:00Z 与 2026-04-30T12:00:00+08:00 是同一时刻
+    expect(formatDate('2026-04-30T12:00:00+08:00')).toBe(formatDate('2026-04-30T04:00:00Z'));
+  });
+
+  test('formatDateShort 输出本地时区的 YYYY-MM-DD', () => {
+    const full = formatDate('2026-04-30T12:00:00Z');
+    expect(formatDateShort('2026-04-30T12:00:00Z')).toBe(full.slice(0, 10));
+  });
+
+  test('空值与无效输入的契约与 formatDate 一致', () => {
+    expect(formatDateShort('')).toBe('');
+    expect(formatDateShort(null)).toBe('');
+    expect(formatDateShort('not-a-date')).toBe('not-a-date');
   });
 });
 

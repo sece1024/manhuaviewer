@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
-import { formatSize, splitPathParts, lastPathPart } from '../utils/format';
+import { formatSize, formatDateShort, splitPathParts, lastPathPart } from '../utils/format';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
@@ -72,6 +72,8 @@ const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, se
             <span>{a.page_count} 页</span>
           )}
           {a.file_size > 0 && <span>· {formatSize(a.file_size)}</span>}
+          {/* 添加时间：created_at 首次入库即固定，重扫/更新不重置 */}
+          {a.created_at && <span>· {formatDateShort(a.created_at)}</span>}
         </div>
         {a.tags && a.tags.length > 0 && (compact ? (
           // 紧凑模式：标签只留色点条带，颜色对应侧栏；悬停/标题提示看全名
@@ -136,6 +138,7 @@ const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, sel
           {' · '}{a.archive_type === 'folder' ? '文件夹' : '压缩包'}
           {a.file_size > 0 && ` · ${formatSize(a.file_size)}`}
           {a.read_page > 0 && ` · 已读 ${a.read_page}/${a.page_count || '?'}`}
+          {a.created_at && ` · ${formatDateShort(a.created_at)}`}
         </div>
         {a.tags && a.tags.length > 0 && (
           <div className="archive-list-tags">
