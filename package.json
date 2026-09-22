@@ -13,6 +13,6 @@
     "changelog": "git-cliff -o CHANGELOG.md"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.2"
+    "@tauri-apps/cli": "^2.11.4"
   }
 }
