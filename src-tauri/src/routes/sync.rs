@@ -5,6 +5,7 @@
 //! 3. 直接调用本地 db 入库（复用 upsert_scanned_archive），并按标题回填元数据；
 //! 4. 后台任务 + 进度查询 + 取消；下载按 (文件名, 大小) 断点续传。
 
+use crate::db::tags::TagRef;
 use crate::AppState;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -17,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use super::{db_json, error_response, internal_error};
+use super::{db_json, error_response, internal_error, run_db};
 
 /// 单任务并发：重复 start 会返回 409。
 static CURRENT_JOB: OnceLock<Mutex<Option<Arc<SyncJob>>>> = OnceLock::new();
@@ -259,6 +260,36 @@ fn fetch_manifest(url: &str, token: &str) -> anyhow::Result<serde_json::Value> {
         );
     }
     Ok(serde_json::from_str(&body)?)
+}
+
+/// 把本机标签镜像推给远端（替换语义）。拉取完成后执行，返回推送的标题数。
+/// 远端未知标题会被忽略（可能尚未下载），失败由调用方记入 job.failed。
+fn push_tag_mirror(url: &str, token: &str, db: &crate::db::Database) -> anyhow::Result<usize> {
+    let titles = db.tag_mirror_by_title()?;
+    if titles.is_empty() {
+        return Ok(0);
+    }
+    let count = titles.len();
+    let req = authorized(
+        sync_agent().post(&format!("{}/api/sync/push", base_url(url))),
+        token,
+    )
+    .timeout(std::time::Duration::from_secs(120));
+    let resp = req
+        // ureq 未开 json feature（无 send_json），手动带 Content-Type 发 JSON 体
+        .set("Content-Type", "application/json")
+        .send_string(&serde_json::to_string(
+            &serde_json::json!({ "titles": titles }),
+        )?)
+        .map_err(|e| anyhow::anyhow!("推送标签失败: {e}"))?;
+    // redirects(0) 下 3xx 会以 Ok 返回：与下载一致，显式挡非 2xx
+    if !(200..300).contains(&resp.status()) {
+        anyhow::bail!(
+            "推送标签失败: 远端返回 HTTP {}（不跟随重定向，请检查同步地址）",
+            resp.status()
+        );
+    }
+    Ok(count)
 }
 
 /// 下载字节上限（纯计算便于单测）：期望大小已知时留 10%（至少 4MiB）容差——
@@ -603,6 +634,25 @@ fn run_sync_job(
             job.done.fetch_add(1, Ordering::SeqCst);
         }
 
+        // 阶段4：把本机标签镜像推给远端（替换语义：本机删掉的标签远端也删；
+        // 拉取已完成，此时本机是并集后的最新状态，启动同步的机器即标签权威方）。
+        // 推送失败只记入 failed，不影响已下载的档案与元数据。
+        if !job.cancel.load(Ordering::SeqCst) {
+            *job.current.lock().unwrap() = "推送标签…".to_string();
+            match push_tag_mirror(&url, &token, &db) {
+                Ok(0) => *job.current.lock().unwrap() = String::new(),
+                Ok(n) => {
+                    *job.current.lock().unwrap() = format!("已推送 {n} 个标题的标签");
+                }
+                Err(e) => {
+                    job.failed
+                        .lock()
+                        .unwrap()
+                        .push(format!("标签推送失败: {e}"));
+                }
+            }
+        }
+
         Ok(())
     })();
 
@@ -736,6 +786,101 @@ pub async fn sync_cancel() -> Response {
     Json(serde_json::json!({ "cancelled": true })).into_response()
 }
 
+/// 标签镜像请求体：title → 该标题的全部标签；空数组 = 清空本机该标题的标签。
+#[derive(Deserialize)]
+pub struct TagMirrorRequest {
+    #[serde(default)]
+    pub titles: HashMap<String, Vec<TagRef>>,
+}
+
+/// 镜像载荷上限（对端可控输入）：超限直接 400，不让异常/恶意载荷拖垮替换事务。
+const MIRROR_MAX_TITLES: usize = 200_000;
+const MIRROR_MAX_TITLE_LEN: usize = 1024;
+const MIRROR_MAX_TAGS_PER_TITLE: usize = 1024;
+const MIRROR_MAX_NAME_LEN: usize = 256;
+const MIRROR_MAX_NS_LEN: usize = 128;
+
+/// 纯判定：镜像载荷结构校验（数量/长度/标签名非空）。
+/// 颜色不做硬性拒绝——仅用于展示，非法值写入前降级为默认色（见 sanitize_tag_color），
+/// 免得一条脏颜色拒掉整次推送。
+pub fn validate_tag_mirror(titles: &HashMap<String, Vec<TagRef>>) -> Result<(), String> {
+    if titles.len() > MIRROR_MAX_TITLES {
+        return Err(format!("标题数超过上限 {MIRROR_MAX_TITLES}"));
+    }
+    for (title, tags) in titles {
+        if title.len() > MIRROR_MAX_TITLE_LEN {
+            return Err(format!("标题过长（>{} 字节）", MIRROR_MAX_TITLE_LEN));
+        }
+        if tags.len() > MIRROR_MAX_TAGS_PER_TITLE {
+            return Err(format!(
+                "标题 {title} 的标签数超过上限 {MIRROR_MAX_TAGS_PER_TITLE}"
+            ));
+        }
+        for t in tags {
+            if t.name.is_empty() {
+                return Err(format!("标题 {title} 含空标签名"));
+            }
+            if t.name.len() > MIRROR_MAX_NAME_LEN {
+                return Err(format!("标签名过长（>{} 字节）", MIRROR_MAX_NAME_LEN));
+            }
+            if t.namespace.len() > MIRROR_MAX_NS_LEN {
+                return Err(format!("标签命名空间过长（>{} 字节）", MIRROR_MAX_NS_LEN));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 纯判定：颜色必须是 #rrggbb 才原样保留，否则降级为默认色（前端会拼进样式，防注入）。
+pub fn sanitize_tag_color(color: &str) -> &str {
+    let ok = color.len() == 7
+        && color.starts_with('#')
+        && color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit);
+    if ok {
+        color
+    } else {
+        "#4a86e8"
+    }
+}
+
+/// POST /api/sync/push — 接收对端的标签镜像：按标题整组**替换**本机标签
+/// （替换镜像语义：推送方删掉的标签本机也删；未知标题忽略——对端可能有本机
+/// 尚未下载的档案）。挂在 /api 下自动继承口令鉴权（非回环写操作需 token）。
+pub async fn sync_push(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<TagMirrorRequest>,
+) -> Response {
+    if let Err(msg) = validate_tag_mirror(&payload.titles) {
+        return error_response(StatusCode::BAD_REQUEST, &msg);
+    }
+    let total = payload.titles.len();
+    // 颜色统一降级后入库，写入侧拿到的都是合法 #rrggbb
+    let titles: HashMap<String, Vec<TagRef>> = payload
+        .titles
+        .into_iter()
+        .map(|(title, tags)| {
+            let tags = tags
+                .into_iter()
+                .map(|mut t| {
+                    t.color = sanitize_tag_color(&t.color).to_string();
+                    t
+                })
+                .collect();
+            (title, tags)
+        })
+        .collect();
+    match run_db(&state, move |db| db.mirror_tags_by_title(&titles)).await {
+        Ok((matched, unknown)) => Json(serde_json::json!({
+            "success": true,
+            "total_titles": total,
+            "matched_archives": matched,
+            "unknown_titles": unknown,
+        }))
+        .into_response(),
+        Err(e) => internal_error(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -798,6 +943,103 @@ mod tests {
         assert_eq!(download_byte_cap(1000), 1000 + 4 * 1024 * 1024);
         assert_eq!(download_byte_cap(0), 64 * 1024 * 1024 * 1024);
         assert_eq!(download_byte_cap(-5), 64 * 1024 * 1024 * 1024);
+    }
+
+    /// 镜像载荷结构校验：空标签名/超长字段拒绝，正常与空载荷放行。
+    #[test]
+    fn validate_tag_mirror_enforces_structure() {
+        let tag = |ns: &str, name: &str| TagRef {
+            namespace: ns.into(),
+            name: name.into(),
+            color: "#4a86e8".into(),
+        };
+        let mut m = HashMap::new();
+        m.insert("标题".to_string(), vec![tag("", "日常")]);
+        m.insert("无标签的书".to_string(), vec![]);
+        assert!(validate_tag_mirror(&m).is_ok());
+
+        let mut bad = HashMap::new();
+        bad.insert("标题".to_string(), vec![tag("", "")]);
+        assert!(validate_tag_mirror(&bad).is_err(), "空标签名应拒");
+
+        let mut long = HashMap::new();
+        long.insert(
+            "标题".to_string(),
+            vec![tag("", &"x".repeat(MIRROR_MAX_NAME_LEN + 1))],
+        );
+        assert!(validate_tag_mirror(&long).is_err(), "超长标签名应拒");
+
+        let mut long_title = HashMap::new();
+        long_title.insert("x".repeat(MIRROR_MAX_TITLE_LEN + 1), vec![]);
+        assert!(validate_tag_mirror(&long_title).is_err(), "超长标题应拒");
+    }
+
+    /// 颜色降级：合法 #rrggbb 原样保留，其余（无 #、非 hex、超长）换默认色。
+    #[test]
+    fn sanitize_tag_color_keeps_only_rrggbb() {
+        assert_eq!(sanitize_tag_color("#4a86e8"), "#4a86e8");
+        assert_eq!(sanitize_tag_color("#AABBCC"), "#AABBCC");
+        assert_eq!(sanitize_tag_color("4a86e8"), "#4a86e8");
+        assert_eq!(sanitize_tag_color("#ff00"), "#4a86e8");
+        assert_eq!(sanitize_tag_color("#zzzzzz"), "#4a86e8");
+        assert_eq!(sanitize_tag_color(""), "#4a86e8");
+        assert_eq!(sanitize_tag_color("#ff00ff\"}body{"), "#4a86e8");
+    }
+
+    /// 标签镜像读写闭环：全量分组（空组/同名并集）→ 替换写入（清空/未知标题跳过）。
+    #[test]
+    fn tag_mirror_round_trip_replaces_per_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::new(dir.path().join("m.db").to_str().unwrap()).unwrap();
+        db.init().unwrap();
+        let a = db
+            .upsert_scanned_archive("卷一", "/x/1.cbz", "cbz", 5, 10, 1)
+            .unwrap();
+        let b = db
+            .upsert_scanned_archive("卷二", "/x/2.cbz", "cbz", 5, 10, 2)
+            .unwrap();
+        let old_tag = db.create_tag("", "旧标", "#112233").unwrap();
+        db.assign_tag(a, old_tag).unwrap();
+
+        // 读：两个档案都入组；卷一有标签、卷二空组（远端据此清空）
+        let mirror = db.tag_mirror_by_title().unwrap();
+        assert_eq!(mirror.len(), 2);
+        assert_eq!(
+            mirror["卷一"],
+            vec![TagRef {
+                namespace: String::new(),
+                name: "旧标".into(),
+                color: "#112233".into(),
+            }]
+        );
+        assert!(mirror["卷二"].is_empty());
+
+        // 写：卷一整组换成新标；卷二清空；未知标题被跳过
+        let tag_ref = |name: &str, color: &str| TagRef {
+            namespace: String::new(),
+            name: name.into(),
+            color: color.into(),
+        };
+        let mut push = HashMap::new();
+        push.insert("卷一".to_string(), vec![tag_ref("新标", "#ff0000")]);
+        push.insert("卷二".to_string(), vec![]);
+        push.insert("远端没有的书".to_string(), vec![tag_ref("幽灵", "#4a86e8")]);
+        let (matched, unknown) = db.mirror_tags_by_title(&push).unwrap();
+        assert_eq!((matched, unknown), (2, 1));
+
+        let names = |id: i64| -> Vec<String> {
+            db.get_archive_tags(id)
+                .unwrap()
+                .into_iter()
+                .map(|t| t.name)
+                .collect()
+        };
+        assert_eq!(names(a), vec!["新标"], "替换语义：旧标被清、新标挂上");
+        assert!(names(b).is_empty(), "空数组 = 清空");
+        assert!(
+            db.list_tags().unwrap().iter().all(|t| t.name != "幽灵"),
+            "未知标题的标签不落地"
+        );
     }
 
     #[test]

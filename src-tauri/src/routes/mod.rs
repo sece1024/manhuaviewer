@@ -441,6 +441,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/sync/start", post(sync::sync_start))
         .route("/sync/status", get(sync::sync_status))
         .route("/sync/cancel", post(sync::sync_cancel))
+        // 标签镜像推送：同步收尾时把本机标签整组镜像到远端（替换语义）
+        .route("/sync/push", post(sync::sync_push))
         // 档案原文件下载（同步用，POST 以默认纳入局域网口令保护）
         .route("/archives/:id/file", post(archives::download_archive_file));
 
@@ -649,6 +651,63 @@ mod tests {
         )
         .await;
         assert_eq!(status, 200, "桌面端 tauri Origin 应放行");
+    }
+
+    /// 标签镜像推送：替换语义（旧标签被清、B 删 A 也删）、未知标题忽略且不建标签、
+    /// 空数组清空、非法载荷 400。
+    #[tokio::test]
+    async fn sync_push_replaces_tags_by_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::new(dir.path().join("t.db").to_str().unwrap()).unwrap();
+        db.init().unwrap();
+        let id = db
+            .upsert_scanned_archive("镜像A", "/x/a.cbz", "cbz", 5, 10, 1)
+            .unwrap();
+        let old = db.create_tag("", "旧标", "#112233").unwrap();
+        db.assign_tag(id, old).unwrap();
+        let db = Arc::new(db); // 服务与断言共用同一实例（r2d2 池，天然并发安全）
+        let port = spawn_server_with(db.clone(), dir.path().to_path_buf()).await;
+
+        // 1) 替换：旧标换成新标；未知标题跳过
+        let (status, body) = post(
+            port,
+            "/api/sync/push",
+            r##"{"titles":{"镜像A":[{"namespace":"","name":"新标","color":"#ff0000"}],"不存在":[{"namespace":"","name":"幽灵","color":"#4a86e8"}]}}"##,
+        )
+        .await;
+        assert_eq!(status, 200, "推送应成功，body: {body}");
+        let names: Vec<String> = db
+            .get_archive_tags(id)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(names, vec!["新标"], "替换语义：旧标被清、新标挂上");
+        assert!(
+            db.list_tags().unwrap().iter().all(|t| t.name != "幽灵"),
+            "未知标题的标签不落地"
+        );
+        let resp_body = body.split("\r\n\r\n").nth(1).unwrap_or("");
+        let root: serde_json::Value = serde_json::from_str(resp_body).unwrap();
+        assert_eq!(root["matched_archives"], 1);
+        assert_eq!(root["unknown_titles"], 1);
+
+        // 2) 空数组 = 清空该标题的全部标签
+        let (status, _) = post(port, "/api/sync/push", r#"{"titles":{"镜像A":[]}}"#).await;
+        assert_eq!(status, 200);
+        assert!(
+            db.get_archive_tags(id).unwrap().is_empty(),
+            "空数组应清掉全部标签"
+        );
+
+        // 3) 非法载荷（空标签名）→ 400
+        let (status, _) = post(
+            port,
+            "/api/sync/push",
+            r#"{"titles":{"镜像A":[{"name":""}]}}"#,
+        )
+        .await;
+        assert_eq!(status, 400, "空标签名应被结构校验拒绝");
     }
 
     /// 出站白名单必须拒绝 IPv4 映射的回环/链路本地（::ffff:127.0.0.1 等），
