@@ -117,7 +117,10 @@ pnpm tauri build
 # 注意：脚本用的是 macOS 的 `sed -i ''` 语法，Linux 上需手动改用 `sed -i`
 # frontend/package.json 的版本（2.0.0）是独立的，脚本不会动它——不要"顺手"同步
 
-# 2. 提交并打标签
+# 2. 重新生成 CHANGELOG.md（git-cliff，配置见 cliff.toml；需先安装：brew install git-cliff）
+pnpm changelog
+
+# 3. 提交并打标签
 git add -A
 git commit -m "chore: release v3.5.4"
 git tag v3.5.4
@@ -143,6 +146,7 @@ git push origin main --tags
 ### 注意事项
 
 - 发布前务必同步三处版本号（`package.json`、`tauri.conf.json`、`Cargo.toml`），推荐用 `./scripts/bump-version.sh <x.y.z>` 一次改完
+- `CHANGELOG.md` 由 git-cliff 生成（`pnpm changelog`），**不要手工编辑**；草稿 Release 的正文由 CI 用 `git-cliff --latest --strip header` 自动生成（配置见 `cliff.toml`）
 - Release 默认为草稿状态，需要手动确认发布
 - 构建使用 [tauri-apps/tauri-action@v0](https://github.com/tauri-apps/tauri-action)，配置详见 `release.yml`
 - macOS 构建使用 **ad-hoc 签名**（`APPLE_SIGNING_IDENTITY: "-"`，免费、无需 Apple Developer 账号，也未经 Apple 公证），用户首次打开仍需右键 > 打开，或在"系统设置 > 隐私与安全性"中允许

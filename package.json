@@ -9,7 +9,8 @@
     "tauri:build": "tauri build",
     "lint": "cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings",
     "format:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --check",
-    "format": "cargo fmt --manifest-path src-tauri/Cargo.toml"
+    "format": "cargo fmt --manifest-path src-tauri/Cargo.toml",
+    "changelog": "git-cliff -o CHANGELOG.md"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.2"

@@ -6,7 +6,30 @@ on:
       - "v*"
 
 jobs:
+  # 生成本次 tag 的 Release 正文（git-cliff，配置见 cliff.toml）
+  release-notes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      body: ${{ steps.git-cliff.outputs.content }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        id: git-cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: CHANGES.md
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   publish-tauri:
+    needs: release-notes
     permissions:
       contents: write
     strategy:
@@ -55,7 +78,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "MangaViewer __VERSION__"
-          releaseBody: "See the assets to download and install."
+          releaseBody: ${{ needs.release-notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
