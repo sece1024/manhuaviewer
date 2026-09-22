@@ -8,10 +8,13 @@
 - **pnpm** >= 9
 - **Rust** (stable) — 通过 [rustup](https://rustup.rs/) 安装
 - macOS 额外要求：Xcode Command Line Tools
-- Linux 额外要求：
+- Linux 额外要求（Debian/Ubuntu，[Tauri 2 官方前置依赖](https://v2.tauri.app/start/prerequisites/) + 打包用 patchelf）：
   ```bash
-  sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+  sudo apt-get update
+  sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+    libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
   ```
+  > 注意是 `libayatana-appindicator3-dev`（旧的 `libappindicator3-dev` 在新版 Ubuntu 上已不可用）。
 
 ## 快速开始
 
@@ -109,15 +112,15 @@ pnpm tauri build
 推送一个 `v` 开头的 Git 标签即可触发：
 
 ```bash
-# 1. 确保版本号一致
-#    - src-tauri/tauri.conf.json → "version"
-#    - src-tauri/Cargo.toml → version
-#    - package.json → version
+# 1. 同步三处版本号（package.json / src-tauri/tauri.conf.json / src-tauri/Cargo.toml）
+./scripts/bump-version.sh 3.5.4
+# 注意：脚本用的是 macOS 的 `sed -i ''` 语法，Linux 上需手动改用 `sed -i`
+# frontend/package.json 的版本（2.0.0）是独立的，脚本不会动它——不要"顺手"同步
 
 # 2. 提交并打标签
 git add -A
-git commit -m "chore: release v3.4.4"
-git tag v3.4.4
+git commit -m "chore: release v3.5.4"
+git tag v3.5.4
 git push origin main --tags
 ```
 
@@ -139,10 +142,10 @@ git push origin main --tags
 
 ### 注意事项
 
-- 发布前务必同步三处版本号（`tauri.conf.json`、`Cargo.toml`、`package.json`）
+- 发布前务必同步三处版本号（`package.json`、`tauri.conf.json`、`Cargo.toml`），推荐用 `./scripts/bump-version.sh <x.y.z>` 一次改完
 - Release 默认为草稿状态，需要手动确认发布
 - 构建使用 [tauri-apps/tauri-action@v0](https://github.com/tauri-apps/tauri-action)，配置详见 `release.yml`
-- macOS 构建暂不包含代码签名，用户首次打开需在"系统设置 > 隐私与安全性"中允许
+- macOS 构建使用 **ad-hoc 签名**（`APPLE_SIGNING_IDENTITY: "-"`，免费、无需 Apple Developer 账号，也未经 Apple 公证），用户首次打开仍需右键 > 打开，或在"系统设置 > 隐私与安全性"中允许
 
 ## 日志与启动问题排查
 

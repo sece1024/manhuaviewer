@@ -8,6 +8,7 @@
 - 📖 **阅读器** — 单页/双页/长图模式，RTL/LTR 翻页方向，适应高度/宽度/原始大小
 - 📦 **压缩包支持** — ZIP/CBZ/RAR/CBR/7Z 直接浏览，无需解压
 - 📦 **CBZ 归档** — 将漫画文件夹打包为 CBZ 格式
+- 🗜️ **批量转 CBZ** — 一键将 7z/RAR/CBR/ZIP 批量转为 CBZ（可只转选中项，成功后清理原文件，支持进度/取消）
 - 🏷️ **命名空间标签** — 支持 `artist:name`、`series:name` 格式
 - 📂 **分类系统** — 动态/静态分类，支持置顶
 - 🔍 **搜索过滤** — 按名称模糊搜索，标签过滤侧栏
@@ -52,6 +53,7 @@ pnpm tauri build               # 生产构建
 | 按键 | 功能 |
 |------|------|
 | ← / → | 翻页（方向取决于 RTL/LTR 设置） |
+| ↑ / ↓ | 翻页（长图模式下不生效） |
 | Space | 下一页 |
 | D | 切换双页模式 |
 | L | 切换长图模式 |
@@ -60,6 +62,7 @@ pnpm tauri build               # 生产构建
 | G | 跳转到指定页 |
 | W | 循环切换适应模式 |
 | Home / End | 第一页 / 最后一页 |
+| F1 | 帮助面板（快捷键列表） |
 | F11 | 全屏模式 |
 | Esc | 关闭弹出面板 |
 
@@ -73,22 +76,23 @@ src-tauri/                          # Tauri + Rust 后端
 └── src/
     ├── main.rs                     # 入口（Axum 服务 + 单实例锁 + 启动失败提示）
     ├── logging.rs                  # 按天滚动文件日志 + panic hook
-    ├── db/                         # rusqlite 封装
-    │   ├── mod.rs                  # Database 结构体 + 全部 SQL 查询
+    ├── db/                         # rusqlite 封装（r2d2 连接池）
+    │   ├── mod.rs                  # Database 结构体 + 连接池 + 公共工具
+    │   ├── archives.rs             # 按域拆分的 SQL（另有 tags/categories/history/settings/bookmarks/backup）
     │   ├── schema.rs               # 幂等建表 SQL
     │   └── migrations.rs           # 旧版数据表迁移 + 列补充
-    ├── routes/                     # Axum 路由（archives/tags/categories/history/settings/scan/convert/sync/opds）
-    └── services/                   # 业务逻辑（archive/scanner/thumbnail/cbz）
+    ├── routes/                     # Axum 路由（archives/tags/categories/history/settings/scan/convert/sync/metadata/update/opds + auth 局域网鉴权）
+    └── services/                   # 业务逻辑（archive/scanner/thumbnail/cbz/backup/cleanup/cache_budget/page_cache/metadata/fs_ext）
 
 frontend/
 ├── src/
 │   ├── App.js                      # 路由 + 主题 + ErrorBoundary
 │   ├── index.js                    # 入口
 │   ├── index.css                   # 全局样式（三套主题/响应式）
-│   ├── components/                 # Toast/LazyImage/ErrorBoundary/TagPicker/CategoryPicker/ConfirmDialog
-│   ├── hooks/                      # useSettings/useTags/useReaderKeyboard
+│   ├── components/                 # Toast/Modal/LazyImage/ErrorBoundary/TagPicker/CategoryPicker/ConfirmDialog/ThumbnailPanel/ReaderVirtualList/CbzConvertPanel
+│   ├── hooks/                      # useSettings/useTags/useReaderKeyboard/useGamepad/useScan/useSync/useCbzConvert/useLibrarySession 等 11 个
 │   ├── pages/                      # Library/Reader/History/Settings
-│   ├── utils/                      # api.js（唯一 API 客户端）/format.js
+│   ├── utils/                      # api.js（唯一 API 客户端）/format.js/listReconcile.js/spreadFit.js
 │   └── __tests__/                  # 测试文件
 └── package.json
 ```
@@ -151,6 +155,7 @@ frontend/
 | `/api/backup` | GET | 导出备份 |
 | `/api/restore` | POST | 导入备份 |
 | `/api/sync/manifest` | GET | 跨机同步：远端清单（标题/类型/大小 + 标签/分类/进度） |
+| `/api/sync/plan` | POST | 跨机同步：对比预览（url + token + dir），返回新增/变化/已最新清单，不下载 |
 | `/api/sync/start` | POST | 跨机同步：启动同步任务（url + token + dir） |
 | `/api/sync/status` | GET | 跨机同步：任务进度 |
 | `/api/sync/cancel` | POST | 跨机同步：取消任务 |
@@ -162,6 +167,15 @@ frontend/
 | `/opds/tag/:tag_id` | GET | OPDS 标签下的档案 |
 | `/opds/categories` | GET | OPDS 分类目录 |
 | `/opds/category/:id` | GET | OPDS 分类下的档案 |
+
+### 局域网访问鉴权
+
+设置页开启"局域网口令"（`server_token`）后，**同一局域网内**（非回环地址）的所有 `/api` 与 `/opds` 请求都必须携带口令，否则返回 401；本机回环请求始终放行，桌面端不受影响：
+
+- HTTP 头：`Authorization: Bearer <token>`
+- 或查询参数：`?token=<token>`（OPDS 阅读器用这个——服务端返回的 OPDS XML 内站内链接会自动带上 token）
+
+未设置口令时局域网请求完全开放（仅建议在可信网络下使用）。
 
 ## 📄 License
 
