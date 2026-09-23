@@ -8,6 +8,12 @@
 
 ## 未发布
 
+### 🐛 修复
+
+- *(reader)* 消除 Windows 上双页模式的持续闪烁/阅读区跳动([7d9c580](https://github.com/sece1024/manhuaviewer/commit/7d9c5805fdd3b25c1951216e2b6b526e3f126a86))
+
+## [3.6.0](https://github.com/sece1024/manhuaviewer/releases/tag/v3.6.0) - 2026-09-22
+
 ### 🚀 新特性
 
 - *(sync)* 同步收尾回传标签镜像（POST /api/sync/push，替换语义）([34cd474](https://github.com/sece1024/manhuaviewer/commit/34cd4749fb971ea3f887a2580da97475bb4b49a6))
