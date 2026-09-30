@@ -179,9 +179,16 @@ pub(crate) async fn current_token(db: Arc<Database>) -> String {
 /// 统一守卫核心，供 from_fn 闭包包装。先同步克隆需要的字段，再 await DB，
 /// 避免在 Future（需 Send）中持有 &Request。
 pub async fn lan_guard_core(db: Arc<Database>, req: Request, next: Next) -> Response {
+    // 回环请求永远放行（见 request_allowed 的首个分支）：先短路再读 DB。
+    // 桌面端全部流量都是回环，此前无条件 current_token().await 会让每个请求
+    // （翻页一次要预载十几张图）都白跑一次阻塞池任务 + 取池连接 + SQL。
+    let is_loopback = peer_is_loopback(&req);
+    if is_loopback {
+        return next.run(req).await;
+    }
+
     let headers = req.headers().clone();
     let query = req.uri().query().map(|s| s.to_string());
-    let is_loopback = peer_is_loopback(&req);
 
     let authz = headers.get("authorization").and_then(|v| v.to_str().ok());
     let qtoken = extract_query_token(query.as_deref());

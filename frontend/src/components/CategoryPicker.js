@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import api from '../utils/api';
 import useModalKeyboard from '../hooks/useModalKeyboard';
 

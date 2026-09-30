@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useContext, useMemo, createContext } from 'react';
+import { useState, useEffect, useCallback, useContext, useMemo, createContext } from 'react';
 import api, { localStorageGet, localStorageSet } from '../utils/api';
 
 const SettingsContext = createContext(null);

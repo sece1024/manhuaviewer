@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api, { setServerToken } from '../utils/api';
 import { formatSize } from '../utils/format';
 import { useToast } from '../components/Toast';
@@ -117,7 +117,14 @@ export default function Settings() {
   const lanTokenSetting = settings.server_token || '';
   const genLanToken = () => {
     const bytes = new Uint8Array(18);
-    (window.crypto && crypto.getRandomValues) ? crypto.getRandomValues(bytes) : Array.from(bytes, (_, i) => bytes[i] = Math.floor(Math.random() * 256));
+    // 优先用 CSPRNG；仅在不可用时（旧 WebView/非安全上下文）退化为 Math.random。
+    // 原写法把守卫放在 window.crypto 上却调用裸 crypto，且用赋值表达式塞在
+    // 三元分支里，可读性差且容易被误读为随机源。
+    if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+      window.crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
     return Array.from(bytes).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
   };
   const handleGenLanToken = async () => {

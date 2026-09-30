@@ -23,7 +23,7 @@ pnpm format                    # cargo fmt (auto-fix)
 pnpm changelog                 # git-cliff: 重新生成 CHANGELOG.md（配置见 cliff.toml）
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every push/PR to `main`. It runs `pnpm --filter manhuaviewer-frontend build` (compile + ESLint) **and frontend tests** (`cd frontend && pnpm test`). Rust CI runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`. Run these locally before pushing. The rust job does **not** build the frontend — backend code must still compile with `frontend/build` absent (debug builds read embedded assets from disk at runtime, not compile time).
+CI (`.github/workflows/ci.yml`) runs on every push/PR to `main`. It runs `pnpm --filter manhuaviewer-frontend lint:ci` (ESLint — note that `vite build` itself does **not** lint), `pnpm --filter manhuaviewer-frontend build`, and **frontend tests** (`cd frontend && pnpm test`). Rust CI runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`. Run these locally before pushing. The rust job does **not** build the frontend — backend code must still compile with `frontend/build` absent (debug builds read embedded assets from disk at runtime, not compile time).
 
 ## Architecture
 
@@ -70,10 +70,11 @@ Every completed change MUST be committed with `git commit` — never leave work 
 
 1. `pnpm lint` — Rust clippy must pass with zero warnings.
 2. `pnpm format:check` — Rust formatting must be clean (`pnpm format` to fix).
-3. `pnpm --filter manhuaviewer-frontend build` — frontend must compile.
-4. `cd frontend && pnpm test` — frontend tests must pass (CI runs them).
-5. `cd src-tauri && cargo test` — all backend tests must pass.
-6. `git add` the changed files and `git commit` with a Conventional Commits message (`feat:`, `fix:`, etc.).
+3. `pnpm --filter manhuaviewer-frontend lint:ci` — frontend ESLint must pass (zero errors, warnings ≤ 13).
+4. `pnpm --filter manhuaviewer-frontend build` — frontend must compile.
+5. `cd frontend && pnpm test` — frontend tests must pass (CI runs them).
+6. `cd src-tauri && cargo test` — all backend tests must pass.
+7. `git add` the changed files and `git commit` with a Conventional Commits message (`feat:`, `fix:`, etc.).
 
 ## Releasing
 

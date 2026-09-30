@@ -23,12 +23,14 @@ impl Database {
     ) -> Result<()> {
         let conn = self.conn()?;
         let tx = conn.unchecked_transaction()?;
+        // 设置项批量写入（每次改设置会整体落库）：语句在循环外 prepare_cached，
+        // 避免每条都重新解析同一句 SQL。
+        let mut upsert =
+            tx.prepare_cached("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")?;
         for (key, value) in settings {
-            tx.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                (key, value),
-            )?;
+            upsert.execute((key, value))?;
         }
+        drop(upsert);
         tx.commit()?;
         Ok(())
     }

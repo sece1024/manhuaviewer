@@ -705,12 +705,13 @@ impl Database {
         )?;
 
         // 其余档案: group_id 设为主档案 id
+        let mut set_group = tx.prepare_cached(
+            "UPDATE archives SET group_id = ?, updated_at = datetime('now') WHERE id = ?",
+        )?;
         for &id in &archive_ids[1..] {
-            tx.execute(
-                "UPDATE archives SET group_id = ?, updated_at = datetime('now') WHERE id = ?",
-                (primary_id, id),
-            )?;
+            set_group.execute((primary_id, id))?;
         }
+        drop(set_group);
 
         tx.commit()?;
         Ok(primary_id)

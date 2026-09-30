@@ -211,8 +211,18 @@ impl Database {
         let manager = SqliteConnectionManager::file(path).with_init(|conn| {
             conn.pragma_update(None, "journal_mode", "WAL")?;
             conn.pragma_update(None, "foreign_keys", "ON")?;
+            // WAL 下 synchronous=NORMAL 不会因进程崩溃而损坏数据库（仍防断电以外的
+            // 异常退出），只是不再每次提交都 fsync：这是 SQLite 官方推荐的 WAL 组合。
+            // 本应用的热路径写是翻页存进度（每几秒一次）、扫描批量入库，默认 FULL
+            // 会让每次提交都付一次 fsync 代价。代价：机器掉电时最近若干次提交可能丢失，
+            // 对阅读器可接受（丢的最多是"读到第几页"）。
+            conn.pragma_update(None, "synchronous", "NORMAL")?;
             // 池内多连接并发写（如翻页存 history 撞上扫描长事务）时等待而不是立刻报错
             conn.busy_timeout(std::time::Duration::from_secs(5))?;
+            // 语句缓存：rusqlite 默认只缓存 16 条，而 db 层有上百处不同的 SQL 字面量，
+            // 默认容量下几乎每次查询都要重新 prepare（解析+编译）。池内每连接各有一份
+            // 缓存，故按单连接需要的高频语句数量给到 64。
+            conn.set_prepared_statement_cache_capacity(64);
             // 列表分组分页用的分组键函数（与 routes::group_archives 规则一致）
             conn.create_scalar_function(
                 "archive_group_key",

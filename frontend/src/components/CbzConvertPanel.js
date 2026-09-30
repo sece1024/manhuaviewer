@@ -1,4 +1,3 @@
-import React from 'react';
 
 /**
  * CBZ 转换进度面板：进度条 + 计数 + 逐项失败 + 取消按钮。

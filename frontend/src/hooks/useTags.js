@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useContext, createContext, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useContext, createContext, useMemo } from 'react';
 import api from '../utils/api';
 
 const TagsContext = createContext(null);

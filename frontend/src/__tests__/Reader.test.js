@@ -1,4 +1,3 @@
-import React from 'react';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import Reader from '../pages/Reader';

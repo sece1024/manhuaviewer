@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 import { useToast } from '../components/Toast';
@@ -767,11 +767,13 @@ export default function Reader() {
     if (!doublePage || !autoSingleWide || fitMode !== 'height') return false;
     const cur = pages[currentIndex];
     const other = pages[currentIndex + 1];
+    // 读取 pageDimsVersion 是有意为之：尺寸写在 ref 上、ref 变化不触发重渲染，
+    // 需要这个版本号作为 memo 的失效信号（见 recordPageDims）。
+    void pageDimsVersion;
     const dims = cur ? pageDimsRef.current[cur.id] : null;
     if (!dims) return false;
     const otherDims = other ? pageDimsRef.current[other.id] || null : null;
     return spreadTooWide(dims, otherDims, readerSize, { gap: 4, minPageRatio: WIDE_SPREAD_MIN_PAGE_RATIO });
-    // pageDimsVersion：尺寸写入 ref 后用版本号触发重算（见 recordPageDims 注释）
   }, [doublePage, autoSingleWide, fitMode, pages, currentIndex, readerSize, pageDimsVersion]);
 
   // 首次触发过宽降级时提示一次（换档后复位），避免用户困惑“为什么双页变单页了”

@@ -21,7 +21,9 @@ describe('api.js 导出面', () => {
 
   test('setServerToken 是具名导出，默认导出对象上确实没有它', () => {
     expect(typeof setServerToken).toBe('function');
-    // 锁住约定：调用方必须用具名导入（App.js 曾误用 api.setServerToken）
+    // 锁住约定：调用方必须用具名导入（App.js 曾误用 api.setServerToken）。
+    // 这一行是「故意访问不存在的成员」，豁免 local/api-members 规则。
+    // eslint-disable-next-line local/api-members
     expect(api.setServerToken).toBeUndefined();
   });
 

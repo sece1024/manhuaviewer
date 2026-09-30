@@ -66,10 +66,12 @@ chore: 移除 Electron 相关代码
 
 | Job | 内容 |
 |-----|------|
-| **frontend** | `pnpm --filter manhuaviewer-frontend build`（编译 + ESLint）+ `cd frontend && pnpm test`（前端测试） |
+| **frontend** | `pnpm --filter manhuaviewer-frontend lint:ci`（ESLint；`vite build` 本身不做 lint）+ `pnpm --filter manhuaviewer-frontend build`（编译）+ `cd frontend && pnpm test`（前端测试） |
 | **rust** | `cargo fmt --check` + `cargo clippy -D warnings` + `cargo test` |
 
-请在提交前确保本地通过这些检查。
+请在提交前确保本地通过这些检查。前端 lint 也可单独运行：`pnpm --filter manhuaviewer-frontend lint`（宽松版，只列问题不卡 warning）。
+
+ESLint 配置见 `frontend/eslint.config.mjs`：只启用「真实缺陷」类规则（`no-undef`、`no-unused-vars`、`react-hooks/rules-of-hooks` 等），不引入风格规则。`react-hooks/exhaustive-deps` 设为 `warn`，当前基线 13 条（均为有意的 ref 依赖模式），CI 用 `--max-warnings=13` 锁住，避免回退但也不强迫立刻重构。
 
 ## 本地构建安装包
 

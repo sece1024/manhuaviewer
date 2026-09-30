@@ -285,14 +285,25 @@ impl Database {
         let tx = conn.transaction()?;
         let mut matched = 0usize;
         let mut unknown = 0usize;
+        // 语句统一在循环外 prepare：此前每个标题都 tx.prepare("SELECT id FROM archives
+        // WHERE title = ?")、每个标签/档案各一次 tx.execute（后者内部还会重新 prepare），
+        // 推全库标题时是数万次「解析 + 编译 SQL」。
+        let mut find_archives = tx.prepare_cached("SELECT id FROM archives WHERE title = ?")?;
+        let mut find_tag =
+            tx.prepare_cached("SELECT id FROM tags WHERE namespace = ? AND name = ?")?;
+        let mut insert_tag =
+            tx.prepare_cached("INSERT INTO tags (namespace, name, color) VALUES (?, ?, ?)")?;
+        let mut clear_links = tx.prepare_cached("DELETE FROM archive_tags WHERE archive_id = ?")?;
+        let mut link_tag = tx.prepare_cached(
+            "INSERT OR IGNORE INTO archive_tags (archive_id, tag_id) VALUES (?, ?)",
+        )?;
+
         for (title, tags) in titles {
             // 同名可能多卷；0 个 = 远端还没有这本 → 忽略
-            let mut stmt = tx.prepare("SELECT id FROM archives WHERE title = ?")?;
-            let ids: Vec<i64> = stmt
+            let ids: Vec<i64> = find_archives
                 .query_map([title], |r| r.get(0))?
                 .filter_map(log_and_skip)
                 .collect();
-            drop(stmt);
             if ids.is_empty() {
                 unknown += 1;
                 continue;
@@ -303,20 +314,13 @@ impl Database {
                 if t.name.is_empty() {
                     continue;
                 }
-                let existing: Option<i64> = tx
-                    .query_row(
-                        "SELECT id FROM tags WHERE namespace = ? AND name = ?",
-                        (&t.namespace, &t.name),
-                        |r| r.get(0),
-                    )
+                let existing: Option<i64> = find_tag
+                    .query_row((&t.namespace, &t.name), |r| r.get(0))
                     .optional()?;
                 let id = match existing {
                     Some(id) => id,
                     None => {
-                        tx.execute(
-                            "INSERT INTO tags (namespace, name, color) VALUES (?, ?, ?)",
-                            (&t.namespace, &t.name, &t.color),
-                        )?;
+                        insert_tag.execute((&t.namespace, &t.name, &t.color))?;
                         tx.last_insert_rowid()
                     }
                 };
@@ -325,19 +329,14 @@ impl Database {
                 }
             }
             for &archive_id in &ids {
-                tx.execute(
-                    "DELETE FROM archive_tags WHERE archive_id = ?",
-                    [archive_id],
-                )?;
+                clear_links.execute([archive_id])?;
                 for &tag_id in &tag_ids {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO archive_tags (archive_id, tag_id) VALUES (?, ?)",
-                        (archive_id, tag_id),
-                    )?;
+                    link_tag.execute((archive_id, tag_id))?;
                 }
                 matched += 1;
             }
         }
+        drop((find_archives, find_tag, insert_tag, clear_links, link_tag));
         tx.commit()?;
         Ok((matched, unknown))
     }

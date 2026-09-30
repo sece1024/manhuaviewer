@@ -25,6 +25,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Lint frontend (ESLint)
+        # Vite 不内置 ESLint，因此 build 步骤只做编译；这里显式跑门禁。
+        # --max-warnings 固定当前基线（13 条均为有意的 ref 依赖模式），
+        # 新增 error 或让 warning 变多都会失败。
+        run: pnpm --filter manhuaviewer-frontend lint:ci
+
       - name: Build frontend
         run: pnpm --filter manhuaviewer-frontend build
 

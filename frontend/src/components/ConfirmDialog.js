@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 export default function ConfirmDialog({ open, title, message, confirmText = '确定', cancelText = '取消', danger, onConfirm, onCancel }) {
   const cancelRef = useRef(null);

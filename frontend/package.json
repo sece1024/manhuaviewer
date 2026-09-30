@@ -10,6 +10,8 @@
   "scripts": {
     "start": "vite",
     "build": "vite build",
+    "lint": "eslint src",
+    "lint:ci": "eslint src --max-warnings=13",
     "test": "react-scripts test",
     "test:watch": "react-scripts test --watchAll=false"
   },
@@ -36,6 +38,9 @@
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",
     "@vitejs/plugin-react": "^4.7.0",
+    "eslint": "8.57.1",
+    "eslint-plugin-react": "7.37.5",
+    "eslint-plugin-react-hooks": "4.6.2",
     "react-scripts": "5.0.1",
     "vite": "^5.4.21"
   }

@@ -258,6 +258,15 @@ impl Database {
         // 导入档案：以 path 为键 upsert，绝不用 INSERT OR REPLACE——
         // REPLACE 会先 DELETE 再 INSERT，级联删掉该档案已有的 history/标签/分类关联。
         if let Some(archives) = backup["archives"].as_array() {
+            let mut insert_archive = tx.prepare_cached(
+                "INSERT INTO archives (title, path, archive_type, page_count, file_size)
+                         VALUES (?, ?, ?, ?, ?)
+                         ON CONFLICT(path) DO UPDATE SET
+                            title = excluded.title,
+                            archive_type = excluded.archive_type,
+                            page_count = excluded.page_count,
+                            file_size = excluded.file_size",
+            )?;
             for archive in archives {
                 if let (Some(title), Some(path), Some(archive_type), Some(page_count)) = (
                     archive["title"].as_str(),
@@ -265,102 +274,101 @@ impl Database {
                     archive["archive_type"].as_str(),
                     archive["page_count"].as_i64(),
                 ) {
-                    tx.execute(
-                        "INSERT INTO archives (title, path, archive_type, page_count, file_size)
-                         VALUES (?, ?, ?, ?, ?)
-                         ON CONFLICT(path) DO UPDATE SET
-                            title = excluded.title,
-                            archive_type = excluded.archive_type,
-                            page_count = excluded.page_count,
-                            file_size = excluded.file_size",
-                        (
-                            title,
-                            path,
-                            archive_type,
-                            page_count,
-                            archive["file_size"].as_i64().unwrap_or(0),
-                        ),
-                    )?;
+                    insert_archive.execute((
+                        title,
+                        path,
+                        archive_type,
+                        page_count,
+                        archive["file_size"].as_i64().unwrap_or(0),
+                    ))?;
                 }
             }
         }
 
         // 导入标签（ns+name 唯一键）
         if let Some(tags) = backup["tags"].as_array() {
+            let mut insert_tag = tx.prepare_cached(
+                "INSERT INTO tags (namespace, name, color) VALUES (?, ?, ?)
+                         ON CONFLICT(namespace, name) DO UPDATE SET color = excluded.color",
+            )?;
             for tag in tags {
                 if let (Some(namespace), Some(name), Some(color)) = (
                     tag["namespace"].as_str(),
                     tag["name"].as_str(),
                     tag["color"].as_str(),
                 ) {
-                    tx.execute(
-                        "INSERT INTO tags (namespace, name, color) VALUES (?, ?, ?)
-                         ON CONFLICT(namespace, name) DO UPDATE SET color = excluded.color",
-                        (namespace, name, color),
-                    )?;
+                    insert_tag.execute((namespace, name, color))?;
                 }
             }
         }
 
         // 导入分类（name 唯一键）
         if let Some(categories) = backup["categories"].as_array() {
+            let mut insert_category = tx.prepare_cached(
+                "INSERT INTO categories (name, color, search, pinned) VALUES (?, ?, ?, ?)
+                         ON CONFLICT(name) DO UPDATE SET
+                            color = excluded.color,
+                            search = excluded.search,
+                            pinned = excluded.pinned",
+            )?;
             for category in categories {
                 if let (Some(name), Some(color), Some(search)) = (
                     category["name"].as_str(),
                     category["color"].as_str(),
                     category["search"].as_str(),
                 ) {
-                    tx.execute(
-                        "INSERT INTO categories (name, color, search, pinned) VALUES (?, ?, ?, ?)
-                         ON CONFLICT(name) DO UPDATE SET
-                            color = excluded.color,
-                            search = excluded.search,
-                            pinned = excluded.pinned",
-                        (
-                            name,
-                            color,
-                            search,
-                            category["pinned"].as_bool().unwrap_or(false),
-                        ),
-                    )?;
+                    insert_category.execute((
+                        name,
+                        color,
+                        search,
+                        category["pinned"].as_bool().unwrap_or(false),
+                    ))?;
                 }
             }
         }
 
         // 重建档案-标签关联（按 path + ns:name 解析 id，存在性缺失的行自然忽略）
         if let Some(archive_tags) = backup["archive_tags"].as_array() {
+            let mut link_archive_tag = tx.prepare_cached(
+                "INSERT OR IGNORE INTO archive_tags (archive_id, tag_id)
+                         SELECT a.id, t.id FROM archives a, tags t
+                         WHERE a.path = ? AND t.namespace = ? AND t.name = ?",
+            )?;
             for at in archive_tags {
                 if let (Some(path), Some(namespace), Some(name)) = (
                     at["path"].as_str(),
                     at["namespace"].as_str(),
                     at["name"].as_str(),
                 ) {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO archive_tags (archive_id, tag_id)
-                         SELECT a.id, t.id FROM archives a, tags t
-                         WHERE a.path = ? AND t.namespace = ? AND t.name = ?",
-                        (path, namespace, name),
-                    )?;
+                    link_archive_tag.execute((path, namespace, name))?;
                 }
             }
         }
 
         // 重建档案-分类关联
         if let Some(archive_categories) = backup["archive_categories"].as_array() {
-            for ac in archive_categories {
-                if let (Some(path), Some(name)) = (ac["path"].as_str(), ac["name"].as_str()) {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO archive_categories (archive_id, category_id)
+            let mut link_archive_category = tx.prepare_cached(
+                "INSERT OR IGNORE INTO archive_categories (archive_id, category_id)
                          SELECT a.id, c.id FROM archives a, categories c
                          WHERE a.path = ? AND c.name = ?",
-                        (path, name),
-                    )?;
+            )?;
+            for ac in archive_categories {
+                if let (Some(path), Some(name)) = (ac["path"].as_str(), ac["name"].as_str()) {
+                    link_archive_category.execute((path, name))?;
                 }
             }
         }
 
         // 导入阅读历史（按 path 解析档案 id，恢复断点续读位置）
         if let Some(history) = backup["history"].as_array() {
+            let mut upsert_history = tx.prepare_cached(
+                "INSERT INTO history (archive_id, page_index, total_pages, updated_at)
+                         SELECT a.id, ?1, ?2, ?3 FROM archives a WHERE a.path = ?4
+                         ON CONFLICT(archive_id) DO UPDATE SET
+                            page_index = excluded.page_index,
+                            total_pages = excluded.total_pages,
+                            updated_at = excluded.updated_at",
+            )?;
             for h in history {
                 if let (Some(path), Some(page_index), Some(total_pages)) = (
                     h["path"].as_str(),
@@ -368,45 +376,36 @@ impl Database {
                     h["total_pages"].as_i64(),
                 ) {
                     let updated_at = h["updated_at"].as_str().unwrap_or_default();
-                    tx.execute(
-                        "INSERT INTO history (archive_id, page_index, total_pages, updated_at)
-                         SELECT a.id, ?1, ?2, ?3 FROM archives a WHERE a.path = ?4
-                         ON CONFLICT(archive_id) DO UPDATE SET
-                            page_index = excluded.page_index,
-                            total_pages = excluded.total_pages,
-                            updated_at = excluded.updated_at",
-                        (page_index, total_pages, updated_at, path),
-                    )?;
+                    upsert_history.execute((page_index, total_pages, updated_at, path))?;
                 }
             }
         }
 
         // 导入书签（按 path 解析档案 id；重复页会被 UNIQUE 忽略）
         if let Some(bookmarks) = backup["bookmarks"].as_array() {
+            let mut insert_bookmark = tx.prepare_cached(
+                "INSERT OR IGNORE INTO bookmarks (archive_id, page_index)
+                         SELECT a.id, ?2 FROM archives a WHERE a.path = ?1",
+            )?;
             for b in bookmarks {
                 if let (Some(path), Some(page_index)) =
                     (b["path"].as_str(), b["page_index"].as_i64())
                 {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO bookmarks (archive_id, page_index)
-                         SELECT a.id, ?2 FROM archives a WHERE a.path = ?1",
-                        (path, page_index),
-                    )?;
+                    insert_bookmark.execute((path, page_index))?;
                 }
             }
         }
 
         // Import settings（排除敏感项：防恶意备份把 server_bind 设 0.0.0.0 / 清空口令）
         if let Some(settings) = backup["settings"].as_object() {
+            let mut upsert_setting =
+                tx.prepare_cached("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")?;
             for (key, value) in settings {
                 if key == "server_token" || key == "server_bind" {
                     continue;
                 }
                 if let Some(v) = value.as_str() {
-                    tx.execute(
-                        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                        (key, v),
-                    )?;
+                    upsert_setting.execute((key, v))?;
                 }
             }
         }

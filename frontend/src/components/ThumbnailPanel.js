@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 // 缩略图面板：虚拟窗口渲染——格子的占位始终存在（撑出滚动条与滚动位置），
 // 只有进入可视范围 ±THUMB_OVERSCAN 的格子才真正挂载 <img>。
