@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import api from '../utils/api';
+import api, { invalidateLibrarySessions } from '../utils/api';
 
 const DEFAULT_INFO = { total: 0, done: 0, new: 0, changed: 0, skipped: 0, current: '', failed: [] };
 
@@ -45,6 +45,9 @@ export default function useSync({ settings, updateSetting, toast, onStatsRefresh
       if (!s.running) {
         if (syncPollRef.current) { clearInterval(syncPollRef.current); syncPollRef.current = null; }
         setSyncRunning(false);
+        // 同步任务结束的瞬间再失效一次：syncStart 只作废了“启动前”的缓存，
+        // 任务运行期间（可能数十秒）拉进来的新档案仍可能被旧缓存挡住。
+        invalidateLibrarySessions();
         api.getStats().then(onStatsRefresh).catch(() => {}); // 完成后刷新统计
       }
     } catch (e) { /* 轮询失败忽略，下一轮再试 */ }

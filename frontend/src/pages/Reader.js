@@ -84,6 +84,17 @@ export default function Reader() {
   const chapterEndFiredRef = useRef(false);
   // 页面原始尺寸缓存（id -> {w, h}）：跨页过宽判定使用，随图片加载记录
   const pageDimsRef = useRef({});
+  // 尺寸写入的版本号：ref 本身不触发重渲染，而 wideSpread 的 useMemo 又必须
+  // 在“新页尺寸到齐”后重算 —— 此前 useMemo 直接读 ref 且依赖里没有它，导致
+  // 双页模式下横版跨页几乎永远不会自动降级为单页（只有窗口 resize 才偶然生效）。
+  const [pageDimsVersion, setPageDimsVersion] = useState(0);
+  const recordPageDims = useCallback((id, w, h) => {
+    if (!id || !(w > 0) || !(h > 0)) return;
+    const prev = pageDimsRef.current[id];
+    if (prev && prev.w === w && prev.h === h) return; // 尺寸未变不触发重渲染
+    pageDimsRef.current[id] = { w, h };
+    setPageDimsVersion(v => v + 1);
+  }, []);
   // “跨页过宽→自动单页”提示：每次换档只弹一次
   const wideHintShownRef = useRef(false);
 
@@ -116,14 +127,14 @@ export default function Reader() {
     const p = pages[idx];
     if (p) {
       loadedPageIdsRef.current.add(p.id); // 长图模式看过的页同样记为已就绪
-      if (nw > 0 && nh > 0) pageDimsRef.current[p.id] = { w: nw, h: nh };
+      recordPageDims(p.id, nw, nh);
     }
     setPageHeights(prev => {
       const prevH = prev[idx];
       if (prevH && Math.abs(prevH - height) < 4) return prev;
       return { ...prev, [idx]: height };
     });
-  }, [pages]);
+  }, [pages, recordPageDims]);
 
   // 高度前缀和：pageHeights 变化时重建（O(n)，只发生在图片加载时），
   // 滚动帧里取任意区间高度都是 O(1)，不再每帧做两次 O(n) 累加。
@@ -760,7 +771,8 @@ export default function Reader() {
     if (!dims) return false;
     const otherDims = other ? pageDimsRef.current[other.id] || null : null;
     return spreadTooWide(dims, otherDims, readerSize, { gap: 4, minPageRatio: WIDE_SPREAD_MIN_PAGE_RATIO });
-  }, [doublePage, autoSingleWide, fitMode, pages, currentIndex, readerSize]);
+    // pageDimsVersion：尺寸写入 ref 后用版本号触发重算（见 recordPageDims 注释）
+  }, [doublePage, autoSingleWide, fitMode, pages, currentIndex, readerSize, pageDimsVersion]);
 
   // 首次触发过宽降级时提示一次（换档后复位），避免用户困惑“为什么双页变单页了”
   useEffect(() => {
@@ -1014,7 +1026,7 @@ export default function Reader() {
                     style={{ ...imgStyle, transition: 'opacity 0.2s ease' }}
                     onLoad={(e) => {
                       const el = e.currentTarget;
-                      if (el.naturalWidth > 0) pageDimsRef.current[p.id] = { w: el.naturalWidth, h: el.naturalHeight };
+                      if (el.naturalWidth > 0) recordPageDims(p.id, el.naturalWidth, el.naturalHeight);
                       loadedPageIdsRef.current.add(p.id);
                       setDoubleLoaded(true);
                     }}
@@ -1051,7 +1063,7 @@ export default function Reader() {
                 const el = e.currentTarget;
                 const p0 = pages[currentIndex];
                 if (p0) {
-                  if (el.naturalWidth > 0) pageDimsRef.current[p0.id] = { w: el.naturalWidth, h: el.naturalHeight };
+                  if (el.naturalWidth > 0) recordPageDims(p0.id, el.naturalWidth, el.naturalHeight);
                   loadedPageIdsRef.current.add(p0.id);
                 }
                 setImageLoaded(true);

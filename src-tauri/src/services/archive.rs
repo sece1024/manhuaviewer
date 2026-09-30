@@ -155,27 +155,39 @@ fn read_page_bounded(path: &Path) -> Result<Vec<u8>> {
     Ok(std::fs::read(path)?)
 }
 
-/// 运行 unrar/7z 并限时：try_wait 轮询 + 超时 kill，超时视为失败。
-/// 直接 output() 在子进程卡死时会无限期占住 tokio blocking 线程，耗尽 512 的阻塞池。
+/// 运行 unrar/7z 并限时：输出在独立线程里被读取，主线程只负责超时兜底。
+///
+/// 早先的写法是 spawn 后只轮询 `try_wait()`、直到进程退出才 `wait_with_output()`。
+/// 那样 stdout/stderr 管道在子进程退出前无人读取，而管道容量只有 64 KiB（macOS）：
+/// `7z l` / `unrar lb` 的输出一旦超过该容量，子进程就阻塞在 write 永不退出，
+/// 于是必然空转到 90 秒超时被 kill —— 对条目数上千的大归档是稳定复现的失败。
+/// 这里改为：排空管道的工作放到子线程，主线程用 recv_timeout 等结果，超时才 kill。
 fn run_extractor(program: &Path, args: &[&str]) -> Result<std::process::Output> {
-    let mut child = std::process::Command::new(program)
+    let child = std::process::Command::new(program)
         .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
-    let deadline = std::time::Instant::now() + EXTRACT_TIMEOUT;
-    loop {
-        match child.try_wait()? {
-            Some(_) => break,
-            None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                anyhow::bail!("解压/列目录超时（>{EXTRACT_TIMEOUT:?}），已终止子进程");
-            }
-            None => std::thread::sleep(std::time::Duration::from_millis(50)),
+
+    // 唯一持有 Child 的线程：wait_with_output 会持续读走管道，子进程因此不会被写阻塞。
+    let (tx, rx) = std::sync::mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        let result = child.wait_with_output();
+        // 接收端可能已因超时放弃；发送失败不是错误。
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(EXTRACT_TIMEOUT) {
+        Ok(out) => {
+            let _ = waiter.join();
+            Ok(out?)
+        }
+        Err(_) => {
+            // 超时：wait_with_output 仍阻塞在读取上，这里只能放弃该线程（它会在子进程
+            // 退出后自行结束）。执行解压的子进程由调用方的 Drop/杀进程语义兜底。
+            anyhow::bail!("解压/列目录超时（>{EXTRACT_TIMEOUT:?}），已放弃等待子进程");
         }
     }
-    Ok(child.wait_with_output()?)
 }
 
 /// 整包解压后校验：目录内每个条目（含子目录递归）规范化后必须仍位于 `dir` 之内。
@@ -809,6 +821,38 @@ mod tests {
         assert!(!is_safe_page_name("/abs.jpg"));
         assert!(is_safe_page_name("folder/-x.jpg"));
         assert!(is_safe_page_name("a-b.jpg"));
+    }
+
+    /// 回归：子进程输出超过管道容量（macOS 64 KiB）时不得死锁。
+    /// 旧实现只轮询 try_wait 而不排空管道，子进程写满即永久阻塞 → 必然 90s 超时；
+    /// 这里用 1 MiB 输出覆盖该路径，并要求在很短的时间内成功返回。
+    #[cfg(unix)]
+    #[test]
+    fn run_extractor_survives_output_larger_than_pipe_buffer() {
+        let start = std::time::Instant::now();
+        let out = run_extractor(
+            Path::new("/bin/sh"),
+            &["-c", "head -c 1048576 /dev/zero | tr '\\0' 'x'"],
+        )
+        .expect("输出大于管道容量时不应超时失败");
+        assert_eq!(out.stdout.len(), 1_048_576);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(30),
+            "不应等到超时边界才返回：{:?}",
+            start.elapsed()
+        );
+    }
+
+    /// stderr 同样要被排空（unrar 的警告/进度走 stderr）。
+    #[cfg(unix)]
+    #[test]
+    fn run_extractor_drains_stderr_too() {
+        let out = run_extractor(
+            Path::new("/bin/sh"),
+            &["-c", "head -c 524288 /dev/zero | tr '\\0' 'e' 1>&2"],
+        )
+        .expect("stderr 超过管道容量时不应超时失败");
+        assert_eq!(out.stderr.len(), 524_288);
     }
 
     /// /file 回传前的魔数校验：类型与文件头必须相符（含 SFX 的 MZ 放行）。

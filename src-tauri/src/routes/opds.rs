@@ -58,6 +58,10 @@ pub struct OpdsQuery {
     pub limit: Option<i64>,
 }
 
+/// OPDS 目录单页上限：阅读器正常只取 20–50 条；未钳制时 `?limit=` 超大值会让
+/// SQLite 物化全表并逐条拼 XML（该入口在局域网内对 `?token=` 客户端可达）。
+const OPDS_MAX_LIMIT: i64 = 200;
+
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -222,9 +226,8 @@ pub async fn catalog(
     State(state): State<Arc<AppState>>,
     Query(query): Query<OpdsQuery>,
 ) -> Response {
-    let page = query.page.unwrap_or(1);
-    let limit = query.limit.unwrap_or(20);
-    let offset = (page - 1) * limit;
+    // 与 /api/archives 共用同一套钳制：外部可控的分页参数不能直接进 SQL
+    let (_page, limit, offset) = super::clamp_pagination(query.page, query.limit, OPDS_MAX_LIMIT);
 
     match run_db(&state, move |db| {
         db.list_archives(

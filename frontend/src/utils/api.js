@@ -33,6 +33,10 @@ function fixUrl(url) {
 }
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 500; // 500ms base delay
+// 请求超时：没有超时时，一次挂起的请求会让 _inflight 里的同 URL 条目永不 settle，
+// 之后所有同 URL 的 GET 都复用那个永不 resolve 的 promise（书库会永久停在“加载中”）。
+const REQUEST_TIMEOUT = 30_000; // 普通请求（含写操作）
+const GET_TIMEOUT = 15_000;     // GET 会重试，单次超时放短一些
 
 // --- GET 请求内存缓存 ---
 // 缓存以 request() 收到的相对路径为 key（如 '/archives?limit=50&page=1'），
@@ -174,8 +178,14 @@ async function request(url, options = {}) {
 
 async function _doFetch(url, options, maxAttempts) {
   let lastError;
+  const timeoutMs = options.method && options.method !== 'GET' ? REQUEST_TIMEOUT : GET_TIMEOUT;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // 每次尝试独立的超时控制器；AbortSignal.timeout 在旧 WebView 上可能缺失，故手写兜底
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller
+      ? setTimeout(() => controller.abort(new Error('Request timeout')), timeoutMs)
+      : null;
     try {
       const res = await fetch(`${BASE}${url}`, {
         method: options.method || 'GET',
@@ -184,6 +194,7 @@ async function _doFetch(url, options, maxAttempts) {
           ...(_serverToken ? { Authorization: `Bearer ${_serverToken}` } : {}),
         },
         ...(options.body ? { body: options.body } : {}),
+        ...(controller ? { signal: controller.signal } : {}),
       });
       if (!res.ok) {
         // 401 = 局域网口令缺失/错误：让 App 弹出口令输入（桌面端回环请求不会 401）
@@ -193,22 +204,28 @@ async function _doFetch(url, options, maxAttempts) {
           } catch (e) { /* 忽略 */ }
         }
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
+        // 带上状态码：调用方需要区分 404（档案已删）与 5xx（后端异常）
+        const httpErr = new Error(body.error || `HTTP ${res.status}`);
+        httpErr.status = res.status;
+        throw httpErr;
       }
       return res.json();
     } catch (err) {
       lastError = err;
 
-      // Only retry on connection errors for idempotent requests
-      if (maxAttempts > 1 && attempt < maxAttempts - 1 &&
-          (err.message.includes('Failed to fetch') ||
-           err.message.includes('ECONNREFUSED') ||
-           err.message.includes('NetworkError'))) {
+      // 仅对幂等请求重试：连接层错误，或后端暂时不可用（502/503/504/429）
+      const status = err && err.status;
+      const retriable = status === undefined
+        ? /Failed to fetch|ECONNREFUSED|NetworkError|Timeout|aborted/i.test(String(err && err.message || err))
+        : status === 429 || status >= 500;
+      if (maxAttempts > 1 && attempt < maxAttempts - 1 && retriable) {
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (attempt + 1)));
         continue;
       }
 
       throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -335,7 +352,16 @@ const api = {
     }),
 
   // 跨机同步（详见“设置 → 同步”）
-  syncStart: (payload) => request('/sync/start', { method: 'POST', body: JSON.stringify(payload) }),
+  // 跨机同步（详见“设置 → 同步”）。同步会拉入新档案并回推标签镜像，
+  // 故启动时即作废列表类缓存；同步真正结束的瞬间还会再失效一次（见 useSync）。
+  syncStart: (payload) =>
+    request('/sync/start', { method: 'POST', body: JSON.stringify(payload) }).then(r => {
+      _invalidate('/archives');
+      _invalidate('/tags');
+      _invalidate('/categories');
+      _invalidate('/history');
+      return r;
+    }),
   syncPlan: (payload) => request('/sync/plan', { method: 'POST', body: JSON.stringify(payload) }),
   syncStatus: () => request('/sync/status', { cache: false }),
   syncCancel: () => request('/sync/cancel', { method: 'POST' }),

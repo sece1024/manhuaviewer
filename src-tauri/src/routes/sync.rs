@@ -469,6 +469,18 @@ fn cleanup_sync_tmp(data_dir: &Path) {
     }
 }
 
+/// 任务结束（含 panic）时统一清 running/cancel，避免异常退出后永远 409。
+/// 与 scan.rs / convert.rs 的同名守卫一致：run_sync_job 内有十余处 Mutex 临界区，
+/// 任一处 panic 都会让线程带着 running=true 退出，此后 /api/sync/start 恒 409。
+struct SyncEndGuard(Arc<SyncJob>);
+
+impl Drop for SyncEndGuard {
+    fn drop(&mut self) {
+        self.0.running.store(false, Ordering::SeqCst);
+        self.0.cancel.store(false, Ordering::SeqCst);
+    }
+}
+
 fn run_sync_job(
     db: Arc<crate::db::Database>,
     data_dir: PathBuf,
@@ -477,6 +489,7 @@ fn run_sync_job(
     token: String,
     dir: String,
 ) {
+    let _guard = SyncEndGuard(job.clone());
     job.running.store(true, Ordering::SeqCst);
     let sync_dir = PathBuf::from(&dir);
 

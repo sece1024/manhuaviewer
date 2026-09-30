@@ -33,6 +33,20 @@ pub fn internal_error(err: impl std::fmt::Display) -> Response {
     error_response(StatusCode::INTERNAL_SERVER_ERROR, "服务器内部错误")
 }
 
+/// 分页参数归一：`page` 至少为 1，`limit` 收敛到 [1, max]，偏移量用 checked_mul
+/// 防溢出。`/api/archives` 与 `/opds/catalog` 共用——后者此前完全没校验，
+/// `?page=0` 会算出负 OFFSET，超大的 page/limit 在 debug 下还会让乘法 panic。
+pub(crate) fn clamp_pagination(
+    page: Option<i64>,
+    limit: Option<i64>,
+    max_limit: i64,
+) -> (i64, i64, i64) {
+    let page = page.unwrap_or(1).max(1);
+    let limit = limit.unwrap_or(20).clamp(1, max_limit.max(1));
+    let offset = page.saturating_sub(1).saturating_mul(limit);
+    (page, limit, offset)
+}
+
 /// 局域网（非回环）环境下敏感的设置项：不出现在备份/恢复与 API 响应里。
 pub(crate) const LAN_SENSITIVE_SETTINGS: &[&str] = &["server_token", "server_bind"];
 
@@ -497,6 +511,28 @@ pub fn create_router(state: AppState) -> Router {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// 分页钳制：外部可控参数（OPDS 的 ?page=/?limit= 尤其）不得直接进 SQL。
+    #[test]
+    fn clamp_pagination_bounds_external_input() {
+        // 缺省值
+        assert_eq!(clamp_pagination(None, None, 500), (1, 20, 0));
+        // page=0 / 负数 → 归一到第一页，偏移不为负（此前 OPDS 会算出负 OFFSET）
+        assert_eq!(clamp_pagination(Some(0), Some(20), 500), (1, 20, 0));
+        assert_eq!(clamp_pagination(Some(-5), None, 500), (1, 20, 0));
+        // limit 上限收敛、下限收敛
+        assert_eq!(clamp_pagination(Some(1), Some(999_999), 500), (1, 500, 0));
+        assert_eq!(clamp_pagination(Some(1), Some(0), 500), (1, 1, 0));
+        assert_eq!(clamp_pagination(Some(1), Some(-3), 500), (1, 1, 0));
+        // 正常翻页
+        assert_eq!(clamp_pagination(Some(3), Some(50), 500), (3, 50, 100));
+        // 极端值不 panic、不溢出（debug 下裸乘法曾经会 panic）
+        let (page, limit, offset) = clamp_pagination(Some(i64::MAX), Some(i64::MAX), 500);
+        assert_eq!(page, i64::MAX);
+        assert_eq!(limit, 500);
+        assert_eq!(offset, (i64::MAX - 1).saturating_mul(500));
+        assert!(offset >= 0);
+    }
 
     /// 用给定的 DB 与数据目录起一个真实的 Axum 服务，返回端口；用裸 TCP 发请求，
     /// 避免引入 HTTP 客户端依赖。便于在启动前预置种子数据。

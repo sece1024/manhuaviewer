@@ -7,7 +7,7 @@ import useSettings from './hooks/useSettings';
 import { TagsProvider } from './hooks/useTags';
 import ErrorBoundary from './components/ErrorBoundary';
 import Modal from './components/Modal';
-import api, { localStorageGet, localStorageSet } from './utils/api';
+import api, { localStorageGet, localStorageSet, setServerToken } from './utils/api';
 
 // 非首屏页面按需加载，减小首屏 bundle
 const Reader = lazy(() => import('./pages/Reader'));
@@ -41,7 +41,9 @@ function AppContent() {
   const handleTokenSubmit = () => {
     const token = tokenInput.trim();
     if (!token) return;
-    api.setServerToken(token);
+    // 注意：setServerToken 是具名导出，不在 api 默认导出对象上（此前写成 api.setServerToken
+    // 会抛 TypeError，导致口令保存与随后的 reload 都不执行）
+    setServerToken(token);
     // 刷新使所有请求带上 Authorization 头，并重置缓存/页面状态
     window.location.reload();
   };
