@@ -25,6 +25,9 @@ function AppContent() {
   // localStorage 读取走 try/catch（隐私模式/存储禁用时不抛错，回退默认主题）
   const [theme, setTheme] = useState(() => localStorageGet('theme') || 'dark');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // 侧边栏收起：iPad/小屏上 240px 的导航栏会吃掉近三成宽度，收成图标窄栏把空间还给内容。
+  // 纯客户端偏好（按设备记忆）：iPad 需要收，桌面外接大屏往往不需要，放服务端设置反而别扭。
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorageGet('sidebar_collapsed') === '1');
   const location = useLocation();
   const { settings } = useSettings();
   const [lanUrls, setLanUrls] = useState([]);
@@ -64,8 +67,13 @@ function AppContent() {
 
   useEffect(() => { setSidebarOpen(false); }, [location.pathname]);
 
-  // 阅读器全屏沉浸：底部导航在 reader 路由下隐藏（工具栏自带"← 返回书库"）
+  // 阅读器全屏沉浸：底部导航与侧边栏都隐藏，整块屏幕留给漫画（工具栏自带"← 返回书库"）
   const isReader = location.pathname.startsWith('/reader/');
+
+  // 收起状态按设备记忆（与主题同为纯客户端偏好）
+  useEffect(() => {
+    localStorageSet('sidebar_collapsed', sidebarCollapsed ? '1' : '0');
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
     const mainEl = document.querySelector('.main-content');
@@ -78,26 +86,38 @@ function AppContent() {
   }, [theme]);
 
   return (
-    <div className="app-layout">
+    <div className={`app-layout ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${isReader ? 'reader-immersive' : ''}`}>
       <div
         className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`}
         onClick={() => setSidebarOpen(false)}
       />
 
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        <div className="sidebar-brand">Manga<span>Viewer</span></div>
+        <div className="sidebar-top">
+          <div className="sidebar-brand">Manga<span>Viewer</span></div>
+          <button
+            type="button"
+            className="sidebar-toggle"
+            onClick={() => setSidebarCollapsed(v => !v)}
+            aria-label={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+            aria-expanded={!sidebarCollapsed}
+            title={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏，腾出更多阅读空间'}
+          >
+            {sidebarCollapsed ? '»' : '«'}
+          </button>
+        </div>
         <nav className="sidebar-nav">
-          <NavLink to="/" end>
+          <NavLink to="/" end aria-label="漫画库">
             <span className="nav-icon">📚</span>
-            <span>漫画库</span>
+            <span className="nav-label">漫画库</span>
           </NavLink>
-          <NavLink to="/history">
+          <NavLink to="/history" aria-label="历史">
             <span className="nav-icon">📖</span>
-            <span>历史</span>
+            <span className="nav-label">历史</span>
           </NavLink>
-          <NavLink to="/settings">
+          <NavLink to="/settings" aria-label="设置">
             <span className="nav-icon">⚙️</span>
-            <span>设置</span>
+            <span className="nav-label">设置</span>
           </NavLink>
         </nav>
         <div className="sidebar-footer">

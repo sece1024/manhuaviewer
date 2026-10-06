@@ -23,6 +23,7 @@
   --radius-xs: 6px;
   --radius-full: 999px;
   --sidebar-width: 240px;
+  --sidebar-rail-width: 56px; /* 收起态：只留图标窄栏（≥44px 触摸目标） */
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
   --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
@@ -163,13 +164,23 @@ body {
   flex-direction: column;
   flex-shrink: 0;
   z-index: 30;
+  /* 收起/展开时宽度过渡：窄栏里的图标会跟着横向滑入滑出 */
+  transition: width 0.18s var(--ease-out);
+}
+
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 12px 10px 20px;
 }
 
 .sidebar-brand {
-  padding: 20px 20px 16px;
   font-size: 20px;
   font-weight: 800;
   letter-spacing: -0.5px;
+  min-width: 0;
+  white-space: nowrap;
   background: linear-gradient(120deg, var(--text-primary), var(--accent));
   -webkit-background-clip: text;
   background-clip: text;
@@ -177,6 +188,40 @@ body {
   color: var(--text-primary);
 }
 .sidebar-brand span { color: var(--accent); -webkit-text-fill-color: var(--accent); }
+
+/* 收起/展开侧边栏：iPad 上用满屏宽的关键按钮 */
+.sidebar-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out);
+}
+.sidebar-toggle:hover { color: var(--text-primary); border-color: var(--accent); }
+.sidebar-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 收起态：240px 导航栏 → 56px 图标窄栏，内容区（阅读区）拿到多出来的宽度 */
+.app-layout.sidebar-collapsed .sidebar { width: var(--sidebar-rail-width); }
+.app-layout.sidebar-collapsed .sidebar .sidebar-brand,
+.app-layout.sidebar-collapsed .sidebar .nav-label,
+.app-layout.sidebar-collapsed .sidebar .sidebar-footer { display: none; }
+.app-layout.sidebar-collapsed .sidebar .sidebar-top { padding: 12px 0; justify-content: center; }
+.app-layout.sidebar-collapsed .sidebar .sidebar-toggle { margin-left: 0; }
+.app-layout.sidebar-collapsed .sidebar .sidebar-nav { padding: 4px; }
+.app-layout.sidebar-collapsed .sidebar .sidebar-nav a { justify-content: center; padding: 10px 0; }
+
+/* 阅读器：整条侧边栏隐藏（工具栏自带“← 返回书库”），屏幕全部留给漫画 */
+.app-layout.reader-immersive .sidebar { display: none; }
 
 .sidebar-nav { flex: 1; padding: 4px 8px; }
 .sidebar-nav a {
@@ -1587,6 +1632,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   .sidebar.open { transform: translateY(0); }
 
   .sidebar-brand, .sidebar-footer { display: none; }
+  /* 手机端侧边栏是底部抽屉（导航另有底部栏），不收窄栏；收起偏好不影响抽屉宽度 */
+  .sidebar-top { display: none; }
+  .app-layout.sidebar-collapsed .sidebar { width: 100%; }
   .sidebar-nav {
     display: flex;
     flex: 1;
