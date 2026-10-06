@@ -24,12 +24,27 @@ export const getServerToken = () => _serverToken;
 export function setServerToken(token) {
   _serverToken = (token || '').trim();
   localStorageSet(TOKEN_KEY, _serverToken);
+  // 换口令后不复用旧缓存（图片 URL 后缀也随之变化）
+  _resetCache();
 }
 
-// 将后端返回的相对路径 URL 补全为可用的绝对 URL
-function fixUrl(url) {
-  if (!API_ORIGIN || !url || !url.startsWith('/')) return url;
-  return `${API_ORIGIN}${url}`;
+// 图片 URL（封面 / 逐页图片 / 缩略图）。
+//
+// 为什么口令要拼进查询串：`<img>` 与 `new Image()` 由浏览器原生发起，**无法**携带
+// Authorization 头；而局域网口令模式（server_token 非空）下非回环的**一切** /api 请求
+// 都要校验口令 —— 于是 iPad 上表现为「书库能打开、封面全空、点进去图片加载失败」，
+// 因为封面/逐页图片请求全是 401。后端 token_authorized 本就接受 ?token=，
+// OPDS 站内链接用的是同一套透传（routes/mod.rs::opds_rewrite_token_links）。
+//
+// 只对本站 API 图片（/api/...）拼接：远程封面等 http(s) 外链保持原样，否则等于把
+// 口令泄露给第三方站点。未配置口令时 URL 完全不变（单机桌面端行为不受影响）。
+function imageUrl(url) {
+  if (!url) return url;
+  // 生产桌面端（Tauri 资源协议）需要绝对地址；浏览器/LAN 场景保持相对路径
+  const abs = API_ORIGIN && url.startsWith('/') ? `${API_ORIGIN}${url}` : url;
+  const isOwnApi = abs.startsWith('/api/') || (API_ORIGIN !== '' && abs.startsWith(`${API_ORIGIN}/api/`));
+  if (!isOwnApi || !_serverToken) return abs;
+  return `${abs}${abs.includes('?') ? '&' : '?'}token=${encodeURIComponent(_serverToken)}`;
 }
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 500; // 500ms base delay
@@ -128,6 +143,15 @@ function _invalidate(pattern) {
   }
   // 档案成员集合可能已变化：浏览会话不能再用旧列表秒开
   if (_matchesPattern('/archives', pattern)) _membershipGeneration += 1;
+}
+
+/// 整表作废客户端 GET 缓存（换局域网口令时用）。
+/// 注意 _invalidate 的匹配规则是「端点 + '/' 或 '?'」，传 '/' 并不会清空所有键，
+/// 因此这里直接清表 + 递增代数（让在途响应不再回写）。
+function _resetCache() {
+  _generation += 1;
+  _cache.clear();
+  _inflight.clear();
 }
 
 /// 只失效“端点本身及其查询串”的缓存（不含子路径）。
@@ -269,7 +293,7 @@ const api = {
   getArchives: (params = {}) => {
     const qs = new URLSearchParams(params).toString();
     return request(`/archives${qs ? '?' + qs : ''}`).then(archives =>
-      archives.map(a => ({ ...a, cover_url: a.cover_url ? fixUrl(a.cover_url) : `${BASE}/archives/${a.id}/cover` }))
+      archives.map(a => ({ ...a, cover_url: imageUrl(a.cover_url || `/api/archives/${a.id}/cover`) }))
     );
   },
   // 按添加日期的年/月聚合（侧栏"日期"树）。缓存键 /archives/added-tree 落在
@@ -277,7 +301,7 @@ const api = {
   getAddedTree: () => request('/archives/added-tree'),
   getPages: (archiveId) => request(`/archives/${archiveId}/pages`).then(data => ({
     ...data,
-    pages: data.pages.map(p => ({ ...p, url: fixUrl(p.url), thumb_url: fixUrl(p.thumb_url) })),
+    pages: data.pages.map(p => ({ ...p, url: imageUrl(p.url), thumb_url: imageUrl(p.thumb_url) })),
   })),
   // 阅读书签（档案内任意页码）
   getBookmarks: (archiveId) =>
@@ -314,18 +338,18 @@ const api = {
       .then(r => { _invalidate('/archives'); return r; }),
   getGroupChapters: (groupId) =>
     request(`/archives?group_id=${groupId}`).then(archives =>
-      archives.map(a => ({ ...a, cover_url: a.cover_url ? fixUrl(a.cover_url) : `${BASE}/archives/${a.id}/cover` }))
+      archives.map(a => ({ ...a, cover_url: imageUrl(a.cover_url || `/api/archives/${a.id}/cover`) }))
     ),
   getArchivesByTitle: (title, parent) =>
     request(`/archives?title=${encodeURIComponent(title)}&parent=${encodeURIComponent(parent || '')}`).then(archives =>
-      archives.map(a => ({ ...a, cover_url: a.cover_url ? fixUrl(a.cover_url) : `${BASE}/archives/${a.id}/cover` }))
+      archives.map(a => ({ ...a, cover_url: imageUrl(a.cover_url || `/api/archives/${a.id}/cover`) }))
     ),
 
   // History
   getHistory: (params = {}) => {
     const qs = new URLSearchParams(params).toString();
     return request(`/history${qs ? '?' + qs : ''}`).then(res => ({
-      items: (res.items || []).map(h => ({ ...h, cover_url: fixUrl(h.cover_url) })),
+      items: (res.items || []).map(h => ({ ...h, cover_url: imageUrl(h.cover_url) })),
       total: res.total ?? 0,
     }));
   },

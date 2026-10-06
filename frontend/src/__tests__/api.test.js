@@ -102,3 +102,71 @@ describe('api.js 请求行为', () => {
     expect(opts.signal).toBeDefined();
   });
 });
+
+// 局域网口令模式下 <img>/new Image() 无法携带 Authorization 头，图片请求会全部 401，
+// 表现为「书库能打开、封面全空、点进去图片加载失败」。修复方式是把口令拼进图片 URL
+// 的查询串（后端与 OPDS 都支持 ?token=）。
+describe('api.js 局域网图片 URL 透传口令', () => {
+  beforeEach(() => {
+    setServerToken('');
+  });
+  afterEach(() => {
+    setServerToken(''); // 顺带清空 GET 缓存，避免污染其它用例
+  });
+
+  test('配置口令后封面 URL 带 ?token=；远程封面外链不带（不泄露给第三方）', async () => {
+    global.fetch = jest.fn(() => okJson([
+      { id: 7, title: '有封面', cover_url: '/api/archives/7/cover' },
+      { id: 8, title: '无封面', cover_url: null },
+      { id: 9, title: '远程封面', cover_url: 'https://remote.example/c.jpg' },
+    ]));
+    setServerToken('lan-token');
+
+    const list = await api.getArchives();
+    expect(list[0].cover_url).toBe('/api/archives/7/cover?token=lan-token');
+    // 后端未给 cover_url 时前端回退到封面端点，同样要带口令
+    expect(list[1].cover_url).toBe('/api/archives/8/cover?token=lan-token');
+    expect(list[2].cover_url).toBe('https://remote.example/c.jpg');
+  });
+
+  test('未配置口令时图片 URL 保持原样（单机桌面端行为不变）', async () => {
+    global.fetch = jest.fn(() => okJson([
+      { id: 7, title: '有封面', cover_url: '/api/archives/7/cover' },
+    ]));
+
+    const list = await api.getArchives();
+    expect(list[0].cover_url).toBe('/api/archives/7/cover');
+  });
+
+  test('逐页图片与缩略图同样带口令（iPad 阅读区「图片加载失败」的根因）', async () => {
+    global.fetch = jest.fn(() => okJson({
+      archive: { id: 3, title: '测试' },
+      pages: [{
+        id: 0,
+        filename: 'a.jpg',
+        url: '/api/archives/3/pages/0',
+        thumb_url: '/api/archives/3/pages/0/thumb',
+      }],
+      read_page: 0,
+    }));
+    setServerToken('lan-token');
+
+    const { pages } = await api.getPages(3);
+    expect(pages[0].url).toBe('/api/archives/3/pages/0?token=lan-token');
+    expect(pages[0].thumb_url).toBe('/api/archives/3/pages/0/thumb?token=lan-token');
+  });
+
+  test('换口令后缓存作废：封面 URL 立即用新口令重新拉取，不会沿用旧口令', async () => {
+    global.fetch = jest.fn(() => okJson([
+      { id: 7, title: '有封面', cover_url: '/api/archives/7/cover' },
+    ]));
+
+    setServerToken('old-token');
+    expect((await api.getArchives())[0].cover_url).toBe('/api/archives/7/cover?token=old-token');
+
+    const callsBefore = global.fetch.mock.calls.length;
+    setServerToken('new-token');
+    expect((await api.getArchives())[0].cover_url).toBe('/api/archives/7/cover?token=new-token');
+    expect(global.fetch.mock.calls.length).toBe(callsBefore + 1); // 缓存已作废，重新请求
+  });
+});
