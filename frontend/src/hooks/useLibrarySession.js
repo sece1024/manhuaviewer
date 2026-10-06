@@ -27,6 +27,8 @@ export function clearLibrarySessions() {
  * 会话“恢复”留在组件里（它需要写一堆筛选 state 与 ref），本 hook 负责会话的
  * 产生与维护：
  * - `snapshot`：组件渲染时传入的最新状态对象；内部以 effect 每帧镜像。
+ * - `listScrollEl`：列表容器元素（回调 ref 提供）；滚动时把位置镜像进 ref —— 卸载清理里
+ *   React 已把 ref 置 null，读 DOM 只会拿到 0（见下方 scrollPosRef 注释）。
  * - 卸载时把镜像 + 滚动位置写入 `librarySessions[mode]`。
  * - `reconcileLibrary(s)`：与会话“已加载窗口”做成员集合对比——只有成员集合变化
  *   （档案增删/替换）才整体刷新；顺序变化（典型：读完一本后它在“最近阅读”排序
@@ -37,6 +39,7 @@ export default function useLibrarySession({
   mode,
   sessionEnabled,
   listScrollRef,
+  listScrollEl,
   snapshot,
   filterRefs,
   pageRef,
@@ -52,6 +55,46 @@ export default function useLibrarySession({
     latestStateRef.current = snapshot;
   });
 
+  // 滚动位置镜像：**必须边滚边抓**。组件卸载时 React 会在 commit 阶段先把 ref 置 null，
+  // passive cleanup（useEffect 清理）随后才执行，那时 listScrollRef.current 已经是 null
+  // —— 这就是此前 scrollTop 恒为 0、"退出阅读器回到书库跳回顶部"的原因。
+  const scrollPosRef = useRef({ list: 0, main: 0 });
+
+  useEffect(() => {
+    const el = listScrollEl;
+    if (!el) return undefined;
+    // 宽屏（>768px，含 iPad 横竖屏）：.library-main 自己滚；
+    // 窄屏（手机 / iPad 分屏）：.library-layout 高度自适应，滚动发生在 .main-content。
+    // 两个容器都记，恢复时都写回（写不动的那个会被浏览器钳成 0，无副作用）。
+    const main = el.closest('.main-content');
+    const onScroll = () => {
+      scrollPosRef.current = { list: el.scrollTop, main: main ? main.scrollTop : 0 };
+    };
+    // 注意不要在这里读一次初值：恢复会话时镜像已被 restoreScroll 设成目标位置，
+    // 而此刻 DOM 还没滚过去（rAF 未执行），读初值会把镜像又抹回 0
+    el.addEventListener('scroll', onScroll, { passive: true });
+    if (main) main.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      if (main) main.removeEventListener('scroll', onScroll);
+    };
+  }, [listScrollEl]);
+
+  /// 恢复会话里的滚动位置（组件在恢复会话时调用）。
+  /// DOM 与镜像一起写：部分环境（jsdom、个别 WebView）程序化设 scrollTop 不派发
+  /// scroll 事件，只写 DOM 的话，"恢复后没再滚动就退出"会把位置重新存成 0。
+  const restoreScroll = useCallback((pos) => {
+    if (!pos) return;
+    scrollPosRef.current = { list: pos, main: pos };
+    requestAnimationFrame(() => {
+      const el = listScrollRef.current;
+      if (el) el.scrollTop = pos;
+      // 窄屏（≤768px）滚动发生在 .main-content；宽屏下它没有溢出，写入会被钳成 0
+      const main = document.querySelector('.main-content');
+      if (main) main.scrollTop = pos;
+    });
+  }, [listScrollRef]);
+
   // 会话恢复后是否已通过后台比对确认过：未确认前不允许把当前列表写回会话。
   // 否则“恢复旧列表 → 比对尚未返回就切走页面”会把可能已陈旧的列表重新固化进会话，
   // 让已被删除的档案在每次往返中复活。无会话可恢复（首次加载）时直接视为已确认。
@@ -62,12 +105,13 @@ export default function useLibrarySession({
     return () => {
       if (!sessionEnabled) return;
       if (!sessionVerifiedRef.current) return; // 未经比对确认的列表不写回，避免固化陈旧数据
-      const el = listScrollRef.current;
       const st = latestStateRef.current;
       if (st && st.archives && st.archives.length > 0) {
+        const pos = scrollPosRef.current;
         librarySessions[mode] = {
           ...st,
-          scrollTop: el ? el.scrollTop : 0,
+          // 真正滚动的那一个（另一个恒为 0）；两者都为 0 时就是 0
+          scrollTop: pos.list || pos.main,
           generation: membershipGeneration(),
         };
       }
@@ -140,5 +184,5 @@ export default function useLibrarySession({
     sessionVerifiedRef.current = true;
   }, []);
 
-  return { librarySessions, reconcileLibrary, markSessionVerified, sessionIsStale };
+  return { librarySessions, reconcileLibrary, markSessionVerified, sessionIsStale, restoreScroll };
 }

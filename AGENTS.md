@@ -91,6 +91,7 @@ Versions live in three places and must be kept in sync: `package.json`, `src-tau
 - Tauri uses the system WebView — CSS/JS quirks vary across platforms; test on each target.
 - The CSP in `src-tauri/tauri.conf.json` allows `unsafe-inline` for the bundled runtime and adds `object-src 'none'`/`base-uri 'none'`/`frame-ancestors 'none'`; only tighten further after testing the dev build.
 - `pnpm tauri dev` already runs `beforeDevCommand` (`pnpm --filter manhuaviewer-frontend start`) — do not start the Vite dev server manually alongside it.
+- **React nulls DOM refs before passive-effect cleanup**: on unmount, a `useEffect` cleanup reading `someRef.current` already sees `null` (refs are detached during the commit, passive destroys run later). Anything that must survive unmount — e.g. the library scroll position — has to be mirrored into a ref **while it changes** (see `useLibrarySession`'s `scrollPosRef` + `restoreScroll`); reading the node in the cleanup silently stores 0 and the page jumps back to the top.
 - `data_dir` and the DB file are created on first run; deleting `manhuaviewer.db` resets state but loses settings/history.
 - App logs to `<data_dir>/logs/manhuaviewer.log.<YYYY-MM-DD>` (daily rotation, 7-day retention, panic hook). Startup failures (DB init, port bind) also show a native error dialog — check the log if the app silently fails to open (esp. Windows, where the console is hidden).
 - `scripts/bump-version.sh` uses `sed -i ''` (macOS syntax). On Linux it needs `sed -i` without the empty-string argument.

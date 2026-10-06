@@ -284,6 +284,14 @@ export default function Library({ mode = 'library', enableSession }) {
   const appendLockRef = useRef(false); // 防触底自动加载与按钮点击重复追加同一页
   const loadMoreSentinelRef = useRef(null); // 触底自动加载观察哨兵
   const listScrollRef = useRef(null); // 列表滚动容器
+  // 列表容器同时镜像到 state：书库为空时渲染的是欢迎页（没有 .library-main），
+  // 恢复会话后容器才挂载，"边滚边记位置"的监听必须等它出现才能挂上 ——
+  // 只靠 ref + effect 会在 ref 为 null 时早退且永不重跑。
+  const [listScrollEl, setListScrollEl] = useState(null);
+  const bindListScroll = useCallback((el) => {
+    listScrollRef.current = el; // 既有逻辑（分页/加载更多）继续读这个 ref
+    setListScrollEl(el);
+  }, []);
   // 会话恢复写入的筛选值快照：用于在恢复后跳过“筛选变化重拉”，避免覆盖恢复的分页
   const restoredFiltersRef = useRef(null);
   const navigate = useNavigate();
@@ -294,10 +302,11 @@ export default function Library({ mode = 'library', enableSession }) {
     useCbzConvert({ toast });
 
   // 浏览会话：卸载时保存（含滚动位置）、进入时后台与服务器比对
-  const { librarySessions, reconcileLibrary, markSessionVerified, sessionIsStale } = useLibrarySession({
+  const { librarySessions, reconcileLibrary, markSessionVerified, sessionIsStale, restoreScroll } = useLibrarySession({
     mode,
     sessionEnabled,
     listScrollRef,
+    listScrollEl,
     snapshot: {
       archives, page: pageRef.current, hasMore,
       search, sortBy, sortOrder, selectedTag, readFilter, typeFilter, selectedCategory,
@@ -369,10 +378,8 @@ export default function Library({ mode = 'library', enableSession }) {
         if (s.groupMembers) setGroupMembers(s.groupMembers);
       }
       if (s.scrollTop) {
-        requestAnimationFrame(() => {
-          const el = listScrollRef.current;
-          if (el) el.scrollTop = s.scrollTop;
-        });
+        // 等列表挂载（空书库时先渲染欢迎页）+ 布局落定后，DOM 与位置镜像一起恢复
+        restoreScroll(s.scrollTop);
       }
       // 后台与服务器比对（仅内容重排时整体刷新，否则合并字段）
       reconcileLibrary(s);
@@ -963,7 +970,7 @@ export default function Library({ mode = 'library', enableSession }) {
       )}
 
       {/* 主内容区 */}
-      <div className="library-main" ref={listScrollRef}>
+      <div className="library-main" ref={bindListScroll}>
         {/* 顶栏 */}
         <div className="library-header">
           <input

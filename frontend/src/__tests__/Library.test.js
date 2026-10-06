@@ -463,3 +463,97 @@ describe('Library 批量转换为 CBZ', () => {
     await waitFor(() => expect(api.convertCbzStart).toHaveBeenCalledWith([7]));
   });
 });
+
+// 浏览会话（跨路由记住列表/筛选/滚动位置）。测试环境默认关闭（见 Library.js 的 IS_TEST），
+// 这里显式 enableSession 打开，并清空模块级会话缓存保证用例隔离。
+describe('Library 浏览会话：滚动位置', () => {
+  const makeArchives = (n) => Array.from({ length: n }, (_, i) => ({
+    id: i + 1,
+    title: `漫画-${i + 1}`,
+    archive_type: 'folder',
+    page_count: 10,
+    cover_url: `/api/archives/${i + 1}/cover`,
+    tags: [],
+  }));
+
+  const renderWithReader = () => {
+    function ReaderStub() {
+      const navigate = useNavigate();
+      return <button onClick={() => navigate('/')}>退出阅读器</button>;
+    }
+    return render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={
+            <SettingsProvider>
+              <TagsProvider>
+                <ToastProvider>
+                  <Library enableSession />
+                </ToastProvider>
+              </TagsProvider>
+            </SettingsProvider>
+          } />
+          <Route path="/reader/:id" element={<ReaderStub />} />
+        </Routes>
+      </MemoryRouter>
+    );
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    clearLibrarySessions();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    api.getArchives.mockResolvedValue(makeArchives(60));
+    api.saveHistory.mockResolvedValue({});
+  });
+
+  afterEach(() => clearLibrarySessions());
+
+  test('进阅读器再返回，恢复原来的滚动位置（回归：卸载时读 ref 恒为 null → 存成 0）', async () => {
+    const { container } = renderWithReader();
+    await waitFor(() => {
+      expect(screen.getByText('漫画-1')).toBeInTheDocument();
+    });
+
+    const list = container.querySelector('.library-main');
+    expect(list).not.toBeNull();
+    list.scrollTop = 720;
+    fireEvent.scroll(list); // 滚动时镜像位置（卸载清理里已读不到 DOM）
+
+    // 点卡片进阅读器 → Library 卸载并写入会话
+    fireEvent.click(screen.getByText('漫画-1'));
+    await waitFor(() => {
+      expect(screen.getByText('退出阅读器')).toBeInTheDocument();
+    });
+
+    // 返回书库 → 恢复列表与滚动位置
+    fireEvent.click(screen.getByText('退出阅读器'));
+    await waitFor(() => {
+      expect(screen.getByText('漫画-1')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(container.querySelector('.library-main').scrollTop).toBe(720);
+    });
+  });
+
+  test('恢复位置后再离开书库，位置不会被写回 0', async () => {
+    const { container } = renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画-1')).toBeInTheDocument());
+    const list = container.querySelector('.library-main');
+    list.scrollTop = 480;
+    fireEvent.scroll(list);
+
+    fireEvent.click(screen.getByText('漫画-1'));
+    await waitFor(() => expect(screen.getByText('退出阅读器')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('退出阅读器'));
+    await waitFor(() => expect(container.querySelector('.library-main').scrollTop).toBe(480));
+
+    // 再次进入阅读器再返回：位置仍是 480（程序化恢复不派发 scroll 事件也不会丢）
+    fireEvent.click(screen.getByText('漫画-1'));
+    await waitFor(() => expect(screen.getByText('退出阅读器')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('退出阅读器'));
+    await waitFor(() => expect(container.querySelector('.library-main').scrollTop).toBe(480));
+  });
+});
