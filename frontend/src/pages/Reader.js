@@ -5,6 +5,7 @@ import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useReaderKeyboard from '../hooks/useReaderKeyboard';
 import useGamepad from '../hooks/useGamepad';
+import useReaderGestures from '../hooks/useReaderGestures';
 import TagPicker from '../components/TagPicker';
 import Modal from '../components/Modal';
 import ThumbnailPanel from '../components/ThumbnailPanel';
@@ -70,8 +71,16 @@ export default function Reader() {
 
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
   const dragRef = useRef({ active: false, startX: 0, startY: 0, origX: 0, origY: 0 });
-  const touchRef = useRef({ startX: 0, startY: 0, startTime: 0, lastTapTime: 0, pinchDist: 0 });
   const containerRef = useRef(null);
+  // 阅读区 DOM 元素也同步到 state：数据加载完成前不渲染阅读区（早退分支返回“加载中”），
+  // 尺寸监听 / 原生手势监听必须等容器真正挂载后再执行，否则会像以前那样在 ref 还是
+  // null 时 early-return 且永不重跑（ResizeObserver 从未生效 → 窄窗不禁双页、跨页过宽
+  // 不降级）。回调用 useCallback 固定引用，避免每次渲染 detach/attach 造成循环。
+  const [containerEl, setContainerEl] = useState(null);
+  const bindContainer = useCallback((el) => {
+    containerRef.current = el;
+    setContainerEl(el);
+  }, []);
   // 长图模式虚拟滚动：追踪可见范围
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 20 });
   const sentinelRefs = useRef({});
@@ -183,7 +192,11 @@ export default function Reader() {
   }, [settings.reader_double, settings.reader_long, settings.reader_auto_single]);
 
   useEffect(() => {
-    if (prefsReadyRef.current) updateSetting('reader_double', doublePage ? '1' : '0');
+    // 窄窗口（iPad 分屏/Stage Manager、缩小后的桌面窗口）由尺寸监听强制关掉双页，
+    // 这是被动降级而非用户选择：不回写，避免用户的双页偏好在窄窗口里被永久改成 0
+    if (prefsReadyRef.current && !containerTooNarrowRef.current) {
+      updateSetting('reader_double', doublePage ? '1' : '0');
+    }
   }, [doublePage]);
   useEffect(() => {
     if (prefsReadyRef.current) updateSetting('reader_long', longImage ? '1' : '0');
@@ -280,8 +293,8 @@ export default function Reader() {
 
   // 监听容器尺寸：宽度不足时禁用双页模式；同时记录可视尺寸供“跨页过宽→自动单页”判定
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
+    const el = containerEl;
+    if (!el) return undefined;
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
@@ -293,14 +306,13 @@ export default function Reader() {
     });
     observer.observe(el);
     return () => observer.disconnect();
-  // eslint-disable-next-line
-  }, []);
+  }, [containerEl]);
 
   // 长图模式虚拟滚动：共享 IntersectionObserver 只创建一次（不依赖 visibleRange，
   // 否则每滚动一帧都要 disconnect + 重新 observe 几十个哨兵）；窗口滑动时新增的
   // 节点由 setSentinelRef 回调负责 observe，卸载时 unobserve。
   useEffect(() => {
-    if (!longImage || pages.length === 0) return undefined;
+    if (!longImage || pages.length === 0 || !containerEl) return undefined;
     const BUFFER = 3;
     const visible = new Set();
     let rafPending = false;
@@ -340,7 +352,7 @@ export default function Reader() {
         rafPending = true;
         requestAnimationFrame(update);
       }
-    }, { root: containerRef.current, rootMargin: '1500px 0px' });
+    }, { root: containerEl, rootMargin: '1500px 0px' });
 
     longObserverRef.current = observer;
     // 观察当前已挂载的哨兵（后续随窗口滑动挂载的由 setSentinelRef 补齐）
@@ -352,7 +364,7 @@ export default function Reader() {
       observer.disconnect();
       longObserverRef.current = null;
     };
-  }, [longImage, pages]);
+  }, [longImage, pages, containerEl]);
 
   // 进入长图模式：从当前页继续（含恢复进度后的位置）
   useEffect(() => {
@@ -610,88 +622,31 @@ export default function Reader() {
     }
   }, [archiveId, toast]);
 
-  // 触摸手势
-  const getTouchDist = (touches) => {
-    const dx = touches[0].clientX - touches[1].clientX;
-    const dy = touches[0].clientY - touches[1].clientY;
-    return Math.sqrt(dx * dx + dy * dy);
-  };
-
-  const handleTouchStart = useCallback((e) => {
-    if (longImage) return;
-    if (e.touches.length === 2) {
-      touchRef.current.pinchDist = getTouchDist(e.touches);
-      return;
-    }
-    const t = e.touches[0];
-    touchRef.current.startX = t.clientX;
-    touchRef.current.startY = t.clientY;
-    touchRef.current.startTime = Date.now();
-    if (scale > 1.05) {
-      dragRef.current = { active: true, startX: t.clientX, startY: t.clientY, origX: translate.x, origY: translate.y };
-    }
-  }, [longImage, scale, translate]);
-
-  const handleTouchMove = useCallback((e) => {
-    if (longImage) return;
-    if (e.touches.length === 2) {
-      e.preventDefault();
-      const dist = getTouchDist(e.touches);
-      if (touchRef.current.pinchDist > 0) {
-        const ratio = dist / touchRef.current.pinchDist;
-        setScale(s => Math.min(10, Math.max(0.5, s * ratio)));
-        touchRef.current.pinchDist = dist;
-      }
-      return;
-    }
-    if (dragRef.current.active) {
-      e.preventDefault();
-      const t = e.touches[0];
-      setTranslate({
-        x: dragRef.current.origX + (t.clientX - dragRef.current.startX),
-        y: dragRef.current.origY + (t.clientY - dragRef.current.startY),
-      });
-    }
-  }, [longImage]);
-
-  const handleTouchEnd = useCallback((e) => {
-    if (longImage) return;
-    dragRef.current.active = false;
-    touchRef.current.pinchDist = 0;
-    if (e.changedTouches.length === 0) return;
-    const t = e.changedTouches[0];
-    const dx = t.clientX - touchRef.current.startX;
-    const dy = t.clientY - touchRef.current.startY;
-    const dt = Date.now() - touchRef.current.startTime;
-
-    // 双击
-    if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 300) {
-      const now = Date.now();
-      if (now - touchRef.current.lastTapTime < 300) {
-        if (scale > 1.05) { setScale(1); setTranslate({ x: 0, y: 0 }); }
-        else { setScale(2.5); setTranslate({ x: 0, y: 0 }); }
-        touchRef.current.lastTapTime = 0;
-        return;
-      }
-      touchRef.current.lastTapTime = now;
-    }
-
-    if (scale > 1.05) return;
-    const absDx = Math.abs(dx);
-    const absDy = Math.abs(dy);
-    if (absDx > 50 && absDx > absDy && dt < 500) {
-      if (dx > 0) goPrev(); else goNext();
-    }
-  }, [longImage, scale, goPrev, goNext]);
+  // 触摸 / 滚轮手势：原生非被动监听（见 hooks/useReaderGestures.js）。
+  // 长图模式交给浏览器原生纵向滚动，不自建手势。
+  // 单指左右滑动 → 翻页（方向跟随「翻页方向」设置，与左右点击区一致）；
+  // 放大后单指拖动 → 平移；双指捏合 → 缩放；双击 → 缩放/还原；滚轮 → 连续缩放。
+  const { gestureHandledRecently } = useReaderGestures({
+    container: containerEl,
+    enabled: !longImage,
+    scale,
+    translate,
+    pageDirection,
+    onPrev: goPrev,
+    onNext: goNext,
+    onPan: (x, y) => setTranslate({ x, y }),
+    // 拖动期间沿用 dragRef.active：图片变换去掉过渡（跟手不糊），并挂 .dragging
+    onPanStart: () => { dragRef.current.active = true; },
+    onPanEnd: () => { dragRef.current.active = false; },
+    onPinch: (factor) => setScale(s => Math.min(10, Math.max(0.5, s * factor))),
+    onWheelZoom: (delta) => setScale(s => Math.min(10, Math.max(0.1, s + delta))),
+    onDoubleTapZoom: () => {
+      if (scale > 1.05) { setScale(1); setTranslate({ x: 0, y: 0 }); }
+      else { setScale(2.5); setTranslate({ x: 0, y: 0 }); }
+    },
+  });
 
   // 鼠标
-  const handleWheel = useCallback((e) => {
-    if (longImage) return;
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.15 : 0.15;
-    setScale(s => Math.min(10, Math.max(0.1, s + delta)));
-  }, [longImage]);
-
   const handleMouseDown = (e) => {
     if (e.button === 1 || (e.button === 0 && scale > 1.05)) {
       e.preventDefault();
@@ -711,6 +666,8 @@ export default function Reader() {
 
   const handleClick = (e) => {
     if (longImage || scale > 1.05) return;
+    // 滑动刚结束时浏览器可能补发一个 click（iPad Safari）：忽略，避免一次滑动翻两页
+    if (gestureHandledRecently()) return;
     const w = e.currentTarget.clientWidth;
     const isLeft = pageDirection === 'rtl' ? e.clientX > w * 2 / 3 : e.clientX < w / 3;
     if (isLeft) goPrev();
@@ -727,6 +684,9 @@ export default function Reader() {
   };
 
   const handleDblClick = () => {
+    // 触摸双击已由 useReaderGestures 处理：忽略 iPad Safari 补发的 dblclick，
+    // 否则缩放会被切换两次（等于双击缩放失效）
+    if (gestureHandledRecently()) return;
     if (scale > 1.05) { setScale(1); setTranslate({ x: 0, y: 0 }); }
     else { setScale(2.5); setTranslate({ x: 0, y: 0 }); }
   };
@@ -868,7 +828,7 @@ export default function Reader() {
   }
 
   return (
-    <div ref={containerRef} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div ref={bindContainer} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* 工具栏 */}
       <div className="reader-toolbar">
         <button className="btn btn-secondary btn-icon" onClick={() => navigate('/')} aria-label="返回书库">←</button>
@@ -957,18 +917,14 @@ export default function Reader() {
           alignItems: longImage ? 'flex-start' : 'center',
         }}
         role="region"
-        aria-label={`页面阅读区，${pageDirection === 'rtl' ? '点右侧翻到上一页、左侧翻到下一页' : '点左侧翻到上一页、右侧翻到下一页'}`}
+        aria-label={`页面阅读区，${pageDirection === 'rtl' ? '点右侧翻到上一页、左侧翻到下一页' : '点左侧翻到上一页、右侧翻到下一页'}；左右滑动翻页`}
         onClick={handleClick}
         onDoubleClick={handleDblClick}
-        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
         onAuxClick={handleAuxClick}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
       >
         {longImage ? (
           <LongImageList
@@ -1219,6 +1175,10 @@ export default function Reader() {
                   ['F1', '快捷键帮助（当前面板）'],
                   ['F11', '全屏模式'],
                   ['Esc', '关闭弹出面板'],
+                  ['', ''],
+                  ['单指左右滑动', '翻页（触摸屏/iPad；方向跟随「翻页方向」设置）'],
+                  ['双指捏合 / 双击', '缩放 / 还原（长按拖动可平移）'],
+                  ['滚轮', '连续缩放'],
                 ].map(([key, desc], i) => (
                   key === '' ? (
                     <tr key={i}><td colSpan={2} style={{ height: 8 }} /></tr>

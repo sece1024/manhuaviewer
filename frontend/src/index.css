@@ -150,6 +150,8 @@ body {
   height: 100vh;
   height: 100dvh; /* 移动端：跟随地址栏收起的可视高度，避免底部被遮挡/跳动 */
   overflow: hidden;
+  /* iPad/移动端：屏蔽整页橡皮筋回弹与下拉刷新，避免打断阅读手势 */
+  overscroll-behavior: none;
 }
 
 /* ── Sidebar ── */
@@ -1062,6 +1064,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   margin-top: 8px;
   position: relative;
   user-select: none;
+  /* iOS/iPadOS：长按不弹选择/预览菜单，点按不高亮，避免打断滑动翻页手势
+     （touch-action 由内联样式按「单页 none / 长图 pan-y」区分设置） */
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .reader-image {
