@@ -8,6 +8,25 @@
 
 ## 未发布
 
+### 🚀 新特性
+
+- *(reader)* 网页端/iPad 触摸滑动翻页（原生非被动监听 + 方向感知）([faee73b](https://github.com/sece1024/manhuaviewer/commit/faee73b547809617c3bcea6b6fe517f65f22a9e5))
+- *(ui)* 侧边栏可一键收起成图标窄栏，阅读器整屏沉浸（iPad 用满屏宽）([e490223](https://github.com/sece1024/manhuaviewer/commit/e49022321376cc5f53494a19cf10d6db91847067))
+
+
+### 🐛 修复
+
+- 修复审计发现的 7 处缺陷（口令保存、解压死锁、分页与缓存）([8f5a0ca](https://github.com/sece1024/manhuaviewer/commit/8f5a0ca2cba795b4ef6c69b51bb2021e51b029f8))
+- *(lan)* 局域网口令模式下封面与逐页图片全 401（iPad 看不到封面/图片加载失败）([2d2215a](https://github.com/sece1024/manhuaviewer/commit/2d2215ad8dc2edf62202981d295d360820f20db2))
+- *(library)* 退出阅读器返回书库不再跳回顶部（滚动位置此前恒存成 0）([c96c5c3](https://github.com/sece1024/manhuaviewer/commit/c96c5c30ac8703fcb7a9dbad7e680861817119b0))
+
+
+### ⚡ 性能
+
+- 减少热路径 DB 开销并补上前端 ESLint 门禁([202c3f5](https://github.com/sece1024/manhuaviewer/commit/202c3f5232e064bf0a32728d38ffe50b3dbf29cd))
+
+## [3.6.1](https://github.com/sece1024/manhuaviewer/releases/tag/v3.6.1) - 2026-09-23
+
 ### 🐛 修复
 
 - *(reader)* 消除 Windows 上双页模式的持续闪烁/阅读区跳动([7d9c580](https://github.com/sece1024/manhuaviewer/commit/7d9c5805fdd3b25c1951216e2b6b526e3f126a86))
