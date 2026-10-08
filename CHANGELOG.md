@@ -8,6 +8,17 @@
 
 ## 未发布
 
+### 🐛 修复
+
+- *(archive)* 解压超时不再泄漏线程/僵尸进程，解压锁淘汰不再清掉持有中的锁([ea4dd19](https://github.com/sece1024/manhuaviewer/commit/ea4dd1905d117f3f15c915465da600b65d1a8626))
+
+
+### ⚡ 性能
+
+- *(frontend)* 缩略图虚拟化、同步轮询竞态、会话快照截断（审计修复 3/4/5）([02bf64d](https://github.com/sece1024/manhuaviewer/commit/02bf64db0035ba50434d4bde1c3a58fa7d1b73cd))
+
+## [3.6.2](https://github.com/sece1024/manhuaviewer/releases/tag/v3.6.2) - 2026-10-07
+
 ### 🚀 新特性
 
 - *(reader)* 网页端/iPad 触摸滑动翻页（原生非被动监听 + 方向感知）([faee73b](https://github.com/sece1024/manhuaviewer/commit/faee73b547809617c3bcea6b6fe517f65f22a9e5))
