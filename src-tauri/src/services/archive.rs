@@ -89,11 +89,17 @@ fn extract_locks() -> &'static Mutex<HashMap<String, Arc<Mutex<()>>>> {
     LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// 取某档案的解压锁（Arc，跨线程共享）；长期运行积累过多时整体重置一次。
+/// 取某档案的解压锁（Arc，跨线程共享）。
+///
+/// 淘汰策略：只清理「当前无持有者」的锁条目（strong_count == 1 表示只剩 map 自己这份）。
+/// 不能用 `map.clear()`：有线程可能刚 clone 走了这个锁、正在里面整包解压，
+/// clear 后同一档案的新请求会拿到一把全新的锁，两把锁并发对同一个
+/// `extract/{id}/` 目录 remove_dir_all + 解压 + 写标记，互相破坏产出。
 fn archive_extract_lock(path: &str) -> Arc<Mutex<()>> {
     let mut map = extract_locks().lock().unwrap();
+    // 仅在积累过多时回收「无人使用」的条目，避免 map 无界增长；持有中的绝不碰
     if map.len() > 256 {
-        map.clear();
+        map.retain(|_, lock| Arc::strong_count(lock) > 1);
     }
     map.entry(path.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))
@@ -161,33 +167,96 @@ fn read_page_bounded(path: &Path) -> Result<Vec<u8>> {
 /// 那样 stdout/stderr 管道在子进程退出前无人读取，而管道容量只有 64 KiB（macOS）：
 /// `7z l` / `unrar lb` 的输出一旦超过该容量，子进程就阻塞在 write 永不退出，
 /// 于是必然空转到 90 秒超时被 kill —— 对条目数上千的大归档是稳定复现的失败。
-/// 这里改为：排空管道的工作放到子线程，主线程用 recv_timeout 等结果，超时才 kill。
+///
+/// 这里改成一个「看护线程」全权负责：管道各自交给读取线程排空；看护线程持有 Child，
+/// 超时直接 `kill()` 再 `wait()` 收尸，最后 join 读取线程、汇总成 `Output` 返回。
+/// 这样超时后既不泄漏 waiter 线程，也不会留下杀不掉的僵尸子进程
+/// （旧实现用 `wait_with_output` 把 Child 消耗进了线程，超时后既 join 不掉、也 kill 不到）。
 fn run_extractor(program: &Path, args: &[&str]) -> Result<std::process::Output> {
-    let child = std::process::Command::new(program)
+    use std::io::Read;
+
+    let mut child = std::process::Command::new(program)
         .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
 
-    // 唯一持有 Child 的线程：wait_with_output 会持续读走管道，子进程因此不会被写阻塞。
-    let (tx, rx) = std::sync::mpsc::channel();
-    let waiter = std::thread::spawn(move || {
-        let result = child.wait_with_output();
-        // 接收端可能已因超时放弃；发送失败不是错误。
+    // 管道容量只有 64 KiB（macOS）：交给读取线程持续排空，否则子进程会写满阻塞。
+    let stdout_reader = child.stdout.take().map(|mut s| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = s.read_to_end(&mut buf);
+            buf
+        })
+    });
+    let stderr_reader = child.stderr.take().map(|mut s| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = s.read_to_end(&mut buf);
+            buf
+        })
+    });
+
+    // 看护线程持有 Child：限时 wait，超时直接 kill 再收尸，随后 join 读取线程汇总。
+    // 主线程只 recv_timeout 等结果，宽限上限是 EXTRACT_TIMEOUT 的两倍（正常情况
+    // 看护线程会在超时点 kill+收尸后就返回，不会触发兜底）。
+    let (tx, rx) = std::sync::mpsc::channel::<Result<std::process::Output>>();
+    std::thread::spawn(move || {
+        let result = supervise_child(child, EXTRACT_TIMEOUT, stdout_reader, stderr_reader);
         let _ = tx.send(result);
     });
 
-    match rx.recv_timeout(EXTRACT_TIMEOUT) {
-        Ok(out) => {
-            let _ = waiter.join();
-            Ok(out?)
-        }
-        Err(_) => {
-            // 超时：wait_with_output 仍阻塞在读取上，这里只能放弃该线程（它会在子进程
-            // 退出后自行结束）。执行解压的子进程由调用方的 Drop/杀进程语义兜底。
-            anyhow::bail!("解压/列目录超时（>{EXTRACT_TIMEOUT:?}），已放弃等待子进程");
-        }
+    match rx.recv_timeout(EXTRACT_TIMEOUT * 2) {
+        Ok(out) => out,
+        Err(_) => anyhow::bail!(
+            "解压/列目录超时（看护线程未在 {:?} 内返回），已放弃等待子进程",
+            EXTRACT_TIMEOUT * 2
+        ),
     }
+}
+
+/// 持有 Child 完成「限时等待 → 超时 kill → 收尸 → join 读取线程 → 汇总 Output」。
+/// 超时或进程异常都走 kill，确保不残留僵尸子进程与泄漏的 waiter 线程。
+fn supervise_child(
+    mut child: std::process::Child,
+    timeout: std::time::Duration,
+    stdout_reader: Option<std::thread::JoinHandle<Vec<u8>>>,
+    stderr_reader: Option<std::thread::JoinHandle<Vec<u8>>>,
+) -> Result<std::process::Output> {
+    let started = std::time::Instant::now();
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    let _ = child.kill();
+                    // 收尸：kill 后 wait 很快返回，避免留下僵尸进程
+                    let _ = child.wait();
+                    anyhow::bail!("解压/列目录子进程超时（>{timeout:?}），已终止");
+                }
+                // 大多数字进程秒级结束；50ms 轮询对 90s 超时粒度足够
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => {
+                anyhow::bail!("等待子进程失败：{e}");
+            }
+        }
+    };
+
+    // 子进程已退出，管道 EOF，读取线程自行结束；join 取出缓冲
+    let stdout = stdout_reader
+        .map(|h| h.join().unwrap_or_default())
+        .unwrap_or_default();
+    let stderr = stderr_reader
+        .map(|h| h.join().unwrap_or_default())
+        .unwrap_or_default();
+
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 /// 整包解压后校验：目录内每个条目（含子目录递归）规范化后必须仍位于 `dir` 之内。
@@ -797,6 +866,31 @@ mod tests {
         assert!(a.is_some());
     }
 
+    /// 回归：锁表淘汰不得清掉「仍在持有」的锁（旧实现 map.clear() 会造成同一档案
+    /// 两把锁并发解压，互相 remove_dir_all 破坏产出）。持有中的锁 strong_count>1，
+    /// retain 后必须还能取到同一把锁。
+    #[test]
+    fn extract_lock_eviction_preserves_held_locks() {
+        // 先把表撑过 256 触发一次回收，避免残留影响断言
+        for i in 0..300 {
+            let _ = archive_extract_lock(&format!("/mu/clear-{i}"));
+        }
+        assert!(
+            extract_locks().lock().unwrap().len() <= 256,
+            "回收后应回到阈值内"
+        );
+
+        // 持有 A 的锁，再灌 300 个新条目触发 retain；A 的锁因 strong_count>1 必须存活
+        let held = archive_extract_lock("/mu/held-a.cbz");
+        assert_eq!(Arc::strong_count(&held), 2, "map 一份 + 本次持有各一份");
+        for i in 0..300 {
+            let _ = archive_extract_lock(&format!("/mu/evict-{i}"));
+        }
+        // 再取 A：必须是同一把锁（指针相等），否则说明持有中的锁被清了、可并发
+        let again = archive_extract_lock("/mu/held-a.cbz");
+        assert!(Arc::ptr_eq(&held, &again), "持有时触发淘汰后仍是同一把锁");
+    }
+
     #[test]
     fn extract_marker_roundtrip_and_page_name_safety() {
         let dir = tempfile::tempdir().unwrap();
@@ -853,6 +947,33 @@ mod tests {
         )
         .expect("stderr 超过管道容量时不应超时失败");
         assert_eq!(out.stderr.len(), 524_288);
+    }
+
+    /// 回归：超时必须真正终止子进程（旧实现用 wait_with_output 吞掉 Child，
+    /// 超时后既 kill 不到也 join 不掉，留下僵尸子进程与泄漏线程）。
+    /// 直接测 supervise_child（timeout 可注入），无需等 90s 的 EXTRACT_TIMEOUT。
+    #[cfg(unix)]
+    #[test]
+    fn run_extractor_kills_child_on_timeout() {
+        let child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let start = std::time::Instant::now();
+        let err = supervise_child(child, std::time::Duration::from_millis(200), None, None)
+            .expect_err("sleep 30 远超 200ms 超时，应报超时错误");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "应在远早于子进程自然退出前返回（说明已 kill）：{:?}",
+            start.elapsed()
+        );
+        assert!(
+            format!("{err:#}").contains("超时"),
+            "错误信息应指明超时：{err:#}"
+        );
     }
 
     /// /file 回传前的魔数校验：类型与文件头必须相符（含 SFX 的 MZ 放行）。
