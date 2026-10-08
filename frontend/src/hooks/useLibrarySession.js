@@ -7,6 +7,12 @@ import { membershipChanged, idsWithin } from '../utils/listReconcile';
 // 模块级 —— Library 卸载（进入阅读器等路由）后保留，返回时可秒开旧列表。
 const librarySessions = {};
 
+// 会话里最多保留的档案条数：与 reconcileLibrary 的比对窗口（500）一致。
+// 超出部分不常驻内存——卸载时若把翻了几十页的整份列表都存进会话，这份引用会让
+// 整个数组（可能上万条）在下次进入书库前一直不被 GC；截断后超出的条目返回时由
+// 触底加载哨兵按 page 续拉，秒开体验对前 500 条不受影响。
+const MAX_SESSION_ARCHIVES = 500;
+
 // 写操作（扫描/删除/导入/改名…）会改变档案成员集合，此时会话里的旧列表必须作废：
 // 否则从设置页扫描完回到书库，会先秒开出已被清理的档案名（比对失败或中途切页时
 // 还会被再次写回会话），表现为“手动删掉的漫画一直在”。
@@ -108,15 +114,22 @@ export default function useLibrarySession({
       const st = latestStateRef.current;
       if (st && st.archives && st.archives.length > 0) {
         const pos = scrollPosRef.current;
+        // 截断到比对窗口：避免整份（可能上万条）列表常驻内存；page/hasMore 同步收窄，
+        // 这样恢复后触底哨兵能从正确页码继续把后面的条目拉回来，不会出现断页。
+        const truncated = st.archives.length > MAX_SESSION_ARCHIVES;
+        const archives = truncated ? st.archives.slice(0, MAX_SESSION_ARCHIVES) : st.archives;
         librarySessions[mode] = {
           ...st,
+          archives,
+          page: truncated ? Math.ceil(MAX_SESSION_ARCHIVES / pageSize) : st.page,
+          hasMore: truncated ? true : st.hasMore,
           // 真正滚动的那一个（另一个恒为 0）；两者都为 0 时就是 0
           scrollTop: pos.list || pos.main,
           generation: membershipGeneration(),
         };
       }
     };
-  }, [mode, sessionEnabled, listScrollRef]);
+  }, [mode, sessionEnabled, listScrollRef, pageSize]);
 
   // 后台一致性比对（与会话快照 s 对比；切条件后丢弃过期结果）
   const reconcileLibrary = useCallback(async (s) => {

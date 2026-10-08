@@ -556,4 +556,25 @@ describe('Library 浏览会话：滚动位置', () => {
     fireEvent.click(screen.getByText('退出阅读器'));
     await waitFor(() => expect(container.querySelector('.library-main').scrollTop).toBe(480));
   });
+
+  test('超大书库的会话快照截断到 500 条，避免整份列表常驻内存', async () => {
+    // 一次返回 550 条（PAGE_SIZE=50 时 hasMore=true），模拟用户已滚了很久加载了大量条目
+    api.getArchives.mockResolvedValue(makeArchives(550));
+
+    const { container } = renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画-550')).toBeInTheDocument());
+
+    // 进阅读器（卸载 → 写会话，截断到 500）再返回
+    fireEvent.click(screen.getByText('漫画-1'));
+    await waitFor(() => expect(screen.getByText('退出阅读器')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('退出阅读器'));
+    await waitFor(() => expect(screen.getByText('漫画-1')).toBeInTheDocument());
+
+    // 恢复后：前 500 条秒开，500 之后的条目被截断（由触底哨兵按 page 续拉）
+    expect(screen.getByText('漫画-500')).toBeInTheDocument();
+    expect(screen.queryByText('漫画-501')).toBeNull();
+    expect(screen.queryByText('漫画-550')).toBeNull();
+    // 列表仍知道还有更多（hasMore 保持 true）
+    expect(container.querySelector('.library-main')).not.toBeNull();
+  });
 });

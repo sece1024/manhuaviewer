@@ -19,6 +19,9 @@ export default function useSync({ settings, updateSetting, toast, onStatsRefresh
   const [syncPlanResult, setSyncPlanResult] = useState(null); // {new:[],changed:[],up_to_date:[],total}
   const [planLoading, setPlanLoading] = useState(false);
   const syncPollRef = useRef(null);
+  // 是否已经观察到任务在运行：避免启动瞬间后端 status 还没把 running 置位，
+  // 就误判「已结束」而清掉轮询（任务实际还在排队/连接远端）。
+  const sawRunningRef = useRef(false);
 
   // 服务端设置就绪/变化后同步表单（设置是唯一数据源）
   useEffect(() => {
@@ -42,7 +45,10 @@ export default function useSync({ settings, updateSetting, toast, onStatsRefresh
         current: s.current || '',
         failed: s.failed || [],
       });
-      if (!s.running) {
+      if (s.running) {
+        sawRunningRef.current = true;
+      } else if (sawRunningRef.current) {
+        // 只有先见过 running=true，!running 才代表任务真正结束
         if (syncPollRef.current) { clearInterval(syncPollRef.current); syncPollRef.current = null; }
         setSyncRunning(false);
         // 同步任务结束的瞬间再失效一次：syncStart 只作废了“启动前”的缓存，
@@ -86,6 +92,7 @@ export default function useSync({ settings, updateSetting, toast, onStatsRefresh
       ]);
       await api.syncStart({ url: syncUrl.trim(), token: syncToken.trim(), dir: syncDir.trim() });
       setSyncRunning(true);
+      sawRunningRef.current = false; // 本轮任务重来，等待观察到 running=true
       setSyncInfo({ total: 0, done: 0, new: 0, changed: 0, skipped: 0, current: '连接远端...', failed: [] });
       pollSyncStatus();
       syncPollRef.current = setInterval(pollSyncStatus, 1000);
