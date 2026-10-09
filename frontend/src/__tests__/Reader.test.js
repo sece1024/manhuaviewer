@@ -289,6 +289,44 @@ describe('Reader 双页模式', () => {
   });
 });
 
+describe('Reader 单页翻页防背景闪烁', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getBookmarks.mockResolvedValue({ pages: [] });
+    api.saveHistory.mockResolvedValue({});
+    api.updateSettings.mockResolvedValue({});
+    api.getGroupChapters.mockResolvedValue([]);
+  });
+
+  test('翻到冷页时旧页垫底继续显示，不把背景色闪出来', async () => {
+    renderReader();
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: /页面阅读区/ })).toBeInTheDocument();
+    });
+
+    // 第 1 页绘制完成 → 记录为垫底页
+    const first = screen.getByAltText('page-1.jpg');
+    await act(async () => { fireEvent.load(first); });
+    expect(document.querySelector('img[aria-hidden="true"]')).toBeNull(); // 就绪后无垫底图
+
+    // 翻到第 2 页（冷页，预加载在 jsdom 里不会真正解码 → imageLoaded=false）
+    pressKey('ArrowRight');
+    const current = screen.getByAltText('page-2.jpg');
+    expect(current.style.opacity).toBe('0'); // 新页未就绪，透明等待
+
+    // 关键：旧页（page-1）垫底仍在 DOM 里、全不透明，挡住背景
+    const hold = document.querySelector('img[aria-hidden="true"]');
+    expect(hold).not.toBeNull();
+    expect(hold.src).toContain('/pages/0');
+    expect(hold.style.opacity).toBe('1');
+
+    // 新页加载完成 → 垫底图移除
+    await act(async () => { fireEvent.load(current); });
+    expect(document.querySelector('img[aria-hidden="true"]')).toBeNull();
+  });
+});
+
 describe('Reader 触摸手势（iPad / 网页端）', () => {
   beforeEach(() => {
     jest.clearAllMocks();

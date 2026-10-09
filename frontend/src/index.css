@@ -1151,9 +1151,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 
 .reader-page-wrapper {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  /* grid + place-items：让「当前页」与「翻页时的旧页垫底」叠在同一个居中单元格，
+   * 两张图都 grid-area 1/1 重叠居中，翻到冷页时旧图继续挡背景、不闪一下 */
+  display: grid;
+  place-items: center;
   width: 100%;
   height: 100%;
 }

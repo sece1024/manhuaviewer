@@ -46,6 +46,9 @@ export default function Reader() {
   const [imageLoaded, setImageLoaded] = useState(false);
   // 单页加载失败：隐藏破图并显示占位（否则 spinner 永久转圈）
   const [imageFailed, setImageFailed] = useState(false);
+  // 上一页已绘制图像的 URL：翻到“冷页”（尚未解码）时，旧图垫底继续显示，
+  // 避免 src 切换的瞬间暴露背景色（背景闪一下）。新页 onLoad 后由它接管。
+  const [prevUrl, setPrevUrl] = useState(null);
   // 双页模式：两页图就绪后再淡入；翻到已加载/已预载完成的跨页时保持不透明度直接呈现。
   // 消除开关双页/翻页时的闪白或生硬跳变
   const [doubleLoaded, setDoubleLoaded] = useState(false);
@@ -241,6 +244,7 @@ export default function Reader() {
     setTranslate({ x: 0, y: 0 });
     setImageLoaded(false);
     setImageFailed(false);
+    setPrevUrl(null); // 换档清掉上一本的旧页垫底
     sentinelRefs.current = {}; // 释放旧书 DOM 节点引用
     loadedPageIdsRef.current = new Set(); // 已加载页集合随换档重置
     pageDimsRef.current = {}; // 页面尺寸缓存随换档重置
@@ -1009,13 +1013,26 @@ export default function Reader() {
                 <div className="reader-page-error">图片加载失败</div>
               </div>
             )}
+            {/* 旧页垫底：新页解码完成前继续显示，src 切换不再把背景色闪出来。
+              * 与当前页叠在同一 grid 单元格（gridArea 1/1），由 place-items 居中。 */}
+            {prevUrl && !imageLoaded && !imageFailed && (
+              <img
+                src={prevUrl}
+                alt=""
+                aria-hidden="true"
+                className="reader-image"
+                draggable={false}
+                decoding="sync"
+                style={{ ...imgStyle, opacity: 1, gridArea: '1 / 1' }}
+              />
+            )}
             <img
               src={pages[currentIndex]?.url}
               alt={pages[currentIndex]?.filename}
               className="reader-image"
               // 就绪页同步解码：挂载同帧绘制，避免"先露背景、图片后弹出"的闪烁帧
               decoding={imageLoaded && !imageFailed ? 'sync' : 'async'}
-              style={{ ...imgStyle, opacity: imageLoaded && !imageFailed ? 1 : 0, transition: 'opacity 0.2s ease' }}
+              style={{ ...imgStyle, opacity: imageLoaded && !imageFailed ? 1 : 0, transition: 'opacity 0.2s ease', gridArea: '1 / 1' }}
               draggable={false}
               onLoad={(e) => {
                 const el = e.currentTarget;
@@ -1025,6 +1042,8 @@ export default function Reader() {
                   loadedPageIdsRef.current.add(p0.id);
                 }
                 setImageLoaded(true);
+                // 本页绘制成功后成为下一次翻页的垫底页
+                setPrevUrl(p0 ? p0.url : null);
               }}
               onError={() => { setImageLoaded(true); setImageFailed(true); }}
             />
