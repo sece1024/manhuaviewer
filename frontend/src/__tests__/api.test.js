@@ -101,6 +101,18 @@ describe('api.js 请求行为', () => {
     const opts = global.fetch.mock.calls[0][1];
     expect(opts.signal).toBeDefined();
   });
+
+  test('批量扫描是长任务：不挂超时信号（30s 超时会在扫描中途误报失败）', async () => {
+    await api.scan('/lib', 2);
+    const opts = global.fetch.mock.calls[0][1];
+    expect(opts.signal).toBeUndefined(); // timeout: 0 → 不创建 AbortController
+
+    // 对照：普通写请求仍带超时信号
+    global.fetch.mockClear();
+    await api.saveHistory(1, 3, 10);
+    const opts2 = global.fetch.mock.calls[0][1];
+    expect(opts2.signal).toBeDefined();
+  });
 });
 
 // 局域网口令模式下 <img>/new Image() 无法携带 Authorization 头，图片请求会全部 401，

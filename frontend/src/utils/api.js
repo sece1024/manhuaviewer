@@ -202,11 +202,18 @@ async function request(url, options = {}) {
 
 async function _doFetch(url, options, maxAttempts) {
   let lastError;
-  const timeoutMs = options.method && options.method !== 'GET' ? REQUEST_TIMEOUT : GET_TIMEOUT;
+  // 超时：默认按 GET/非 GET 取 REQUEST_TIMEOUT/GET_TIMEOUT；调用方可用 options.timeout
+  // 覆盖（毫秒），传 0 / false 表示**不设超时**——用于本身就很慢的长任务（如批量扫描），
+  // 这类接口有自己的进度轮询 + 取消，不该被 30s 客户端超时误杀。
+  const isNonGet = options.method && options.method !== 'GET';
+  const timeoutMs = options.timeout !== undefined
+    ? options.timeout
+    : (isNonGet ? REQUEST_TIMEOUT : GET_TIMEOUT);
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    // 每次尝试独立的超时控制器；AbortSignal.timeout 在旧 WebView 上可能缺失，故手写兜底
-    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    // 每次尝试独立的超时控制器；AbortSignal.timeout 在旧 WebView 上可能缺失，故手写兜底。
+    // timeoutMs 为 0/false 时跳过，不挂 AbortController（长任务不能被定时器打断）。
+    const controller = timeoutMs && typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = controller
       ? setTimeout(() => controller.abort(new Error('Request timeout')), timeoutMs)
       : null;
@@ -261,9 +268,11 @@ const api = {
   openFile: (filePath) =>
     request('/open', { method: 'POST', body: JSON.stringify({ filePath }) }).then(r => { _invalidate('/archives'); return r; }),
 
-  // 批量扫描根目录（增量：新增入库、变更更新、磁盘已删除的档案会被清理）
+  // 批量扫描根目录（增量：新增入库、变更更新、磁盘已删除的档案会被清理）。
+  // 扫描是同步长任务（大库可达分钟级），不设客户端超时：进度走 /scan/status 轮询，
+  // 取消走 /scan/cancel；30s 超时会在大库扫描中途误报“扫描失败”并把 UI 掐断。
   scan: (path, depth) =>
-    request('/scan', { method: 'POST', body: JSON.stringify({ path, depth }) }).then(r => {
+    request('/scan', { method: 'POST', body: JSON.stringify({ path, depth }), timeout: 0 }).then(r => {
       _invalidate('/archives');
       _invalidate('/history');
       return r;
