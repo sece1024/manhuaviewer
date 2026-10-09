@@ -327,6 +327,52 @@ describe('Reader 单页翻页防背景闪烁', () => {
   });
 });
 
+describe('Reader 双页过宽自动降级（wideSpread）', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getBookmarks.mockResolvedValue({ pages: [] });
+    api.saveHistory.mockResolvedValue({});
+    api.updateSettings.mockResolvedValue({});
+    api.getGroupChapters.mockResolvedValue([]);
+    // 让 ResizeObserver 一 observe 就回填宽屏尺寸：竖版跨页在 1920×1080 下会判定过宽
+    global.ResizeObserver = class {
+      constructor(cb) { this.cb = cb; }
+      observe() { this.cb([{ contentRect: { width: 1920, height: 1080 } }], this); }
+      unobserve() {}
+      disconnect() {}
+    };
+  });
+
+  // 给 <img> 注入自然尺寸，让 onLoad 里 recordPageDims 记录到 800×1200（竖版）
+  const loadAt = (img, w = 800, h = 1200) => {
+    Object.defineProperty(img, 'naturalWidth', { value: w, configurable: true });
+    Object.defineProperty(img, 'naturalHeight', { value: h, configurable: true });
+    return fireEvent.load(img);
+  };
+
+  test('过宽跨页翻到新页时不再闪回双页（回归：残影）', async () => {
+    renderReader();
+    await screen.findByRole('region', { name: /页面阅读区/ });
+
+    // 开启双页：竖版跨页过宽 → 记录尺寸后自动降级为单页
+    await act(async () => { fireEvent.click(screen.getByLabelText('启用双页模式')); });
+    const spread = document.querySelector('.reader-spread');
+    expect(spread).not.toBeNull(); // 尺寸还没就绪，暂时是跨页
+
+    // 两张跨页图加载（800×1200），recordPageDims → 过宽 → 降级单页
+    const imgs = [...spread.querySelectorAll('img')];
+    await act(async () => { imgs.forEach((i) => loadAt(i)); });
+    expect(document.querySelector('.reader-spread')).toBeNull(); // 已降级单页
+
+    // 翻到下一页：新页尺寸未知 → 粘性宽判定应保持单页，而不是闪回双页
+    pressKey('ArrowRight');
+    expect(document.querySelector('.reader-spread')).toBeNull();
+    // 单页分支仍在渲染（RTL 下 goNext 步进 2，当前页应为 page-3）
+    expect(screen.queryByAltText('page-3.jpg')).not.toBeNull();
+  });
+});
+
 describe('Reader 触摸手势（iPad / 网页端）', () => {
   beforeEach(() => {
     jest.clearAllMocks();

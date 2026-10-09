@@ -109,6 +109,11 @@ export default function Reader() {
   }, []);
   // “跨页过宽→自动单页”提示：每次换档只弹一次
   const wideHintShownRef = useRef(false);
+  // “过宽”最近一次已知判定：翻页瞬间新页尺寸还没加载（pageDimsRef 里没有），
+  // 此时若让 wideSpread 退回 false，渲染会闪回双页跨页、等尺寸到齐再弹回单页，
+  // 表现为“翻页时的双页残影”。这里用粘性值：尺寸未知时沿用上一次判定，等
+  // 新跨页尺寸就绪再重算，避免那个闪回。
+  const wideSpreadStickyRef = useRef(false);
 
   // —— 抽取的 hook：进度持久化（防抖保存 + 换档/卸载 flush）与图片预加载（LRU）——
   const { flushPending } = useProgressPersistence({ archive, archiveId, pages, currentIndex });
@@ -249,6 +254,7 @@ export default function Reader() {
     loadedPageIdsRef.current = new Set(); // 已加载页集合随换档重置
     pageDimsRef.current = {}; // 页面尺寸缓存随换档重置
     wideHintShownRef.current = false; // 过宽降级提示随换档重置
+    wideSpreadStickyRef.current = false; // 过宽粘性判定随换档重置
     async function load() {
       try {
         const data = await api.getPages(archiveId);
@@ -500,6 +506,7 @@ export default function Reader() {
         setLongImage(false);
         setDoubleLoaded(false);
         setDoubleFailed(false);
+        wideSpreadStickyRef.current = false; // 重新开启双页：过宽判定从零开始测量
       }
       return !v;
     });
@@ -735,9 +742,14 @@ export default function Reader() {
     // 需要这个版本号作为 memo 的失效信号（见 recordPageDims）。
     void pageDimsVersion;
     const dims = cur ? pageDimsRef.current[cur.id] : null;
-    if (!dims) return false;
+    if (!dims) {
+      // 新页尺寸未知：沿用上一次判定，避免「过宽→未知→闪回双页跨页」的残影
+      return wideSpreadStickyRef.current;
+    }
     const otherDims = other ? pageDimsRef.current[other.id] || null : null;
-    return spreadTooWide(dims, otherDims, readerSize, { gap: 4, minPageRatio: WIDE_SPREAD_MIN_PAGE_RATIO });
+    const wide = spreadTooWide(dims, otherDims, readerSize, { gap: 4, minPageRatio: WIDE_SPREAD_MIN_PAGE_RATIO });
+    wideSpreadStickyRef.current = wide;
+    return wide;
   }, [doublePage, autoSingleWide, fitMode, pages, currentIndex, readerSize, pageDimsVersion]);
 
   // 首次触发过宽降级时提示一次（换档后复位），避免用户困惑“为什么双页变单页了”
@@ -846,7 +858,7 @@ export default function Reader() {
             onChange={(e) => {
               setDoublePage(e.target.checked);
               // 开启双页时重置加载态，让新跨页走 spinner + 淡入，而不是沿用旧状态直接显示
-              if (e.target.checked) { setLongImage(false); setDoubleLoaded(false); setDoubleFailed(false); }
+              if (e.target.checked) { setLongImage(false); setDoubleLoaded(false); setDoubleFailed(false); wideSpreadStickyRef.current = false; }
             }}
             aria-label="启用双页模式" /> 双页
         </label>
