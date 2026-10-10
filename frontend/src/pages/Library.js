@@ -13,6 +13,9 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import CbzConvertPanel from '../components/CbzConvertPanel';
 import Modal from '../components/Modal';
 import useCbzConvert from '../hooks/useCbzConvert';
+import useScan from '../hooks/useScan';
+import useJobs from '../hooks/useJobs';
+import { parseScanRoots, addScanRoot, serializeScanRoots, clampDepth } from '../utils/scanRoots';
 
 // 检测是否在 Tauri 环境中
 const isTauri = window.__TAURI__ !== undefined;
@@ -316,6 +319,25 @@ export default function Library({ mode = 'library', enableSession }) {
   const { converting: convertingCbz, info: convertInfo, startConvert, cancelConvert } =
     useCbzConvert({ toast });
 
+  // ── 扫描目录（书库内直接批量入库；状态/进度见任务层）──
+  // 复用 useScan 只为「先持久化 root_dir/scan_depth 再启动」与完成提示这一份逻辑，
+  // 进度展示交给全局任务指示器（本页不再自绘进度面板）
+  const { scanning: scanningDir, handleScan: startDirScan } = useScan({ updateSetting, toast });
+  const { jobs } = useJobs();
+  // 扫描完成计数器：用于重拉列表（放 state 而不是直接调 loadArchives，
+  // 这样能挂到既有的「筛选变化重拉」effect 上，不新增一处 loadArchives 依赖告警）
+  const [reloadTick, setReloadTick] = useState(0);
+  const seenScanFinishedAt = useRef(jobs.scan.finishedAt);
+  useEffect(() => {
+    if (jobs.scan.finishedAt === seenScanFinishedAt.current) return;
+    seenScanFinishedAt.current = jobs.scan.finishedAt;
+    if (jobs.scan.error) return; // 失败由 useScan 提示，列表无需重拉
+    // 扫描会新增/清理档案：重拉列表让新入库的条目直接可见。默认排序是「最近阅读」
+    // = COALESCE(last_read_at, updated_at)，新条目没有 last_read_at，天然排在前面。
+    restoredFiltersRef.current = null; // 别让会话恢复的"跳过重拉"把这次刷新吃掉
+    setReloadTick(t => t + 1);
+  }, [jobs.scan.finishedAt, jobs.scan.error]);
+
   // 浏览会话：卸载时保存（含滚动位置）、进入时后台与服务器比对
   const { librarySessions, reconcileLibrary, markSessionVerified, sessionIsStale, restoreScroll } = useLibrarySession({
     mode,
@@ -512,7 +534,8 @@ export default function Library({ mode = 'library', enableSession }) {
       restoredFiltersRef.current = null;
     }
     loadArchives({ search: searchRef.current, tag: selectedTag, category_id: selectedCategory });
-  }, [sortBy, sortOrder, selectedTag, readFilter, selectedCategory, typeFilter, addedRange]);
+    // reloadTick 只在扫描结束后 +1：复用同一条重拉路径（含分页重置、展开组收起）
+  }, [sortBy, sortOrder, selectedTag, readFilter, selectedCategory, typeFilter, addedRange, reloadTick]);
 
   const handleSearch = useCallback((val) => {
     setSearch(val);
@@ -608,6 +631,37 @@ export default function Library({ mode = 'library', enableSession }) {
     } catch (e) {
       toast('选择文件失败: ' + e.message, 'error');
     }
+  };
+
+  // 扫描一个目录（批量入库）：书库是一等入口，不该只把这件事放在设置页。
+  // 选中的目录会同时记进「扫描目录」列表，下次可直接重扫。
+  const handleScanDirectory = async () => {
+    if (!isTauri) {
+      toast('扫描目录仅在桌面应用中可用', 'warning');
+      return;
+    }
+    if (scanningDir) {
+      toast('已有扫描任务在进行中，进度见右下角', 'info');
+      return;
+    }
+    let selected;
+    try {
+      selected = await window.__TAURI__.dialog.open({
+        directory: true,
+        multiple: false,
+        title: '选择要扫描的漫画目录',
+      });
+    } catch (e) {
+      toast('选择目录失败: ' + e.message, 'error');
+      return;
+    }
+    if (!selected) return;
+
+    const depth = clampDepth(settings.scan_depth);
+    const roots = parseScanRoots(settings.scan_roots, settings.root_dir, settings.scan_depth);
+    updateSetting('scan_roots', serializeScanRoots(addScanRoot(roots, selected, depth)));
+    // useScan 会持久化 root_dir/scan_depth 再启动任务，并负责完成提示
+    startDirScan(selected, depth);
   };
 
   // 选择文件夹并直接打包为 CBZ
@@ -875,22 +929,32 @@ export default function Library({ mode = 'library', enableSession }) {
         <div className="welcome-screen-icon">📚</div>
         <h2>欢迎使用 MangaViewer</h2>
         <p className="welcome-screen-desc">
-          打开漫画文件夹或压缩包即可开始阅读<br />
+          先把漫画加入书库，再开始阅读<br />
           <span className="welcome-screen-sub">
             支持文件夹、ZIP/CBZ、RAR/CBR、7Z 压缩包
           </span>
         </p>
 
-        {/* 直接打开文件 */}
-        {isTauri && (
+        {/* 三选一：批量入库（扫描目录）放第一位——它才是"我有几百个文件"的答案，
+            此前空状态只教用户一次打开一个，等于把最费时的路径当成了唯一路径 */}
+        {isTauri ? (
           <div className="welcome-screen-actions">
-            <button className="btn" onClick={() => handleQuickOpen('folder')} disabled={opening}>
-              📁 打开文件夹
+            <button className="btn" onClick={handleScanDirectory} disabled={scanningDir}>
+              {scanningDir ? '⏳ 扫描中...' : '🗂️ 扫描漫画目录'}
             </button>
-            <button className="btn" onClick={() => handleQuickOpen('archive')} disabled={opening}>
-              📄 打开压缩包
+            <button className="btn btn-secondary" onClick={() => handleQuickOpen('folder')} disabled={opening}>
+              📁 只打开一个文件夹
+            </button>
+            <button className="btn btn-secondary" onClick={() => handleQuickOpen('archive')} disabled={opening}>
+              📄 只打开一个压缩包
             </button>
           </div>
+        ) : (
+          <p className="welcome-screen-desc">
+            <span className="welcome-screen-sub">
+              加入漫画需要桌面应用（扫描/打开本机目录）；手机/平板端只能阅读已入库的内容。
+            </span>
+          </p>
         )}
       </div>
     );
@@ -1087,6 +1151,8 @@ export default function Library({ mode = 'library', enableSession }) {
               opening={opening}
               loading={loading}
               packingCbz={packingCbz}
+              scanning={scanningDir}
+              onScanDir={handleScanDirectory}
               onOpenFolder={() => handleQuickOpen('folder')}
               onOpenArchive={() => handleQuickOpen('archive')}
               onConvertCbz={handleConvertFolderToCbz}
@@ -1102,7 +1168,9 @@ export default function Library({ mode = 'library', enableSession }) {
               opening={opening}
               loading={loading}
               packingCbz={packingCbz}
+              scanning={scanningDir}
               variant="mobile"
+              onScanDir={() => { handleScanDirectory(); setShowMobileMenu(false); }}
               onOpenFolder={() => { handleQuickOpen('folder'); setShowMobileMenu(false); }}
               onOpenArchive={() => { handleQuickOpen('archive'); setShowMobileMenu(false); }}
               onConvertCbz={() => { handleConvertFolderToCbz(); setShowMobileMenu(false); }}
@@ -1443,11 +1511,17 @@ export default function Library({ mode = 'library', enableSession }) {
 const NS_OTHER = '_other';
 
 // 漫画库操作按钮组（桌面 / 移动端共用）
-function ArchiveActionButtons({ isTauri, opening, packingCbz, variant, onOpenFolder, onOpenArchive, onConvertCbz }) {
+function ArchiveActionButtons({ isTauri, opening, packingCbz, scanning, variant, onScanDir, onOpenFolder, onOpenArchive, onConvertCbz }) {
   const sizeClass = variant === 'mobile' ? 'btn-sm' : '';
 
   return (
     <>
+      {/* 扫描目录放最前：它是唯一能一次加入整批漫画的动作 */}
+      {isTauri && (
+        <button className={`btn btn-secondary ${sizeClass}`} onClick={onScanDir} disabled={scanning}>
+          {scanning ? '⏳ 扫描中...' : '🗂️ 扫描目录'}
+        </button>
+      )}
       <button className={`btn btn-secondary ${sizeClass}`} onClick={onOpenFolder} disabled={opening}>
         📁 打开文件夹
       </button>

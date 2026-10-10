@@ -1,8 +1,9 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, renderHook } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import Library from '../pages/Library';
 import { clearLibrarySessions } from '../hooks/useLibrarySession';
 import { resetJobsStore } from '../hooks/useJobs';
+import useJobs from '../hooks/useJobs';
 import { ToastProvider } from '../components/Toast';
 import { SettingsProvider } from '../hooks/useSettings';
 import { TagsProvider } from '../hooks/useTags';
@@ -746,5 +747,43 @@ describe('Library 继续阅读横条', () => {
         expect.objectContaining({ read: 'in_progress', limit: 50 })
       );
     });
+  });
+});
+
+describe('Library 内容入口（批量入库）', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    api.getContinueReading.mockResolvedValue([]);
+    api.scanStatus.mockResolvedValue({ running: false });
+    api.syncStatus.mockResolvedValue({ running: false });
+    api.convertCbzStatus.mockResolvedValue({ running: false });
+  });
+
+  test('书库彻底为空时引导「先把漫画加入书库」（此前只教一次打开一个）', async () => {
+    api.getArchives.mockResolvedValue([]);
+    renderLibrary();
+    await waitFor(() => expect(screen.getByText(/先把漫画加入书库/)).toBeInTheDocument());
+    expect(screen.getByText(/ZIP\/CBZ/)).toBeInTheDocument();
+  });
+
+  test('扫描结束后重拉列表，让新入库的条目直接可见', async () => {
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '原有漫画', archive_type: 'folder', page_count: 10, cover_url: '/c', tags: [] },
+    ]);
+    api.scan.mockResolvedValue({ message: '扫描完成：新增 3' });
+
+    renderLibrary();
+    await waitFor(() => expect(screen.getByText('原有漫画')).toBeInTheDocument());
+    const before = api.getArchives.mock.calls.length;
+
+    // 等价于「任务在别的页面/别的设备上被发起并结束」：任务层是唯一状态源，
+    // 书库不该因为"不是我点的扫描"就继续显示旧列表
+    const jobs = renderHook(() => useJobs());
+    await act(async () => { await jobs.result.current.startScan('/lib', 1); });
+
+    await waitFor(() => expect(api.getArchives.mock.calls.length).toBeGreaterThan(before));
   });
 });
