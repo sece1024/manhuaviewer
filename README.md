@@ -20,6 +20,7 @@
 - 🏠 **局域网模式** — 设置内开启后手机/平板浏览器与 OPDS 阅读器均可访问
 - 🔄 **跨机同步** — 从局域网内另一台 MangaViewer 整库拉取档案（含标签/分类/进度），支持断点续传与任务取消；同步收尾时把本机标签**镜像回远端**（启动同步的机器是标签权威方，本机删掉的标签远端也删）
 - 🔄 **增量扫描** — 扫描根目录：跳过未变化档案、清理已删除档案（支持定时自动备份）
+- ⏳ **长任务可见** — 扫描 / 跨机同步 / 批量转 CBZ 的进度与取消常驻在任意页面右下角，切页不丢状态
 - 🖥️ **跨平台应用** — macOS, Windows, Linux（基于 Tauri 2.0）
 
 ## 🚀 快速开始
@@ -104,8 +105,8 @@ frontend/
 │   ├── App.js                      # 路由 + 主题 + ErrorBoundary
 │   ├── index.js                    # 入口
 │   ├── index.css                   # 全局样式（三套主题/响应式）
-│   ├── components/                 # Toast/Modal/LazyImage/ErrorBoundary/TagPicker/CategoryPicker/ConfirmDialog/ThumbnailPanel/ReaderVirtualList/CbzConvertPanel
-│   ├── hooks/                      # useSettings/useTags/useReaderKeyboard/useGamepad/useScan/useSync/useCbzConvert/useLibrarySession 等 11 个
+│   ├── components/                 # Toast/Modal/LazyImage/ErrorBoundary/TagPicker/CategoryPicker/ConfirmDialog/ThumbnailPanel/ReaderVirtualList/CbzConvertPanel/JobIndicator
+│   ├── hooks/                      # useSettings/useTags/useReaderKeyboard/useGamepad/useScan/useSync/useCbzConvert/useLibrarySession/useJobs 等 12 个
 │   ├── pages/                      # Library/Reader/History/Settings
 │   ├── utils/                      # api.js（唯一 API 客户端）/format.js/listReconcile.js/spreadFit.js
 │   └── __tests__/                  # 测试文件

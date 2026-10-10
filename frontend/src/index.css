@@ -381,6 +381,51 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .toast-info { background: var(--accent); }
 @keyframes toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
 
+/* ── 长任务指示器（扫描 / 同步 / 转 CBZ）──
+   常驻右下角，任何页面都能看到任务还在不在跑；z-index 低于 toast，避免盖住提示 */
+.job-indicator {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 240px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-lg);
+}
+.job-indicator-row { display: flex; flex-direction: column; gap: 6px; }
+.job-indicator-head { display: flex; align-items: center; gap: 8px; }
+.job-indicator-label { font-size: 13px; font-weight: 600; }
+.job-indicator-count {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.job-indicator-bar {
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--border);
+}
+.job-indicator-bar-inner {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+.job-indicator-current {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @keyframes skeleton-pulse {
   0%, 100% { opacity: 0.6; }
   50% { opacity: 0.3; }
@@ -1786,6 +1831,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   }
 
   .toast-container { top: auto; bottom: 120px; right: 12px; left: 12px; }
+  /* 窄屏：抬到底部导航上方，右侧留出安全距离 */
+  .job-indicator { right: 12px; bottom: 88px; width: 200px; }
 }
 
 @media (max-width: 480px) {

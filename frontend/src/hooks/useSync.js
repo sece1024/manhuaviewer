@@ -1,27 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import api, { invalidateLibrarySessions } from '../utils/api';
-
-const DEFAULT_INFO = { total: 0, done: 0, new: 0, changed: 0, skipped: 0, current: '', failed: [] };
+import api from '../utils/api';
+import useJobs from './useJobs';
 
 /**
- * 跨机同步：表单状态、对比预览、启动/取消与进度轮询。
+ * 跨机同步：表单状态、对比预览、启动/取消。
+ *
+ * 进度轮询不再由本 hook 持有：任务层（useJobs）水合 /sync/status 并统一轮询，
+ * 所以离开设置页再回来仍能看到真实进度，也不会在任务仍在跑时把「开始同步」按钮
+ * 变回可用（此前 syncRunning 是本地 state，重新挂载就丢）。
  *
  * - 表单三项（远端地址/口令/本地目录）以服务端设置为唯一数据源；
- * - `handleSyncStart` 先持久化表单再启动任务并接管 1s 轮询，任务结束自动停止；
- * - 卸载时清除轮询，避免离开设置页后泄漏定时器。
+ * - `handleSyncStart` 先持久化表单再交给任务层；
+ * - 同步结束时任务层会作废浏览会话（成员集合可能已变），本 hook 只负责刷新统计。
  */
 export default function useSync({ settings, updateSetting, toast, onStatsRefresh }) {
+  const { jobs, startSync: startJob, cancelSync } = useJobs();
+  const syncInfo = jobs.sync;
+  const syncRunning = syncInfo.running;
   const [syncUrl, setSyncUrl] = useState(settings.sync_remote_url || '');
   const [syncToken, setSyncToken] = useState(settings.sync_remote_token || '');
   const [syncDir, setSyncDir] = useState(settings.sync_dir || '');
-  const [syncRunning, setSyncRunning] = useState(false);
-  const [syncInfo, setSyncInfo] = useState(DEFAULT_INFO);
   const [syncPlanResult, setSyncPlanResult] = useState(null); // {new:[],changed:[],up_to_date:[],total}
   const [planLoading, setPlanLoading] = useState(false);
-  const syncPollRef = useRef(null);
-  // 是否已经观察到任务在运行：避免启动瞬间后端 status 还没把 running 置位，
-  // 就误判「已结束」而清掉轮询（任务实际还在排队/连接远端）。
-  const sawRunningRef = useRef(false);
+  const seenFinishedAt = useRef(syncInfo.finishedAt);
 
   // 服务端设置就绪/变化后同步表单（设置是唯一数据源）
   useEffect(() => {
@@ -30,34 +31,17 @@ export default function useSync({ settings, updateSetting, toast, onStatsRefresh
     setSyncDir(settings.sync_dir || '');
   }, [settings.sync_remote_url, settings.sync_remote_token, settings.sync_dir]);
 
-  // 卸载时停止轮询
-  useEffect(() => () => { if (syncPollRef.current) clearInterval(syncPollRef.current); }, []);
-
-  const pollSyncStatus = useCallback(async () => {
-    try {
-      const s = await api.syncStatus();
-      setSyncInfo({
-        total: s.total || 0,
-        done: s.done || 0,
-        new: s.new || 0,
-        changed: s.changed || 0,
-        skipped: s.skipped || 0,
-        current: s.current || '',
-        failed: s.failed || [],
-      });
-      if (s.running) {
-        sawRunningRef.current = true;
-      } else if (sawRunningRef.current) {
-        // 只有先见过 running=true，!running 才代表任务真正结束
-        if (syncPollRef.current) { clearInterval(syncPollRef.current); syncPollRef.current = null; }
-        setSyncRunning(false);
-        // 同步任务结束的瞬间再失效一次：syncStart 只作废了“启动前”的缓存，
-        // 任务运行期间（可能数十秒）拉进来的新档案仍可能被旧缓存挡住。
-        invalidateLibrarySessions();
-        api.getStats().then(onStatsRefresh).catch(() => {}); // 完成后刷新统计
-      }
-    } catch (e) { /* 轮询失败忽略，下一轮再试 */ }
-  }, [onStatsRefresh]);
+  useEffect(() => {
+    if (syncInfo.finishedAt === seenFinishedAt.current) return;
+    seenFinishedAt.current = syncInfo.finishedAt;
+    if (syncInfo.error) {
+      toast(syncInfo.error, 'error');
+      return;
+    }
+    if (onStatsRefresh) {
+      Promise.resolve(api.getStats()).then(onStatsRefresh).catch(() => {});
+    }
+  }, [syncInfo.finishedAt, syncInfo.error, toast, onStatsRefresh]);
 
   // 对比预览：只拉清单与本地比对，不下载
   const handleSyncCompare = async () => {
@@ -90,20 +74,16 @@ export default function useSync({ settings, updateSetting, toast, onStatsRefresh
         updateSetting('sync_remote_token', syncToken.trim()),
         updateSetting('sync_dir', syncDir.trim()),
       ]);
-      await api.syncStart({ url: syncUrl.trim(), token: syncToken.trim(), dir: syncDir.trim() });
-      setSyncRunning(true);
-      sawRunningRef.current = false; // 本轮任务重来，等待观察到 running=true
-      setSyncInfo({ total: 0, done: 0, new: 0, changed: 0, skipped: 0, current: '连接远端...', failed: [] });
-      pollSyncStatus();
-      syncPollRef.current = setInterval(pollSyncStatus, 1000);
     } catch (e) {
-      toast(e.message || '同步启动失败', 'error');
+      toast(e.message || '同步参数保存失败', 'error');
+      return;
     }
+    startJob({ url: syncUrl.trim(), token: syncToken.trim(), dir: syncDir.trim() });
   };
 
-  const handleSyncCancel = async () => {
-    try { await api.syncCancel(); } catch (e) { toast(e.message, 'error'); }
-  };
+  const handleSyncCancel = useCallback(async () => {
+    await cancelSync();
+  }, [cancelSync]);
 
   return {
     syncUrl, setSyncUrl,

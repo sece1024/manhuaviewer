@@ -7,6 +7,7 @@ import useSettings from './hooks/useSettings';
 import { TagsProvider } from './hooks/useTags';
 import ErrorBoundary from './components/ErrorBoundary';
 import Modal from './components/Modal';
+import JobIndicator from './components/JobIndicator';
 import api, { localStorageGet, localStorageSet, setServerToken } from './utils/api';
 
 // 非首屏页面按需加载，减小首屏 bundle
@@ -155,6 +156,10 @@ function AppContent() {
           </Routes>
         </Suspense>
       </main>
+
+      {/* 长任务指示器：扫描/同步/转 CBZ 都是分钟级后台任务，进度必须跟着用户走，
+          不能只在发起它的设置页可见；阅读器整屏沉浸时隐藏，避免盖住画面 */}
+      {!isReader && <JobIndicator />}
 
       {/* 移动端底部导航：仅 ≤768px 显示（CSS），reader 路由下隐藏保持沉浸 */}
       {!isReader && (
