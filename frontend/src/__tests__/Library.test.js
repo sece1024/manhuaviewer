@@ -1434,3 +1434,41 @@ describe('Library 区分「书库为空」与「筛不出来」', () => {
     await waitFor(() => expect(screen.getByText(/欢迎使用 MangaViewer/)).toBeInTheDocument());
   });
 });
+
+// 进入书库时列表此前会被等价地请求两次：挂载 effect 里的 loadArchives()（无参数）
+// 与「筛选变化重拉」effect 的 loadArchives({search, tag, category_id})——挂载时两者
+// 参数等价、结果相同，靠 requestIdRef 让后者胜出，所以只是白跑一次往返。
+describe('Library 首屏只请求一次列表', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    api.getContinueReading.mockResolvedValue([]);
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '漫画A', archive_type: 'cbz', page_count: 10, cover_url: '/c', tags: [] },
+    ]);
+  });
+
+  const listCalls = () => api.getArchives.mock.calls.filter(([p]) => p && p.limit === 50);
+
+  test('无会话可恢复时（首次进入）只发一次列表请求', async () => {
+    renderLibrary();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    expect(listCalls()).toHaveLength(1);
+  });
+
+  // 关于"去掉那次请求会不会连带丢掉会话的『已确认』标记"：既有的会话用例已经守着——
+  // 它的流程就是"卸载时写快照 → 重新进入恢复"，「翻到第 2 页再返回」若标记没置上，
+  // 快照不会写入，返回后只剩第 1 页，断言必然失败。
+  test('清理会话后重新进入仍然只发一次（恢复分支不走这条路径）', async () => {
+    // 上一条用例可能已经写过会话快照：显式清掉，保证这里走的是"无会话"分支
+    clearLibrarySessions();
+    renderLibrary();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    expect(listCalls()).toHaveLength(1);
+  });
+
+});

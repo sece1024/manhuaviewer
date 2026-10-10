@@ -491,9 +491,11 @@ export default function Library({ mode = 'library', enableSession }) {
       }
       // 后台与服务器比对（仅内容重排时整体刷新，否则合并字段）
       reconcileLibrary(s);
-    } else {
-      loadArchives();
     }
+    // 无会话可恢复时，首屏列表由下面的「筛选变化重拉」effect 负责——它在挂载时必然跑
+    // 一次，且参数与这里等价（挂载时搜索/标签/分类都为空）。此前这里还会再调一次
+    // loadArchives()，于是每次进入书库都白跑一次等价请求（靠 requestIdRef 让后者胜出）。
+    // 会话恢复分支自身的"已确认"标记由 reconcileLibrary 内部完成，不依赖这里。
     reloadCategories();
     reloadDateTree();
     // 每次进入书库刷新标签列表与计数（阅读器/设置页里的改动可能已过期）
