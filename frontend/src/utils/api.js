@@ -422,6 +422,10 @@ const api = {
     return request(`/tags${qs ? '?' + qs : ''}`);
   },
   getArchiveTags: (archiveId) => request(`/archives/${archiveId}/tags`),
+  // 每个标签在给定选中档案里出现了几次 → 批量打标签弹窗据此区分
+  // 「全部包含 / 部分包含 / 未包含」。一次请求而不是 N 次（选中 200 本会打爆后端）。
+  getTagCounts: (archiveIds = []) =>
+    request(`/tags/counts?ids=${archiveIds.join(',')}`),
   createTag: (data) =>
     request('/tags', { method: 'POST', body: JSON.stringify(data) }).then(r => { _invalidate('/tags'); _invalidate('/archives'); return r; }),
   updateTag: (id, data) =>

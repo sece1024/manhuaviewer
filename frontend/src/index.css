@@ -1690,6 +1690,22 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   background: var(--accent);
   color: #fff;
 }
+/* 批量模式的「部分包含」态：不是全有也不是全无，点击会补成全有 */
+.tag-picker-item.partial {
+  background: var(--bg-tertiary);
+}
+.tag-picker-item.partial .tag-picker-check {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: none;
+}
+.tag-picker-item.busy { opacity: 0.5; pointer-events: none; }
+.tag-picker-partial-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
 .tag-picker-color {
   width: 8px;
   height: 8px;

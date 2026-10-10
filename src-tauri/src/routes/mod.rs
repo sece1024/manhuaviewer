@@ -411,6 +411,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/tags/assign", post(tags::assign_tag))
         .route("/tags/:archive_id/:tag_id", delete(tags::remove_tag))
         .route("/tags/namespaces", get(tags::list_namespaces))
+        // 批量打标签弹窗靠它区分「全部/部分/未包含」（见 tags::tag_counts）
+        .route("/tags/counts", get(tags::tag_counts))
         .route("/tags/batch-assign", post(tags::batch_assign_tag))
         .route("/tags/batch-remove", post(tags::batch_remove_tag))
         .route("/archives/:id/tags", get(tags::get_archive_tags))

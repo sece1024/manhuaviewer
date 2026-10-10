@@ -154,6 +154,7 @@ frontend/
 | `/api/tags/batch-assign` | POST | 批量分配标签 |
 | `/api/tags/batch-remove` | POST | 批量移除标签 |
 | `/api/tags/namespaces` | GET | 标签命名空间列表 |
+| `/api/tags/counts` | GET | 每个标签在给定选中档案（`?ids=1,2,3`）里的出现次数，供批量打标签区分「全部/部分/未包含」 |
 | `/api/archives/:id/tags` | GET | 档案的标签列表 |
 | `/api/tags/:archive_id/:tag_id` | DELETE | 移除档案上的标签 |
 | `/api/categories` | GET/POST | 分类列表 / 创建分类 |
