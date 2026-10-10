@@ -402,6 +402,16 @@ export default function Library({ mode = 'library', enableSession }) {
   useEffect(() => { readFilterRef.current = readFilter; }, [readFilter]);
   useEffect(() => { tagStateRef.current = tagState; }, [tagState]);
   useEffect(() => { typeFilterRef.current = typeFilter; }, [typeFilter]);
+  // 类型筛选是存在服务端设置里的，但 state 只在首帧从 localStorage 预置：
+  // localStorage 被清掉（隐私模式/换设备/清了站点数据）时书库会静默忽略它，
+  // 于是界面显示的筛选与用户以为的不一致，`hasActiveFilter` 的判断也跟着失真。
+  // 服务端还没这个键（undefined）时保留当前值，不要覆盖 localStorage 里那份。
+  useEffect(() => {
+    const v = settings.type_filter;
+    if (v !== 'folder' && v !== 'archive' && v !== 'all') return;
+    setTypeFilter(v);
+    typeFilterRef.current = v;
+  }, [settings.type_filter]);
   useEffect(() => { selectedCategoryRef.current = selectedCategory; }, [selectedCategory]);
   useEffect(() => { addedRangeRef.current = addedRange; }, [addedRange]);
   useEffect(() => { searchRef.current = search; }, [search]);
@@ -1115,6 +1125,28 @@ export default function Library({ mode = 'library', enableSession }) {
   );
   const showContinue = !hasActiveFilter && continueItems.length > 0;
 
+  // 「书库本身是否为空」不能靠"筛完的结果为空"推断——有筛选时结果为空只说明筛不出来，
+  // 这正是上一次"搜不到就整页变欢迎页"的同一种错（拿局部推断整体）。
+  // 只有在"结果为空 + 确实有筛选"这一种模棱两可的情况下，才回头问一次**不带任何筛选**
+  // 的查询（limit=1 就够了）。任何档案写操作都会作废 /archives 前缀的缓存，
+  // 所以这个探测不会因为缓存而过期骗人。
+  const [libraryEmpty, setLibraryEmpty] = useState(false);
+  useEffect(() => {
+    if (loading || archives.length > 0 || !hasActiveFilter) {
+      // 条件不成立时把结论清掉：否则"曾经真的空"会在书库有内容之后继续生效
+      if (libraryEmpty) setLibraryEmpty(false);
+      return undefined;
+    }
+    let cancelled = false;
+    Promise.resolve(api.getArchives({ limit: 1, page: 1 }))
+      .then(list => {
+        if (!cancelled) setLibraryEmpty(Array.isArray(list) && list.length === 0);
+      })
+      // 探测失败就当作"有内容"：宁可多给一个「清除筛选」按钮，也不要误报"书库是空的"
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [archives.length, hasActiveFilter, libraryEmpty, loading, reloadTick]);
+
   // 空结果时告诉用户"是哪几个筛选条件把结果筛没了"——只写"没有匹配的漫画"无从下手
   const activeFilterSummary = useMemo(() => {
     const parts = [];
@@ -1188,7 +1220,9 @@ export default function Library({ mode = 'library', enableSession }) {
   // 此前只判 `archives.length === 0`，而 archives 是"当前筛选的结果集"——于是搜不到时
   // 整个页面（连搜索框一起）被欢迎页顶掉，用户只能切到别的页面再切回来才能重搜。
   // 也不在 loading 时判定：清空搜索到结果回来之间有空窗，否则会闪一下欢迎页。
-  const showWelcome = archives.length === 0 && !hasActiveFilter && !loading;
+  // 没有筛选时"结果为空"就是"书库为空"（查询本身不带条件），无需探测；
+  // 有筛选时要等探测结论，否则会把"筛不出来"当成"书库是空的"
+  const showWelcome = archives.length === 0 && !loading && (!hasActiveFilter || libraryEmpty);
   if (showWelcome) {
     return (
       <div className="welcome-screen">

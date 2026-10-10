@@ -1343,3 +1343,94 @@ describe('Library 搜不到结果时页面必须留在原地', () => {
     expect(screen.queryByText('没有匹配的漫画')).toBeNull();
   });
 });
+
+// 「书库本身是否为空」不能靠"筛完的结果为空"推断：有筛选时结果为空只说明筛不出来。
+// 这是"搜不到就整页变欢迎页"的同一种错（拿局部推断整体）的最后一处。
+describe('Library 区分「书库为空」与「筛不出来」', () => {
+  function renderLibraryOnly() {
+    return render(
+      <MemoryRouter>
+        <Routes>
+          <Route path="/" element={
+            <SettingsProvider>
+              <TagsProvider>
+                <ToastProvider>
+                  <Library enableSession={false} />
+                </ToastProvider>
+              </TagsProvider>
+            </SettingsProvider>
+          } />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  const withFolder = [
+    { id: 1, title: '文件夹漫画', archive_type: 'folder', page_count: 10, cover_url: '/c', tags: [] },
+  ];
+
+  function mockApis() {
+    jest.clearAllMocks();
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    api.getContinueReading.mockResolvedValue([]);
+  }
+
+  test('书库真的为空 + 存在持久化筛选 → 给"怎么加漫画"的欢迎页，而不是让人去清筛选', async () => {
+    mockApis();
+    // 用户此前把类型筛成「压缩包」，随后清空了书库：下次打开时库里一个档案都没有，
+    // 让 ta 去点"清除筛选"是死路（清完还是空的），该给的是首次使用的引导
+    api.getSettings.mockResolvedValue({ type_filter: 'archive' });
+    api.getArchives.mockResolvedValue([]);
+
+    renderLibraryOnly();
+
+    await waitFor(() => expect(screen.getByText(/欢迎使用 MangaViewer/)).toBeInTheDocument());
+    expect(screen.queryByText('没有匹配的漫画')).toBeNull();
+  });
+
+  test('书库有内容、只是被筛选藏起来 → 给「没有匹配」+ 清除筛选，而不是欢迎页', async () => {
+    mockApis();
+    api.getSettings.mockResolvedValue({ type_filter: 'archive' });
+    // 探测查询（不带筛选）能查到内容，说明书库非空
+    api.getArchives.mockResolvedValue(withFolder);
+
+    renderLibraryOnly();
+
+    await waitFor(() => expect(screen.getByText('没有匹配的漫画')).toBeInTheDocument());
+    expect(screen.queryByText(/欢迎使用 MangaViewer/)).toBeNull();
+    // 清除筛选有两个入口（顶栏一个、空态一个），这里只确认空态里那个在
+    const emptyState = document.querySelector('.empty-state');
+    expect(within(emptyState).getByRole('button', { name: /清除筛选/ })).toBeInTheDocument();
+  });
+
+  test('没有任何筛选时不发探测请求（此时"结果为空"就是"书库为空"）', async () => {
+    mockApis();
+    api.getSettings.mockResolvedValue({});
+    api.getArchives.mockResolvedValue([]);
+
+    renderLibraryOnly();
+
+    await waitFor(() => expect(screen.getByText(/欢迎使用 MangaViewer/)).toBeInTheDocument());
+    // 没有任何一次"探测"请求（探测的特征是 limit=1）
+    const probeCalls = api.getArchives.mock.calls.filter(([p]) => p && p.limit === 1);
+    expect(probeCalls).toHaveLength(0);
+  });
+
+  test('删除最后一本后回到欢迎页（探测结论不会把"曾经有内容"留下来）', async () => {
+    mockApis();
+    api.getSettings.mockResolvedValue({});
+    api.getArchives.mockResolvedValue(withFolder);
+
+    renderLibraryOnly();
+    await waitFor(() => expect(screen.getByText('文件夹漫画')).toBeInTheDocument());
+
+    // 删掉最后一本：删除会作废 /archives 缓存并触发重拉
+    api.getArchives.mockResolvedValue([]);
+    fireEvent.click(screen.getByRole('button', { name: '更多操作：文件夹漫画' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: '漫画操作' })).getByRole('button', { name: /从库中移除/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '移除' }));
+
+    await waitFor(() => expect(screen.getByText(/欢迎使用 MangaViewer/)).toBeInTheDocument());
+  });
+});
