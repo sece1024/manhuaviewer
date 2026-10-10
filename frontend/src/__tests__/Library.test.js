@@ -820,6 +820,16 @@ describe('Library 标签状态筛选（整理模式的输入集合）', () => {
     });
   });
 
+  test('「整理」入口：切到未打标签并打开整理模式（列表与整理模式说同一件事）', async () => {
+    renderLibrary();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /整理/ }));
+
+    await waitFor(() => expect(screen.getByRole('dialog', { name: '整理标签' })).toBeInTheDocument());
+    expect(screen.getByLabelText('标签状态').value).toBe('untagged');
+  });
+
   test('标签状态属于筛选：生效时隐藏「继续阅读」横条', async () => {
     api.getContinueReading.mockResolvedValue([
       { id: 9, title: '读到一半', page_count: 100, read_page: 10, cover_url: '/c', tags: [] },

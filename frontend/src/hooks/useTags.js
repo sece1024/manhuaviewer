@@ -6,6 +6,14 @@ const TagsContext = createContext(null);
 // 模块级缓存：TagsProvider 重新挂载时复用上次数据
 let _cachedTags = null;
 
+/**
+ * 清掉模块级标签缓存。仅供测试使用：缓存会跨用例存活，导致「下一个用例」拿到
+ * 上一个用例的标签列表（Provider 见缓存就不再重新拉取）。
+ */
+export function resetTagsCache() {
+  _cachedTags = null;
+}
+
 export function TagsProvider({ children }) {
   const [tags, setTags] = useState(() => _cachedTags || []);
   const [loaded, setLoaded] = useState(() => _cachedTags !== null);

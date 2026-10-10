@@ -10,6 +10,7 @@ import LazyImage from '../components/LazyImage';
 import TagPicker from '../components/TagPicker';
 import CategoryPicker from '../components/CategoryPicker';
 import ConfirmDialog from '../components/ConfirmDialog';
+import TagTriage from '../components/TagTriage';
 import CbzConvertPanel from '../components/CbzConvertPanel';
 import Modal from '../components/Modal';
 import useCbzConvert from '../hooks/useCbzConvert';
@@ -273,6 +274,8 @@ export default function Library({ mode = 'library', enableSession }) {
   const [renameValue, setRenameValue] = useState('');
   // 多选模式
   const [selectMode, setSelectMode] = useState(false);
+  // 整理模式（键盘逐本打标签）；退出时重拉一次，因为整理期间这些书已经离开「未打标签」
+  const [showTriage, setShowTriage] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
   // 组展开状态（点击合并后的漫画卡片，就地展开子目录）
   const [expandedGroup, setExpandedGroup] = useState(null);
@@ -1149,6 +1152,20 @@ export default function Library({ mode = 'library', enableSession }) {
             {showSidebar ? '◁' : '▷'}
           </button>
 
+          {/* 整理模式入口：与「选择」并列，因为它是"批量操作"的另一种形态——
+              选择是"先选哪些"，整理是"一本一本来"，后者对给上百本打标签更省手 */}
+          <button
+            className="btn btn-secondary"
+            onClick={() => {
+              // 让背后的列表与整理模式说同一件事：进去整理未打标签的，列表也看未打标签
+              setTagState('untagged');
+              setShowTriage(true);
+            }}
+            title="逐个给未打标签的漫画打标签（键盘操作，Enter 打标并下一本）"
+          >
+            🏷️ 整理
+          </button>
+
           {selectMode ? (
             <button className="btn btn-secondary" onClick={handleExitSelectMode}>取消选择</button>
           ) : (
@@ -1181,6 +1198,12 @@ export default function Library({ mode = 'library', enableSession }) {
         {/* 窄屏：折叠次要操作 */}
         {isNarrow && showMobileMenu && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: 8 }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => { setTagState('untagged'); setShowTriage(true); setShowMobileMenu(false); }}
+            >
+              🏷️ 整理
+            </button>
             <ArchiveActionButtons
               isTauri={isTauri}
               opening={opening}
@@ -1414,6 +1437,19 @@ export default function Library({ mode = 'library', enableSession }) {
         <div className="cbz-convert-float">
           <CbzConvertPanel info={convertInfo} onCancel={cancelConvert} />
         </div>
+      )}
+
+      {/* 整理模式（键盘逐本打标签） */}
+      {showTriage && (
+        <TagTriage
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onClose={() => {
+            setShowTriage(false);
+            // 整理期间打过的书已离开「未打标签」，后台列表要跟上
+            loadArchives({ search: searchRef.current, tag: selectedTagRef.current });
+          }}
+        />
       )}
 
       {/* 重命名弹窗 */}
