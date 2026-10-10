@@ -26,7 +26,7 @@ const isTauri = window.__TAURI__ !== undefined;
 
 // 网格卡片：memoized，避免多选切换时整屏重渲染。
 // 所有回调通过 props 传入（父组件 useCallback 稳定引用）。
-const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove, onOpenSheet }) {
+const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, isKbFocused, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove, onOpenSheet }) {
   // 阅读状态与进度文案由 utils/format 统一推导，判定口径与后端 read 筛选一致
   const readState = readStateOf(a);
   const progressText = formatReadProgress(a);
@@ -37,7 +37,8 @@ const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, se
   const { longPressProps, swallowedByLongPress } = useLongPress(() => onOpenSheet(a));
   return (
     <div
-      className={`archive-card ${selectMode && isSelected ? 'archive-card-selected' : ''}`}
+      className={`archive-card ${selectMode && isSelected ? 'archive-card-selected' : ''} ${isKbFocused ? 'kb-focus' : ''}`}
+      data-archive-id={a.id}
       {...longPressProps}
       onClick={(e) => {
         if (swallowedByLongPress()) return; // 长按已经开过面板，别再进阅读器
@@ -140,13 +141,14 @@ const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, se
 });
 
 // 列表行：memoized，同 ArchiveCard
-const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove, onOpenSheet }) {
+const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, isKbFocused, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove, onOpenSheet }) {
   // 此前这里直接显示 0 基的 read_page（少一页），且 page_index=0 时整段被隐藏
   const progressText = formatReadProgress(a);
   const { longPressProps, swallowedByLongPress } = useLongPress(() => onOpenSheet(a));
   return (
     <div
-      className={`archive-list-item ${selectMode && isSelected ? 'archive-list-item-selected' : ''}`}
+      className={`archive-list-item ${selectMode && isSelected ? 'archive-list-item-selected' : ''} ${isKbFocused ? 'kb-focus' : ''}`}
+      data-archive-id={a.id}
       {...longPressProps}
       onClick={(e) => {
         if (swallowedByLongPress()) return;
@@ -860,8 +862,7 @@ export default function Library({ mode = 'library', enableSession }) {
   };
 
   // 多选
-  const handleToggleSelect = useCallback((e, id) => {
-    e.stopPropagation();
+  const toggleSelectFor = useCallback((id) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -869,6 +870,10 @@ export default function Library({ mode = 'library', enableSession }) {
       return next;
     });
   }, []);
+  const handleToggleSelect = useCallback((e, id) => {
+    e.stopPropagation();
+    toggleSelectFor(id);
+  }, [toggleSelectFor]);
 
   // 打开阅读器（稳定引用，供 memoized 卡片使用）
   const openArchive = useCallback((id) => navigate(`/reader/${id}`), [navigate]);
@@ -1015,6 +1020,92 @@ export default function Library({ mode = 'library', enableSession }) {
   // 顶部续读区只在「没加任何筛选」的首页状态出现：用户一旦主动筛选，横条与下面的
   // 列表就表达了两套不同条件，会让人怀疑列表漏了东西；此时把 `read=in_progress`
   // 交给筛选下拉即可（横条上的「查看全部在读」正是这个入口）。
+  // ── 书库键盘层 ──
+  // 阅读器是完整键盘驱动的，书库此前一个全局快捷键都没有；而书库恰恰是"批量操作"
+  // 发生的地方，键盘杠杆最高。这里给最小可用的一套：/ 搜索、j/k 移动、Enter 打开、
+  // x 多选、Esc 退出、? 看帮助。
+  const searchInputRef = useRef(null);
+  const [showSearchHelp, setShowSearchHelp] = useState(false);
+  const [kbIndex, setKbIndex] = useState(-1);
+  const kbIndexRef = useRef(-1);
+  const displayArchivesRef = useRef([]);
+  const selectModeRef = useRef(false);
+  useEffect(() => { kbIndexRef.current = kbIndex; }, [kbIndex]);
+  useEffect(() => { displayArchivesRef.current = displayArchives; }, [displayArchives]);
+  useEffect(() => { selectModeRef.current = selectMode; }, [selectMode]);
+  // 高亮项跟随移动，并滚进可视区（`nearest` 不会把整页顶走）
+  useEffect(() => {
+    if (kbIndex < 0) return;
+    const el = document.querySelector(`[data-archive-id="${displayArchives[kbIndex]?.id}"]`);
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+  }, [displayArchives, kbIndex]);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      // 正在输入 / 有弹层打开时不抢键：用 DOM 查询而不是枚举十几个弹层状态，
+      // 免得以后新增一个弹层就漏一个（所有弹层都是 .modal-overlay）
+      const tag = e.target && e.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (document.querySelector('.modal-overlay')) return;
+
+      if (e.key === '/') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+      if (e.key === '?') {
+        e.preventDefault();
+        setShowSearchHelp(true);
+        return;
+      }
+      if (e.key === 'j' || e.key === 'k') {
+        const len = displayArchivesRef.current.length;
+        if (len === 0) return;
+        e.preventDefault();
+        setKbIndex(prev => {
+          if (prev < 0) return e.key === 'j' ? 0 : len - 1;
+          return e.key === 'j' ? Math.min(len - 1, prev + 1) : Math.max(0, prev - 1);
+        });
+        return;
+      }
+      if (e.key === 'x') {
+        const item = displayArchivesRef.current[kbIndexRef.current];
+        if (!item || item._isGroup) return;
+        e.preventDefault();
+        setSelectMode(true);
+        toggleSelectFor(item.id);
+        return;
+      }
+      if (e.key === 'Enter') {
+        const item = displayArchivesRef.current[kbIndexRef.current];
+        if (!item) return;
+        e.preventDefault();
+        if (selectModeRef.current) {
+          if (!item._isGroup) toggleSelectFor(item.id);
+        } else if (item._isGroup) {
+          toggleGroup(item);
+        } else {
+          navigate(`/reader/${item.id}`);
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        if (selectModeRef.current) {
+          e.preventDefault();
+          setSelectMode(false);
+          setSelectedIds(new Set());
+        } else if (kbIndexRef.current >= 0) {
+          e.preventDefault();
+          setKbIndex(-1);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [navigate, toggleGroup, toggleSelectFor]);
+
   const hasActiveFilter = Boolean(
     search || selectedTag || selectedCategory || addedRange ||
     (typeFilter && typeFilter !== 'all') || readFilter !== 'all' || tagState !== 'all'
@@ -1229,12 +1320,21 @@ export default function Library({ mode = 'library', enableSession }) {
         {/* 顶栏 */}
         <div className="library-header">
           <input
+            ref={searchInputRef}
             className="search-input"
-            placeholder="搜索漫画... (支持 tag:xxx、-排除)"
+            placeholder="搜索漫画…（按 / 聚焦）"
             value={search}
             onChange={(e) => handleSearch(e.target.value)}
+            aria-label="搜索漫画"
             style={{ maxWidth: 280 }}
           />
+          {/* 语法以前只写在 placeholder 里，等于没文档；给一个看得见的入口 */}
+          <button
+            className="btn btn-secondary btn-icon"
+            onClick={() => setShowSearchHelp(true)}
+            title="搜索语法与快捷键"
+            aria-label="搜索语法与快捷键"
+          >?</button>
 
           <div className="spacer" />
 
@@ -1440,6 +1540,7 @@ export default function Library({ mode = 'library', enableSession }) {
                   a={a}
                   compact={cardDensity === 'compact'}
                   isSelected={selectedIds.has(a.id)}
+                  isKbFocused={kbIndex >= 0 && displayArchives[kbIndex]?.id === a.id}
                   selectMode={selectMode}
                   isExpanded={a._isGroup && expandedGroup === (a._autoGroup ? a._autoKey : `g:${a.id}`)}
                   onOpen={openArchive}
@@ -1472,6 +1573,7 @@ export default function Library({ mode = 'library', enableSession }) {
                 <ArchiveListItem
                   a={a}
                   isSelected={selectedIds.has(a.id)}
+                  isKbFocused={kbIndex >= 0 && displayArchives[kbIndex]?.id === a.id}
                   selectMode={selectMode}
                   isExpanded={a._isGroup && expandedGroup === (a._autoGroup ? a._autoKey : `g:${a.id}`)}
                   onOpen={openArchive}
@@ -1602,6 +1704,37 @@ export default function Library({ mode = 'library', enableSession }) {
         <div className="cbz-convert-float">
           <CbzConvertPanel info={convertInfo} onCancel={cancelConvert} />
         </div>
+      )}
+
+      {/* 搜索语法 + 快捷键帮助 */}
+      {showSearchHelp && (
+        <Modal onClose={() => setShowSearchHelp(false)} ariaLabel="搜索语法与快捷键">
+          <h3 style={{ marginBottom: 12 }}>🔍 搜索语法与快捷键</h3>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <tbody>
+              {[
+                ['关键词', '匹配标题或标签名；空格分隔多个词表示「并且」'],
+                ['tag:xxx', '只匹配带该标签的（支持 tag:artist:作者名）'],
+                ['-xxx', '排除标题或标签名里含 xxx 的'],
+                ['', ''],
+                ['/', '聚焦搜索框'],
+                ['j / k', '在结果里上下移动高亮'],
+                ['Enter', '打开高亮的漫画（组则展开章节）'],
+                ['x', '把高亮的漫画加入多选'],
+                ['Esc', '退出多选 / 取消高亮'],
+                ['?', '打开这个面板'],
+                ['⌘K / Ctrl-K', '命令面板（所有操作的统一入口）'],
+              ].map(([key, desc], i) => (
+                key === '' ? <tr key={i}><td colSpan={2} style={{ height: 8 }} /></tr> : (
+                  <tr key={i}>
+                    <td style={{ padding: '5px 12px 5px 0', fontFamily: 'monospace', fontWeight: 600, whiteSpace: 'nowrap', color: 'var(--accent)' }}>{key}</td>
+                    <td style={{ padding: '5px 0', color: 'var(--text-secondary)' }}>{desc}</td>
+                  </tr>
+                )
+              ))}
+            </tbody>
+          </table>
+        </Modal>
       )}
 
       {/* 卡片操作面板（触屏：长按卡片或点「⋯」） */}

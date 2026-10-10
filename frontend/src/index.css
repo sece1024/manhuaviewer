@@ -795,6 +795,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   background: var(--bg-tertiary);
 }
 
+/* 键盘层的高亮环（j/k 移动）：只描边，不改布局，避免整屏重排 */
+.archive-card.kb-focus,
+.archive-list-item.kb-focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .archive-card-progress {
   position: absolute;
   bottom: 0;

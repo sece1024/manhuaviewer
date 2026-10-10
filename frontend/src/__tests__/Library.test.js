@@ -1138,3 +1138,119 @@ describe('Library 命令面板投稿', () => {
     await waitFor(() => expect(screen.getByLabelText('标签状态').value).toBe('all'));
   });
 });
+
+// 阅读器是完整键盘驱动的，书库此前一个全局快捷键都没有——而书库恰恰是批量操作发生的
+// 地方。这一层要能"不碰鼠标做完一轮"：搜索、移动、打开、多选、退出。
+describe('Library 键盘层', () => {
+  function renderWithReader() {
+    return render(
+      <MemoryRouter>
+        <Routes>
+          <Route path="/" element={
+            <SettingsProvider>
+              <TagsProvider>
+                <ToastProvider>
+                  <Library enableSession={false} />
+                </ToastProvider>
+              </TagsProvider>
+            </SettingsProvider>
+          } />
+          <Route path="/reader/:archiveId" element={<div>READER_PAGE</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  const press = (key) => {
+    fireEvent.keyDown(window, { key });
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    api.getContinueReading.mockResolvedValue([]);
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '漫画A', archive_type: 'cbz', page_count: 10, cover_url: '/c', tags: [] },
+      { id: 2, title: '漫画B', archive_type: 'cbz', page_count: 20, cover_url: '/c', tags: [] },
+    ]);
+  });
+
+  test('/ 聚焦搜索框并全选（直接输入即替换旧关键词）', async () => {
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    press('/');
+
+    const input = screen.getByLabelText('搜索漫画');
+    expect(document.activeElement).toBe(input);
+  });
+
+  test('j/k 移动高亮，Enter 打开高亮的漫画', async () => {
+    const { container } = renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    press('j');
+    expect(container.querySelector('.archive-card.kb-focus')).not.toBeNull();
+    expect(container.querySelector('[data-archive-id="1"]').className).toContain('kb-focus');
+
+    press('j');
+    expect(container.querySelector('[data-archive-id="2"]').className).toContain('kb-focus');
+
+    // k 回退
+    press('k');
+    expect(container.querySelector('[data-archive-id="1"]').className).toContain('kb-focus');
+
+    press('Enter');
+    await waitFor(() => expect(screen.getByText('READER_PAGE')).toBeInTheDocument());
+  });
+
+  test('x 把高亮的漫画加入多选并进入多选模式，Esc 退出', async () => {
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    press('j');
+    press('x');
+
+    // 多选工具栏出现，并显示已选 1 个
+    expect(await screen.findByText(/已选 1 个/)).toBeInTheDocument();
+
+    press('Escape');
+    await waitFor(() => expect(screen.queryByText(/已选 1 个/)).toBeNull());
+  });
+
+  test('Esc 先取消高亮（不在多选时），不会误触其它东西', async () => {
+    const { container } = renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    press('j');
+    expect(container.querySelector('.kb-focus')).not.toBeNull();
+
+    press('Escape');
+    expect(container.querySelector('.kb-focus')).toBeNull();
+  });
+
+  test('输入框里打字不会被快捷键抢走（j/k 照常输入）', async () => {
+    const { container } = renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    const input = screen.getByLabelText('搜索漫画');
+    fireEvent.keyDown(input, { key: 'j' });
+    fireEvent.keyDown(input, { key: 'k' });
+
+    expect(container.querySelector('.kb-focus')).toBeNull();
+  });
+
+  test('? 打开搜索语法与快捷键帮助（语法此前只写在 placeholder 里）', async () => {
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    press('?');
+
+    const help = await screen.findByRole('dialog', { name: '搜索语法与快捷键' });
+    expect(within(help).getByText('tag:xxx')).toBeInTheDocument();
+    expect(within(help).getByText('-xxx')).toBeInTheDocument();
+    expect(within(help).getByText('⌘K / Ctrl-K')).toBeInTheDocument();
+  });
+});
