@@ -80,6 +80,8 @@ pnpm tauri build               # 生产构建
 | 放大后单指拖动 | 平移查看 |
 | 长图模式 | 纵向滚动交给浏览器，不触发滑动翻页 |
 
+书库里的卡片操作在触屏上同样可用：封面右下角的「⋯」**常显**（无需悬停），点它或**长按卡片**都会弹出操作面板（标签 / 分类 / 重命名 / 移除）。桌面端这四个动作仍是悬停显形的小图标——触屏没有 hover，那套按钮在那里既看不见也点不到。
+
 > 前端产物由后端内嵌：debug 构建（`pnpm tauri dev`）运行时从 `frontend/build` 读盘，改完前端只需重新 `pnpm --filter manhuaviewer-frontend build` 再刷新 iPad；release 安装包需要重新 `pnpm tauri build` 才会带上新前端。
 
 ## 🗂️ 项目结构

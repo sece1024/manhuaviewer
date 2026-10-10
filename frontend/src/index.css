@@ -1880,6 +1880,174 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   border-color: var(--accent);
 }
 
+/* 「标签」与「分类」两个按钮共用 .archive-tag-btn，且定位完全相同：
+   不偏移的话它们会**完全重叠**，DOM 里靠后的「分类」盖住「标签」→ 标签按钮在网格里
+   根本点不到（多选模式批量打标签是唯一入口）。这里给第二个让出位置。
+   4 个按钮在封面上的最小可用宽度 ≈ 152px：左侧 6+24+6+24，右侧 rename 64+28、remove 6+24。 */
+.archive-tag-btn + .archive-tag-btn { left: 36px; }
+
+/* ── 卡片操作面板入口「⋯」：给触屏与窄封面用的单一入口 ──
+   细指针、正常/大密度下与那四个按钮一样悬停才出现；粗指针或封面放不下时改为常显。 */
+.archive-more-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+  z-index: 2;
+}
+.archive-card:hover .archive-more-btn { opacity: 1; }
+.archive-more-btn:hover { background: var(--accent); }
+.archive-more-btn-list {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.archive-list-item:hover .archive-more-btn-list { opacity: 1; }
+.archive-more-btn-list:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* 粗指针设备（iPad / 手机）：hover 根本不存在，那四个按钮不仅看不见、也点不到。
+   隐藏它们，改用常显且更大的「⋯」+ 底部操作面板（一行一个大点击区）。 */
+@media (hover: none) {
+  .archive-card .archive-tag-btn,
+  .archive-card .archive-rename-btn,
+  .archive-card .archive-remove-btn,
+  .archive-list-item .archive-tag-btn-list,
+  .archive-list-item .archive-rename-btn-list,
+  .archive-list-item .archive-remove-btn-list {
+    display: none;
+  }
+  .archive-more-btn {
+    opacity: 1;
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+  }
+  .archive-more-btn-list {
+    opacity: 1;
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+  }
+  /* 长按唤起面板时不要弹出 iOS 的系统菜单/选中文本 */
+  .archive-card,
+  .archive-list-item,
+  .archive-group-chapter {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* 组展开后的章节操作、历史页删除同样是 hover-only：改为常显并放大到食指可用 */
+  .archive-group-chapter-action {
+    opacity: 1;
+    width: 28px;
+    height: 28px;
+  }
+  .history-item .btn-danger { opacity: 1; }
+}
+
+/* 紧凑密度（min 132px）与 ≤480px（110px，大密度也只有 150px）下的封面窄于 152px，
+   那四个按钮必然互相压住，因此一律改用「⋯」——与触屏走同一条路径。 */
+.archive-grid.density-compact .archive-tag-btn,
+.archive-grid.density-compact .archive-rename-btn,
+.archive-grid.density-compact .archive-remove-btn {
+  display: none;
+}
+.archive-grid.density-compact .archive-more-btn { opacity: 1; }
+
+/* ── 卡片操作面板（底部弹出）── */
+.card-sheet-overlay {
+  align-items: flex-end;
+}
+.card-sheet {
+  width: 100%;
+  max-width: 420px;
+  margin: 0 12px 12px;
+  padding: 8px;
+  border-radius: var(--radius);
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  animation: sheet-in 0.2s var(--ease-out) both;
+}
+@keyframes sheet-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.card-sheet-head {
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.card-sheet-title {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-sheet-sub {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+.card-sheet-items {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0;
+}
+.card-sheet-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+.card-sheet-item:hover { background: var(--bg-tertiary); }
+.card-sheet-item.danger { color: var(--danger, #e74c3c); }
+.card-sheet-icon { width: 20px; text-align: center; }
+.card-sheet-cancel {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 4px;
+}
+
 /* ── 移动端底部导航 ── */
 .mobile-bottom-bar {
   display: none;

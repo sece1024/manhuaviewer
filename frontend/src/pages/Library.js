@@ -11,6 +11,8 @@ import TagPicker from '../components/TagPicker';
 import CategoryPicker from '../components/CategoryPicker';
 import ConfirmDialog from '../components/ConfirmDialog';
 import TagTriage from '../components/TagTriage';
+import CardActionSheet from '../components/CardActionSheet';
+import useLongPress from '../hooks/useLongPress';
 import CbzConvertPanel from '../components/CbzConvertPanel';
 import Modal from '../components/Modal';
 import useCbzConvert from '../hooks/useCbzConvert';
@@ -23,17 +25,21 @@ const isTauri = window.__TAURI__ !== undefined;
 
 // 网格卡片：memoized，避免多选切换时整屏重渲染。
 // 所有回调通过 props 传入（父组件 useCallback 稳定引用）。
-const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove }) {
+const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove, onOpenSheet }) {
   // 阅读状态与进度文案由 utils/format 统一推导，判定口径与后端 read 筛选一致
   const readState = readStateOf(a);
   const progressText = formatReadProgress(a);
   const progressPercent = a.page_count > 0
     ? Math.min(100, (((a.read_page || 0) + 1) / a.page_count) * 100)
     : 0;
+  // 触屏：长按卡片唤起操作面板（那四个 hover 按钮在 iPad 上看不见）
+  const { longPressProps, swallowedByLongPress } = useLongPress(() => onOpenSheet(a));
   return (
     <div
       className={`archive-card ${selectMode && isSelected ? 'archive-card-selected' : ''}`}
+      {...longPressProps}
       onClick={(e) => {
+        if (swallowedByLongPress()) return; // 长按已经开过面板，别再进阅读器
         if (selectMode) { onToggleSelect(e, a.id); return; }
         if (a._isGroup) { onToggleGroup(a); return; }
         onOpen(a.id);
@@ -63,6 +69,15 @@ const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, se
             <button className="archive-rename-btn" onClick={(e) => onRename(e, a)} title="重命名">✏️</button>
             <button className="archive-remove-btn" onClick={(e) => onRemove(e, a.id)} title="移除">✕</button>
           </>
+        )}
+        {/* 粗指针设备上的唯一入口：尺寸够大、常显可见（细指针下与其它按钮一样 hover 才出现） */}
+        {!selectMode && (
+          <button
+            className="archive-more-btn"
+            onClick={(e) => { e.stopPropagation(); onOpenSheet(a); }}
+            title="更多操作"
+            aria-label={`更多操作：${a.title}`}
+          >⋯</button>
         )}
         {/* 进度条：一旦读过就显示（第 1 页也要有条，否则「在读」看不出来）；
             宽度按 0 基 read_page +1 计算；已读完单独配色，与「读到一半」区分 */}
@@ -124,13 +139,16 @@ const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, se
 });
 
 // 列表行：memoized，同 ArchiveCard
-const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove }) {
+const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove, onOpenSheet }) {
   // 此前这里直接显示 0 基的 read_page（少一页），且 page_index=0 时整段被隐藏
   const progressText = formatReadProgress(a);
+  const { longPressProps, swallowedByLongPress } = useLongPress(() => onOpenSheet(a));
   return (
     <div
       className={`archive-list-item ${selectMode && isSelected ? 'archive-list-item-selected' : ''}`}
+      {...longPressProps}
       onClick={(e) => {
+        if (swallowedByLongPress()) return;
         if (selectMode) { onToggleSelect(e, a.id); return; }
         if (a._isGroup) { onToggleGroup(a); return; }
         onOpen(a.id);
@@ -174,6 +192,15 @@ const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, sel
           <button className="archive-rename-btn-list" onClick={(e) => onRename(e, a)} title="重命名">✏️</button>
           <button className="archive-remove-btn-list" onClick={(e) => onRemove(e, a.id)} title="移除">✕</button>
         </>
+      )}
+      {/* 粗指针设备上的常显入口（列表项右侧空间足够，直接给一个够大的按钮） */}
+      {!selectMode && (
+        <button
+          className="archive-more-btn-list"
+          onClick={(e) => { e.stopPropagation(); onOpenSheet(a); }}
+          title="更多操作"
+          aria-label={`更多操作：${a.title}`}
+        >⋯</button>
       )}
     </div>
   );
@@ -276,6 +303,8 @@ export default function Library({ mode = 'library', enableSession }) {
   const [selectMode, setSelectMode] = useState(false);
   // 整理模式（键盘逐本打标签）；退出时重拉一次，因为整理期间这些书已经离开「未打标签」
   const [showTriage, setShowTriage] = useState(false);
+  // 卡片操作面板的目标档案（触屏上长按卡片或点「⋯」打开）
+  const [sheetTarget, setSheetTarget] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
   // 组展开状态（点击合并后的漫画卡片，就地展开子目录）
   const [expandedGroup, setExpandedGroup] = useState(null);
@@ -704,11 +733,15 @@ export default function Library({ mode = 'library', enableSession }) {
     }
   };
 
-  const handleRemoveArchive = useCallback((e, id) => {
-    e.stopPropagation();
+  // 「从库中移除」：核心逻辑与事件分离，操作面板（无需 stopPropagation）可直接调用
+  const confirmRemoveFor = useCallback((id) => {
     setConfirmTarget(id);
     setConfirmOpen(true);
   }, []);
+  const handleRemoveArchive = useCallback((e, id) => {
+    e.stopPropagation();
+    confirmRemoveFor(id);
+  }, [confirmRemoveFor]);
 
   const handleConfirmRemove = async () => {
     setConfirmOpen(false);
@@ -726,10 +759,11 @@ export default function Library({ mode = 'library', enableSession }) {
 
   // TagPicker 状态
   const [tagPickerArchiveId, setTagPickerArchiveId] = useState(null);
+  const openTagPickerFor = useCallback((id) => setTagPickerArchiveId(id), []);
   const handleOpenTagPicker = useCallback((e, id) => {
     e.stopPropagation();
-    setTagPickerArchiveId(id);
-  }, []);
+    openTagPickerFor(id);
+  }, [openTagPickerFor]);
   // 统一的 picker 关闭逻辑：关闭弹层，若有变更则刷新列表 + 对应数据
   const reloadAfterPick = (changed, refetch) => {
     if (changed) {
@@ -744,21 +778,25 @@ export default function Library({ mode = 'library', enableSession }) {
 
   // CategoryPicker 状态
   const [categoryPickerArchiveId, setCategoryPickerArchiveId] = useState(null);
+  const openCategoryPickerFor = useCallback((id) => setCategoryPickerArchiveId(id), []);
   const handleOpenCategoryPicker = useCallback((e, id) => {
     e.stopPropagation();
-    setCategoryPickerArchiveId(id);
-  }, []);
+    openCategoryPickerFor(id);
+  }, [openCategoryPickerFor]);
   const handleCloseCategoryPicker = (changed) => {
     setCategoryPickerArchiveId(null);
     reloadAfterPick(changed, reloadCategories);
   };
 
   // 重命名
-  const handleOpenRename = useCallback((e, a) => {
-    e.stopPropagation();
+  const openRenameFor = useCallback((a) => {
     setRenamingId(a.id);
     setRenameValue(a.title);
   }, []);
+  const handleOpenRename = useCallback((e, a) => {
+    e.stopPropagation();
+    openRenameFor(a);
+  }, [openRenameFor]);
   const handleConfirmRename = async () => {
     if (!renameValue.trim() || !renamingId) return;
     try {
@@ -863,6 +901,20 @@ export default function Library({ mode = 'library', enableSession }) {
       toast(e.message, 'error');
     }
   };
+
+  // 卡片操作面板的动作：与卡片上那四个 hover 按钮一一对应
+  const sheetItems = useMemo(() => {
+    if (!sheetTarget) return [];
+    return [
+      { key: 'tag', icon: '🏷️', label: '标签', onSelect: () => openTagPickerFor(sheetTarget.id) },
+      { key: 'category', icon: '📂', label: '分类', onSelect: () => openCategoryPickerFor(sheetTarget.id) },
+      { key: 'rename', icon: '✏️', label: '重命名', onSelect: () => openRenameFor(sheetTarget) },
+      {
+        key: 'remove', icon: '✕', label: '从库中移除', danger: true,
+        onSelect: () => confirmRemoveFor(sheetTarget.id),
+      },
+    ];
+  }, [confirmRemoveFor, openCategoryPickerFor, openRenameFor, openTagPickerFor, sheetTarget]);
 
   // 分组已在服务端完成：`archives` 里的每一项要么是普通档案，要么是带 _isGroup 的组卡片。
   const groupedArchives = archives;
@@ -1306,6 +1358,7 @@ export default function Library({ mode = 'library', enableSession }) {
                   onCategory={handleOpenCategoryPicker}
                   onRename={handleOpenRename}
                   onRemove={handleRemoveArchive}
+                  onOpenSheet={setSheetTarget}
                 />
                 {a._isGroup && expandedGroup === (a._autoGroup ? a._autoKey : `g:${a.id}`) && (
                   <GroupChapterPanel
@@ -1337,6 +1390,7 @@ export default function Library({ mode = 'library', enableSession }) {
                   onCategory={handleOpenCategoryPicker}
                   onRename={handleOpenRename}
                   onRemove={handleRemoveArchive}
+                  onOpenSheet={setSheetTarget}
                 />
                 {a._isGroup && expandedGroup === (a._autoGroup ? a._autoKey : `g:${a.id}`) && (
                   <GroupChapterPanel
@@ -1437,6 +1491,16 @@ export default function Library({ mode = 'library', enableSession }) {
         <div className="cbz-convert-float">
           <CbzConvertPanel info={convertInfo} onCancel={cancelConvert} />
         </div>
+      )}
+
+      {/* 卡片操作面板（触屏：长按卡片或点「⋯」） */}
+      {sheetTarget && (
+        <CardActionSheet
+          title={sheetTarget.title}
+          subtitle={sheetTarget._isGroup ? `${sheetTarget.chapter_count} 话` : `${sheetTarget.page_count} 页`}
+          items={sheetItems}
+          onClose={() => setSheetTarget(null)}
+        />
       )}
 
       {/* 整理模式（键盘逐本打标签） */}

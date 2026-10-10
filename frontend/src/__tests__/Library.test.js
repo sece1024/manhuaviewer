@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent, act, renderHook } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, renderHook, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import Library from '../pages/Library';
 import { clearLibrarySessions } from '../hooks/useLibrarySession';
@@ -839,5 +839,117 @@ describe('Library 标签状态筛选（整理模式的输入集合）', () => {
 
     fireEvent.change(screen.getByLabelText('标签状态'), { target: { value: 'untagged' } });
     await waitFor(() => expect(screen.queryByText('继续阅读')).toBeNull());
+  });
+});
+
+// 触屏平权：卡片上的四个操作按钮此前只靠 :hover 显形（且「标签」被「分类」完全盖住），
+// iPad 上完全不可达；现在提供常显的「⋯」与长按两条路径，都通向同一个操作面板。
+describe('Library 卡片操作面板（触屏可达性）', () => {
+  function renderWithReader() {
+    return render(
+      <MemoryRouter>
+        <Routes>
+          <Route path="/" element={
+            <SettingsProvider>
+              <TagsProvider>
+                <ToastProvider>
+                  <Library enableSession={false} />
+                </ToastProvider>
+              </TagsProvider>
+            </SettingsProvider>
+          } />
+          <Route path="/reader/:archiveId" element={<div>READER_PAGE</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    api.getContinueReading.mockResolvedValue([]);
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '漫画A', archive_type: 'cbz', page_count: 10, cover_url: '/c', tags: [] },
+    ]);
+  });
+
+  const cardOf = (container) => container.querySelector('.archive-card');
+
+  test('「⋯」按钮打开操作面板（看得见的入口，不必靠长按猜）', async () => {
+    const { container } = renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '更多操作：漫画A' }));
+
+    const sheet = screen.getByRole('dialog', { name: '漫画操作' });
+    expect(sheet).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: /标签/ })).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: /分类/ })).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: /重命名/ })).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: /从库中移除/ })).toBeInTheDocument();
+    expect(cardOf(container)).not.toBeNull();
+  });
+
+  test('长按卡片打开面板，且随后的 click 不会把用户带进阅读器', async () => {
+    const { container } = renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+    const card = cardOf(container);
+
+    fireEvent.touchStart(card, { touches: [{ clientX: 20, clientY: 20 }] });
+    await waitFor(
+      () => expect(screen.getByRole('dialog', { name: '漫画操作' })).toBeInTheDocument(),
+      { timeout: 2000 }
+    );
+
+    // 长按抬手后浏览器会补一个 click：必须被吞掉，否则"弹了面板又进了阅读器"
+    fireEvent.touchEnd(card);
+    fireEvent.click(card);
+    expect(screen.queryByText('READER_PAGE')).toBeNull();
+  });
+
+  test('滑动（手指跑远）不会弹面板——滚动列表不该被打断', async () => {
+    const { container } = renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+    const card = cardOf(container);
+
+    fireEvent.touchStart(card, { touches: [{ clientX: 20, clientY: 20 }] });
+    fireEvent.touchMove(card, { touches: [{ clientX: 20, clientY: 120 }] });
+    await new Promise(r => setTimeout(r, 600));
+
+    expect(screen.queryByRole('dialog', { name: '漫画操作' })).toBeNull();
+  });
+
+  test('普通点击仍然直接进阅读器（长按逻辑不能吃掉正常点按）', async () => {
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('漫画A'));
+
+    await waitFor(() => expect(screen.getByText('READER_PAGE')).toBeInTheDocument());
+  });
+
+  test('面板里的「重命名」接上既有弹窗（此前触屏完全没有入口）', async () => {
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '更多操作：漫画A' }));
+    const sheet = screen.getByRole('dialog', { name: '漫画操作' });
+    fireEvent.click(within(sheet).getByRole('button', { name: /重命名/ }));
+
+    await waitFor(() => expect(screen.getByText('重命名漫画')).toBeInTheDocument());
+    expect(screen.queryByRole('dialog', { name: '漫画操作' })).toBeNull();
+  });
+
+  test('面板里的「从库中移除」走既有二次确认', async () => {
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '更多操作：漫画A' }));
+    const sheet = screen.getByRole('dialog', { name: '漫画操作' });
+    fireEvent.click(within(sheet).getByRole('button', { name: /从库中移除/ }));
+
+    await waitFor(() => expect(screen.getByText('移除漫画')).toBeInTheDocument());
   });
 });
