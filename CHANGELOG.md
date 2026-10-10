@@ -8,6 +8,48 @@
 
 ## 未发布
 
+### 🚀 新特性
+
+- *(library)* 阅读状态改为 未读/在读/已读完，进度按 1 基页码显示([0f8091c](https://github.com/sece1024/manhuaviewer/commit/0f8091cb5ebfa75edb6061b793c0df00f3de7feb))
+- *(library)* 书库顶部新增「继续阅读」横条，一次点击续读([6f36e98](https://github.com/sece1024/manhuaviewer/commit/6f36e986696ebe0f0e305146e526a0c6a630116b))
+- *(reader)* 末页读完弹面板并给出「下一卷」，不再静默跳回第 1 页([ab0838f](https://github.com/sece1024/manhuaviewer/commit/ab0838fd79d6d50827aa66f49e1a90b6ffff0f5e))
+- *(jobs)* 长任务状态收归统一任务层，进度常驻任意页面([fa60a33](https://github.com/sece1024/manhuaviewer/commit/fa60a3303bc80fcc7943400427d0d77f0896a2f4))
+- *(scan)* 扫描目录改为可记忆的多根目录列表([3b53d73](https://github.com/sece1024/manhuaviewer/commit/3b53d73ac606559eeb1ee88a8f570739d7c203ba))
+- *(library)* 书库内直接「扫描目录」批量入库，空库给三选一入口([e076e80](https://github.com/sece1024/manhuaviewer/commit/e076e809af733d19423496b651af1ccbd7f2a213))
+- *(library)* 新增「标签状态」筛选（未打标签 / 已打标签）([dcfaabf](https://github.com/sece1024/manhuaviewer/commit/dcfaabf88bf39a3fbc97bc5c4d30ade8d880454f))
+- *(library)* 新增键盘驱动的「整理」模式，逐本给未打标签的漫画打标签([6ea46ee](https://github.com/sece1024/manhuaviewer/commit/6ea46ee609686ddd281dd3265dcac263ec648060))
+- *(archives)* 「从库中移除」可撤销——快照元数据并原样还原([ea977f9](https://github.com/sece1024/manhuaviewer/commit/ea977f935076a15bf2c1c6071d335d33223d3dfc))
+- *(ui)* 移除后给「撤销」退路，转换 CBZ 列出将被删除的原文件([64587cc](https://github.com/sece1024/manhuaviewer/commit/64587ccb54a9f6e996026af971924e00815ff50f))
+- *(ui)* 新增 ⌘K 命令面板，把散落的操作收成一个入口([f80b9b8](https://github.com/sece1024/manhuaviewer/commit/f80b9b8099165fd8c9372b9fda5b7215ccbc25f5))
+- *(library)* 书库键盘层（/ j k Enter x Esc ?）与搜索语法帮助([fa5a29f](https://github.com/sece1024/manhuaviewer/commit/fa5a29f5adea33e4089b4552c99d1f045c794791))
+- *(reader)* ⋯ 菜单按用途分组并标注快捷键([8c2c108](https://github.com/sece1024/manhuaviewer/commit/8c2c10862157f816c0304d432925b92734591054))
+- *(settings)* 局域网设置独立成区、设置项搜索、当前分区高亮([37a4061](https://github.com/sece1024/manhuaviewer/commit/37a40614685f4966b3f50feb599c611e7a191f44))
+
+
+### 🐛 修复
+
+- *(scan)* 批量扫描不再被 30s 客户端超时误杀([868eace](https://github.com/sece1024/manhuaviewer/commit/868eacea7b6ff02d97f7a01e83eec5cf0aa2c3f2))
+- *(reader)* 翻页时旧页垫底继续显示，消除背景闪烁([bf1ba7a](https://github.com/sece1024/manhuaviewer/commit/bf1ba7a1edb07c49ad1ddc447265da16ca4767b4))
+- *(reader)* 双页降级为单页后翻页不再闪回双页残影([24b40f8](https://github.com/sece1024/manhuaviewer/commit/24b40f84e048e2971c6b40a7efb63c4938f2ab93))
+- *(tags)* 批量打标签改成三态语义、补搜索框、失败不再静默([f8027eb](https://github.com/sece1024/manhuaviewer/commit/f8027eb439921c99a7dd44c0f363bf09f8603d79))
+- *(library)* 触屏可达性——卡片「⋯」常显 + 长按操作面板，顺带修好重叠的标签按钮([6ee5be3](https://github.com/sece1024/manhuaviewer/commit/6ee5be3224ad47865907d65a3c4d763232c6bb42))
+- *(library)* 搜不到结果时不再整页被欢迎页顶掉([cec76aa](https://github.com/sece1024/manhuaviewer/commit/cec76aae00f4189bb1ca27057ad4b83320699861))
+- *(library)* 「书库为空」不再靠筛选后的结果推断，并修好类型筛选的服务端同步([dbaafc6](https://github.com/sece1024/manhuaviewer/commit/dbaafc6bdeda6571053c6fc80fe2e75cfd2a770a))
+
+
+### 📚 文档
+
+- *(agents)* 记录筛选家族与整理模式的约定([26db47b](https://github.com/sece1024/manhuaviewer/commit/26db47b77dc413e6812330a5517dcc6eb12e99d9))
+- *(agents)* 记录撤销删除的快照约定([fd1e1f8](https://github.com/sece1024/manhuaviewer/commit/fd1e1f8cbe8981de7f2f8f8d3be878503d2e1c87))
+- *(agents)* 记录"每个能力都要有一扇看得见的门"这条约定([946d127](https://github.com/sece1024/manhuaviewer/commit/946d127ce6a50ae18d421dbc0f6fd80985d7f677))
+
+
+### ⚡ 性能
+
+- *(library)* 进入书库不再重复请求一次等价列表([239b05a](https://github.com/sece1024/manhuaviewer/commit/239b05abcc8c2a315b241e2e76d716ff62c510b3))
+
+## [3.6.3](https://github.com/sece1024/manhuaviewer/releases/tag/v3.6.3) - 2026-10-08
+
 ### 🐛 修复
 
 - *(archive)* 解压超时不再泄漏线程/僵尸进程，解压锁淘汰不再清掉持有中的锁([ea4dd19](https://github.com/sece1024/manhuaviewer/commit/ea4dd1905d117f3f15c915465da600b65d1a8626))
