@@ -577,6 +577,24 @@ pub async fn added_tree(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
+/// GET /api/archives/:id/siblings — 同目录的其他档案（含自己），供阅读器在末页续到下一卷。
+///
+/// 只做目录收窄，不含任何标题启发式：前端据此挑出候选「下一卷」，并且只在末页
+/// 提示、不做自动跳转，所以这里返回范围稍大的同目录清单是安全的（判错→不显示按钮）。
+/// 空目录 / 不存在的 id 都返回空数组，前端无需区分这两种情况。
+pub async fn list_siblings(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
+    let result = super::run_db(&state, move |db| {
+        let rows = db.get_siblings_in_dir(id)?;
+        plain_list_items(db, rows)
+    })
+    .await;
+
+    match result {
+        Ok(items) => Json(items).into_response(),
+        Err(e) => internal_error(e),
+    }
+}
+
 pub async fn get_archive(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
     match super::run_db(&state, move |db| db.get_archive(id)).await {
         Ok(Some(archive)) => Json(serde_json::json!({ "data": archive })).into_response(),

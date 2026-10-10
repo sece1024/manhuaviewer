@@ -707,6 +707,55 @@ impl Database {
         Ok(archives)
     }
 
+    /// 与给定档案**同父目录**的其他档案（含自己），按路径排序。
+    ///
+    /// 与永久合并组（`group_id`）不同：合并组可以跨目录，而真实系列的标题通常是
+    /// 「xxx 01 / xxx 02 / xxx 03」，标题并不相同，书库的自动分组（同目录 + 同标题）
+    /// 也并不到一起。阅读器要在末页续到下一卷，只能先由服务端把范围收窄到同目录，
+    /// 再由前端做标题前缀 + 自然序的保守挑选。
+    ///
+    /// 这里刻意不引入任何标题猜测：判错的代价只应是「不显示下一卷按钮」，
+    /// 绝不该是自动跳到一本无关的书，所以启发式只放在前端且仅用于提示。
+    ///
+    /// 目录比对的归一化（去掉尾部分隔符）与路由层 `parent` 过滤完全一致。
+    pub fn get_siblings_in_dir(&self, id: i64) -> Result<Vec<ArchiveRow>> {
+        let conn = self.conn()?;
+        let path: Option<String> = conn
+            .query_row("SELECT path FROM archives WHERE id = ?", [id], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        let Some(path) = path else {
+            return Ok(Vec::new());
+        };
+        let Some(parent) = std::path::Path::new(&path).parent() else {
+            return Ok(Vec::new());
+        };
+        let parent = parent
+            .to_string_lossy()
+            .trim_end_matches(['/', '\\'])
+            .to_string();
+
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM archives a ORDER BY a.path",
+            ARCHIVE_COLUMNS
+        ))?;
+        let archives: Vec<ArchiveRow> = stmt
+            .query_map([], archive_row)?
+            .filter_map(log_and_skip)
+            .collect();
+
+        Ok(archives
+            .into_iter()
+            .filter(|a| {
+                std::path::Path::new(&a.path)
+                    .parent()
+                    .map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']) == parent.as_str())
+                    .unwrap_or(false)
+            })
+            .collect())
+    }
+
     /// 按精确标题查询所有档案（供自动分组展开时拉取完整成员列表）
     pub fn get_archives_by_title(&self, title: &str) -> Result<Vec<ArchiveRow>> {
         let conn = self.conn()?;
@@ -1124,5 +1173,73 @@ mod read_state_tests {
             titles(&db, Some("finished")),
             any_order(vec!["靠history判定"])
         );
+    }
+}
+
+#[cfg(test)]
+mod sibling_tests {
+    use super::*;
+
+    fn setup() -> Database {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let db = Database::new(temp_file.path().to_str().unwrap()).unwrap();
+        db.init().unwrap();
+        db
+    }
+
+    fn add(db: &Database, title: &str, path: &str) -> i64 {
+        db.upsert_scanned_archive(title, path, "cbz", 5, 10, 1)
+            .unwrap()
+    }
+
+    fn paths_of(db: &Database, id: i64) -> Vec<String> {
+        db.get_siblings_in_dir(id)
+            .unwrap()
+            .into_iter()
+            .map(|a| a.path)
+            .collect()
+    }
+
+    /// 只收同父目录的档案：不带上层、不带子目录，且每个成员的兄弟集合一致（含自己）。
+    #[test]
+    fn siblings_are_scoped_to_the_same_directory() {
+        let db = setup();
+        let a = add(&db, "A", "/lib/series/A.cbz");
+        let b = add(&db, "B", "/lib/series/B.cbz");
+        add(&db, "C", "/lib/other/C.cbz");
+        add(&db, "D", "/lib/series/sub/D.cbz");
+
+        let expected = vec!["/lib/series/A.cbz", "/lib/series/B.cbz"];
+        assert_eq!(paths_of(&db, a), expected);
+        assert_eq!(paths_of(&db, b), expected, "同目录成员的兄弟集合应完全相同");
+    }
+
+    /// 真实系列的关键前提：标题不同（xxx 01 / xxx 02）也要能被同目录收进来，
+    /// 否则「下一卷」永远只能靠合并组才成立。
+    #[test]
+    fn different_titles_in_one_directory_are_all_returned() {
+        let db = setup();
+        let v1 = add(&db, "系列 01", "/lib/系列/系列 01.cbz");
+        add(&db, "系列 02", "/lib/系列/系列 02.cbz");
+        add(&db, "系列 03", "/lib/系列/系列 03.cbz");
+
+        assert_eq!(paths_of(&db, v1).len(), 3);
+    }
+
+    /// 尾部分隔符不影响目录归一化（与路由层 parent 过滤同一口径）。
+    #[test]
+    fn trailing_separator_is_normalized() {
+        let db = setup();
+        let a = add(&db, "A", "/lib/series/A.cbz");
+        add(&db, "B", "/lib/series/B.cbz");
+
+        assert_eq!(paths_of(&db, a).len(), 2);
+    }
+
+    #[test]
+    fn missing_id_yields_empty_list() {
+        let db = setup();
+        add(&db, "A", "/lib/series/A.cbz");
+        assert!(db.get_siblings_in_dir(9999).unwrap().is_empty());
     }
 }

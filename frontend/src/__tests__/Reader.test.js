@@ -1,4 +1,4 @@
-import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import Reader from '../pages/Reader';
 import { ToastProvider } from '../components/Toast';
@@ -164,23 +164,36 @@ describe('Reader 双页模式', () => {
     expect(container.querySelector('.reader-page-wrapper')).toBeNull(); // 未回退到单页
   });
 
-  test('单页模式：末页继续翻环回第一页，首页往回翻环回末页', async () => {
+  test('单页模式：末页继续弹「本话读完」而非跳回第一页；首页往回仍环回末页', async () => {
     renderReader();
     await waitFor(() => {
       expect(screen.getByRole('region', { name: /页面阅读区/ })).toBeInTheDocument();
     });
 
+    // 往回方向的环回是既有行为，本次不改：首页往回 → 末页
+    pressKey('ArrowLeft');
+    expect(screen.getByAltText('page-6.jpg')).toBeInTheDocument();
+
     pressKey('End'); // index 5
     expect(screen.getByAltText('page-6.jpg')).toBeInTheDocument();
 
-    pressKey('ArrowRight'); // 末页继续 → 环回本册第一页
-    expect(screen.getByAltText('page-1.jpg')).toBeInTheDocument();
+    // 末页继续 → 弹出本话读完面板（此前静默跳回第 1 页，看起来像翻页出错）
+    pressKey('ArrowRight');
+    expect(screen.getByRole('dialog', { name: '本话读完' })).toBeInTheDocument();
+    expect(screen.getByAltText('page-6.jpg')).toBeInTheDocument(); // 仍停在末页
 
-    pressKey('ArrowLeft'); // 第一页往回 → 环回本册末页
+    // 面板打开时方向键不再翻底层页面
+    pressKey('ArrowRight');
     expect(screen.getByAltText('page-6.jpg')).toBeInTheDocument();
+
+    // Esc 关掉面板后可继续阅读
+    pressKey('Escape');
+    expect(screen.queryByRole('dialog', { name: '本话读完' })).toBeNull();
+    pressKey('ArrowLeft');
+    expect(screen.getByAltText('page-5.jpg')).toBeInTheDocument();
   });
 
-  test('双页模式：末页继续翻环回第一跨页，首页往回翻环回末跨页', async () => {
+  test('双页模式：末跨页继续弹「本话读完」而非跳回第一跨页；首页往回仍环回末跨页', async () => {
     renderReader();
     await waitFor(() => {
       expect(screen.getByRole('region', { name: /页面阅读区/ })).toBeInTheDocument();
@@ -189,16 +202,57 @@ describe('Reader 双页模式', () => {
       fireEvent.click(screen.getByLabelText('启用双页模式'));
     });
 
-    pressKey('End'); // index 5（末页单张，RTL 右=page-6）
-    expect(screen.getByAltText('page-6.jpg')).toBeInTheDocument();
-
-    pressKey('ArrowRight'); // 末页继续 → 环回第一跨页 (0,1)
+    pressKey('Home');
     expect(screen.getByAltText('page-1.jpg')).toBeInTheDocument();
     expect(screen.getByAltText('page-2.jpg')).toBeInTheDocument();
 
     pressKey('ArrowLeft'); // 第一跨页往回 → 环回末跨页（index 4 → 右=page-5，左=page-6）
     expect(screen.getByAltText('page-5.jpg')).toBeInTheDocument();
     expect(screen.getByAltText('page-6.jpg')).toBeInTheDocument();
+
+    pressKey('ArrowRight'); // 末跨页继续 → 面板，不再环回第一跨页
+    expect(screen.getByRole('dialog', { name: '本话读完' })).toBeInTheDocument();
+    expect(screen.getByAltText('page-5.jpg')).toBeInTheDocument();
+    expect(screen.getByAltText('page-6.jpg')).toBeInTheDocument();
+  });
+
+  test('末页读完：同系列有下一卷时给出按钮，点击进入下一卷', async () => {
+    api.getArchiveSiblings.mockResolvedValue([
+      { id: 1, title: '系列 01', path: '/lib/系列/系列 01.cbz' },
+      { id: 2, title: '系列 02', path: '/lib/系列/系列 02.cbz' },
+    ]);
+    renderReader();
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: /页面阅读区/ })).toBeInTheDocument();
+    });
+
+    pressKey('End');
+    pressKey('ArrowRight');
+    expect(screen.getByRole('dialog', { name: '本话读完' })).toBeInTheDocument();
+
+    const nextBtn = screen.getByRole('button', { name: /下一卷：系列 02/ });
+    await act(async () => { fireEvent.click(nextBtn); });
+    // 导航到下一卷 = 阅读器按新 id 重新取页
+    await waitFor(() => expect(api.getPages).toHaveBeenCalledWith('2'));
+  });
+
+  test('末页读完：同目录没有同系列时只给返回书库/重看，不凭空猜下一卷', async () => {
+    api.getArchiveSiblings.mockResolvedValue([
+      { id: 1, title: '测试漫画', path: '/lib/测试漫画.cbz' },
+      { id: 9, title: '不相干的书', path: '/lib/不相干的书.cbz' },
+    ]);
+    renderReader();
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: /页面阅读区/ })).toBeInTheDocument();
+    });
+
+    pressKey('End');
+    pressKey('ArrowRight');
+    const dialog = screen.getByRole('dialog', { name: '本话读完' });
+    // 只在面板内断言：工具栏上也有一个 aria-label="返回书库" 的图标按钮
+    expect(within(dialog).queryByRole('button', { name: /下一卷/ })).toBeNull();
+    expect(within(dialog).getByRole('button', { name: /重看本话/ })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /返回书库/ })).toBeInTheDocument();
   });
 
   test('切换档案：旧档案进度先落盘，且不把旧页码写进新档案（回归：同路由换档损坏进度）', async () => {

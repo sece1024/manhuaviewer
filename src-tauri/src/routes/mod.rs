@@ -370,6 +370,7 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/archives/:id/pages", get(archives::list_pages))
         .route("/archives/:id/pages/:page", get(archives::get_page))
+        .route("/archives/:id/siblings", get(archives::list_siblings))
         .route(
             "/archives/:id/pages/:page/thumb",
             get(archives::get_page_thumb),

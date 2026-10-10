@@ -136,6 +136,23 @@ describe('useReaderKeyboard', () => {
     expect(defaultProps.setShowHelp).toHaveBeenCalledWith(false);
   });
 
+  test('「本话读完」面板打开时：翻页键不生效，Escape 只关面板', () => {
+    const setChapterEndOpen = jest.fn();
+    const props = { ...defaultProps, chapterEndOpen: true, setChapterEndOpen };
+    renderHook(() => useReaderKeyboard(props));
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }));
+    });
+    expect(defaultProps.goNext).not.toHaveBeenCalled();
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(setChapterEndOpen).toHaveBeenCalledWith(false);
+  });
+
   test('输入框内按键不触发', () => {
     renderHook(() => useReaderKeyboard(defaultProps));
     const input = document.createElement('input');

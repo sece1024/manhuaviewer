@@ -363,6 +363,13 @@ const api = {
     request(`/archives?title=${encodeURIComponent(title)}&parent=${encodeURIComponent(parent || '')}`).then(archives =>
       archives.map(a => ({ ...a, cover_url: imageUrl(a.cover_url || `/api/archives/${a.id}/cover`) }))
     ),
+  // 同目录档案（含自己）：阅读器据此在同目录里挑「下一卷」。
+  // 服务端只做目录收窄，系列判定在前端（见 utils/seriesOrder.js）——
+  // 判错的代价只应是「不显示下一卷按钮」，绝不能是自动跳错。
+  getArchiveSiblings: (archiveId) =>
+    request(`/archives/${archiveId}/siblings`).then(archives =>
+      archives.map(a => ({ ...a, cover_url: imageUrl(a.cover_url || `/api/archives/${a.id}/cover`) }))
+    ),
 
   // History
   getHistory: (params = {}) => {

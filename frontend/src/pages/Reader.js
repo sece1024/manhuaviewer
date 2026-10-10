@@ -13,6 +13,7 @@ import LongImageList, { EST_PAGE_HEIGHT } from '../components/ReaderVirtualList'
 import usePagePreloader from '../hooks/usePagePreloader';
 import useProgressPersistence from '../hooks/useProgressPersistence';
 import { spreadTooWide, WIDE_SPREAD_MIN_PAGE_RATIO } from '../utils/spreadFit';
+import { nextInSeries } from '../utils/seriesOrder';
 
 export default function Reader() {
   const { archiveId } = useParams();
@@ -38,6 +39,10 @@ export default function Reader() {
   const [showJump, setShowJump] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  // 末页「本话读完」面板：此前末页再翻会静默跳回第 1 页，用户以为"下一页出错了"。
+  // nextVolume 是同目录里判出的下一卷（判不出就是 null，面板只给返回书库/重看）。
+  const [chapterEndOpen, setChapterEndOpen] = useState(false);
+  const [nextVolume, setNextVolume] = useState(null);
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [packing, setPacking] = useState(false);
   const [pageDirection, setPageDirection] = useState(() => settings.page_direction || 'rtl');
@@ -255,11 +260,22 @@ export default function Reader() {
     pageDimsRef.current = {}; // 页面尺寸缓存随换档重置
     wideHintShownRef.current = false; // 过宽降级提示随换档重置
     wideSpreadStickyRef.current = false; // 过宽粘性判定随换档重置
+    setChapterEndOpen(false); // 换档后面板与下一卷候选都属旧书
+    setNextVolume(null);
     async function load() {
       try {
         const data = await api.getPages(archiveId);
         if (cancelled) return;
         setArchive(data.archive);
+
+        // 下一卷候选：同目录档案里按「标题前缀 + 自然序」挑紧随其后的一本。
+        // 只用于末页面板里的一个按钮，判不出就不显示，因此失败/为空都不影响阅读。
+        // Promise.resolve 兜底测试 automock（方法返回 undefined 时 .then 会同步抛错）。
+        Promise.resolve(api.getArchiveSiblings(parseInt(archiveId)))
+          .then(list => {
+            if (!cancelled) setNextVolume(nextInSeries(list, data.archive.id));
+          })
+          .catch(() => {});
 
         // 组的主档案：显示组内章节列表（可由此进入任一章）
         if (data.archive.group_id && data.archive.group_id === data.archive.id) {
@@ -466,15 +482,17 @@ export default function Reader() {
     const step = doublePage ? 2 : 1;
     const target = currentIndexRef.current + step;
     if (target >= pages.length) {
-      // 末页继续 → 下一话（组内）；没有则环回本册第一页
-      if (!jumpToSiblingChapter(1)) goPage(0);
+      // 末页继续 → 下一话（合并组内，用户显式合并过 = 明确的阅读顺序，可直接跳）；
+      // 组内没有下一话就弹「本话读完」面板，而不是静默跳回第 1 页——后者会让人
+      // 以为"按了下一页却回到开头"，是同目录系列读不下去时的死胡同。
+      if (!jumpToSiblingChapter(1)) setChapterEndOpen(true);
       return;
     }
     goPage(target);
   }, [doublePage, goPage, jumpToSiblingChapter, pages.length]);
 
   // 长图模式：滚动到整本书末尾时自动续下一话（每次到达末尾只触发一次）；
-  // 没有下一话则环回本册第一页（scrollTarget 消费后滚回顶部）
+  // 组内没有下一话则弹「本话读完」，不再静默滚回顶部
   useEffect(() => {
     if (!longImage || !containerRef.current) return;
     const el = containerRef.current;
@@ -489,7 +507,7 @@ export default function Reader() {
       if (nearBottom && currentIndexRef.current >= pages.length - 1) {
         if (chapterEndFiredRef.current) return;
         chapterEndFiredRef.current = true;
-        if (!jumpToSiblingChapter(1)) goPage(0);
+        if (!jumpToSiblingChapter(1)) setChapterEndOpen(true);
       } else if (!nearBottom || currentIndexRef.current < pages.length - 1) {
         chapterEndFiredRef.current = false;
       }
@@ -497,7 +515,7 @@ export default function Reader() {
     const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(check); } };
     el.addEventListener('scroll', onScroll);
     return () => el.removeEventListener('scroll', onScroll);
-  }, [longImage, pages.length, jumpToSiblingChapter, goPage]);
+  }, [longImage, pages.length, jumpToSiblingChapter]);
 
   // 键盘 D 键开关双页：开启时重置双页加载态，保证新跨页走 spinner + 淡入
   const toggleDouble = useCallback(() => {
@@ -521,6 +539,7 @@ export default function Reader() {
     showHelp, setShowHelp,
     showMenu, setShowMenu,
     showTagPicker, setShowTagPicker,
+    chapterEndOpen, setChapterEndOpen,
     setDoublePage: toggleDouble, setLongImage, setRotation, setFitMode,
     onFitModeChange: (val) => updateSetting('reader_fit', val),
     showOverlay, containerRef,
@@ -529,7 +548,7 @@ export default function Reader() {
   });
 
   // 外设支持：游戏手柄 / USB 翻页器（浮层打开时暂停，避免误翻）
-  const overlayOpen = showHelp || showTagPicker || showThumbnails || showJump || showMenu || showCoverUrl || showMeta;
+  const overlayOpen = showHelp || showTagPicker || showThumbnails || showJump || showMenu || showCoverUrl || showMeta || chapterEndOpen;
   useGamepad({ goPrev, goNext, enabled: !overlayOpen });
 
   const handleToggleBookmark = useCallback(async () => {
@@ -1178,6 +1197,40 @@ export default function Reader() {
               ))}
             </div>
           )}
+        </Modal>
+      )}
+
+      {/* 末页「本话读完」：取代此前静默跳回第 1 页的行为，明确给出去处。
+          下一卷只做提示不自动跳转——同系列判定基于标题前缀，判错时用户不会被动换书 */}
+      {chapterEndOpen && (
+        <Modal onClose={() => setChapterEndOpen(false)} ariaLabel="本话读完" innerStyle={{ minWidth: 300, maxWidth: 400 }}>
+          <div style={{ textAlign: 'center', fontSize: 34, lineHeight: 1 }}>🎉</div>
+          <h3 style={{ textAlign: 'center', margin: '8px 0' }}>本话读完</h3>
+          <div className="settings-row-desc" style={{ textAlign: 'center', marginBottom: 16 }}>
+            {nextVolume
+              ? '同目录下找到同系列的下一卷'
+              : '这是本话最后一页；同目录下没找到同系列的下一卷'}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {nextVolume && (
+              <button
+                className="btn btn-primary"
+                onClick={() => navigate(`/reader/${nextVolume.id}`)}
+                title={nextVolume.title}
+              >
+                下一卷：{nextVolume.title}
+              </button>
+            )}
+            <button
+              className="btn btn-secondary"
+              onClick={() => { setChapterEndOpen(false); goPage(0); }}
+            >
+              ↻ 重看本话
+            </button>
+            <button className="btn btn-secondary" onClick={() => navigate('/')}>
+              ← 返回书库
+            </button>
+          </div>
         </Modal>
       )}
 

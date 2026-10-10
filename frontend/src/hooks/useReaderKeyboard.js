@@ -20,6 +20,8 @@ export default function useReaderKeyboard({
   setShowMenu,
   showTagPicker,
   setShowTagPicker,
+  chapterEndOpen,
+  setChapterEndOpen,
   setDoublePage,
   setLongImage,
   setRotation,
@@ -34,7 +36,7 @@ export default function useReaderKeyboard({
     // 长按重复触发只对翻页类键有意义，且会造成连跳
     if (e.repeat && [' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) return;
 
-    const overlayOpen = showHelp || showTagPicker || showThumbnails || showJump || showMenu;
+    const overlayOpen = showHelp || showTagPicker || showThumbnails || showJump || showMenu || chapterEndOpen;
     // 任一浮层打开时：只放行 Escape 关闭，方向键/空格不再翻到底层页面
     if (overlayOpen) {
       if (e.key === 'Escape') {
@@ -43,6 +45,7 @@ export default function useReaderKeyboard({
         else if (showThumbnails) setShowThumbnails(false);
         else if (showJump) setShowJump(false);
         else if (showMenu) setShowMenu(false);
+        else if (chapterEndOpen) setChapterEndOpen(false);
       }
       return;
     }
@@ -102,12 +105,14 @@ export default function useReaderKeyboard({
         else if (showThumbnails) setShowThumbnails(false);
         else if (showJump) setShowJump(false);
         else if (showMenu) setShowMenu(false);
+        else if (chapterEndOpen) setChapterEndOpen(false);
         break;
       default: break;
     }
   }, [
     goPrev, goNext, goPage, pagesLength, longImage, doublePage, doublePageDisabled,
     showThumbnails, showJump, showMenu, showHelp, showTagPicker,
+    chapterEndOpen, setChapterEndOpen,
     setDoublePage, setLongImage, setRotation, setFitMode, onFitModeChange, showOverlay, containerRef,
   ]);
 
