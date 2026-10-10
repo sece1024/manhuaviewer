@@ -174,3 +174,77 @@ describe('Settings 扫描目录（多根目录记忆）', () => {
     expect(screen.getByRole('button', { name: '加入列表' })).toBeDisabled();
   });
 });
+
+// 设置页有 11 个分区、30 多个设置项，此前只能靠滚动找；而「局域网访问」那三项还被塞在
+// 「漫画库」分区末尾，锚点也叫「漫画库」——按"局域网"找根本找不到。
+describe('Settings 分区与搜索', () => {
+  beforeEach(() => {
+    resetJobsStore();
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({ root_dir: '/library', scan_depth: '2', theme: 'dark' });
+    api.getStats.mockResolvedValue({ total_archives: 1, total_pages: 1, total_size: 1024, total_tags: 0, total_categories: 0, history_count: 0 });
+    api.getTags.mockResolvedValue([]);
+    api.getCategories.mockResolvedValue([]);
+    api.getLanIps.mockResolvedValue({ ipv4: [], port: 5002 });
+    api.scanStatus.mockResolvedValue({ running: false });
+    api.syncStatus.mockResolvedValue({ running: false });
+    api.convertCbzStatus.mockResolvedValue({ running: false });
+  });
+
+  test('局域网相关设置独立成区，并出现在导航里（此前埋在「漫画库」下）', async () => {
+    // 「访问地址」只在回环请求下渲染（LAN 设备看不到宿主网卡地址），这里模拟桌面端
+    api.getLanIps.mockResolvedValue({ loopback: true, ipv4: ['192.168.1.5'], port: 5002 });
+    renderSettings();
+    await waitFor(() => expect(screen.getByText('🗂️ 漫画库')).toBeInTheDocument());
+
+    const lanSection = document.getElementById('settings-section-lan');
+    expect(lanSection).not.toBeNull();
+    // 三项局域网设置都在这个分区里，而不是在漫画库分区里
+    expect(lanSection.textContent).toContain('允许局域网设备访问');
+    expect(lanSection.textContent).toContain('访问地址');
+    expect(lanSection.textContent).toContain('局域网访问口令');
+    expect(document.getElementById('settings-section-library').textContent).not.toContain('局域网访问口令');
+
+    expect(screen.getByRole('link', { name: '局域网与访问' })).toHaveAttribute('href', '#settings-section-lan');
+  });
+
+  test('搜索设置项：只留下命中的行，整节无命中就隐藏整节（连导航项一起）', async () => {
+    renderSettings();
+    await waitFor(() => expect(screen.getByText('🎨 外观')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('搜索设置项'), { target: { value: '口令' } });
+
+    // 命中的行可见
+    const lanSection = document.getElementById('settings-section-lan');
+    expect(lanSection.className).not.toContain('settings-filtered-out');
+    // 没命中的分区整节隐藏，导航项也隐藏
+    expect(document.getElementById('settings-section-appearance').className).toContain('settings-filtered-out');
+    expect(screen.getByRole('link', { name: '外观' }).className).toContain('settings-filtered-out');
+    // 该分区内没命中的行也被隐藏
+    const hiddenRows = lanSection.querySelectorAll('.settings-row.settings-filtered-out');
+    expect(hiddenRows.length).toBeGreaterThan(0);
+  });
+
+  test('清空搜索后所有分区恢复可见', async () => {
+    renderSettings();
+    await waitFor(() => expect(screen.getByText('🎨 外观')).toBeInTheDocument());
+
+    const input = screen.getByLabelText('搜索设置项');
+    fireEvent.change(input, { target: { value: '口令' } });
+    expect(document.getElementById('settings-section-appearance').className).toContain('settings-filtered-out');
+
+    fireEvent.change(input, { target: { value: '' } });
+    expect(document.getElementById('settings-section-appearance').className).not.toContain('settings-filtered-out');
+  });
+
+  test('搜不到时给出明确空态，而不是一片空白', async () => {
+    renderSettings();
+    await waitFor(() => expect(screen.getByText('🎨 外观')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('搜索设置项'), { target: { value: 'zzzz不存在' } });
+
+    const hint = document.querySelector('[data-settings-no-match]');
+    expect(hint.className).not.toContain('settings-filtered-out');
+    expect(hint.textContent).toContain('没有匹配的设置项');
+  });
+});

@@ -36,6 +36,56 @@ export default function Settings() {
   const [updateInfo, setUpdateInfo] = useState(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const toast = useToast();
+  const [settingsQuery, setSettingsQuery] = useState('');
+  const [activeSection, setActiveSection] = useState('');
+
+  // 设置项是手写 JSX、没有可供筛选的数据模型，所以按文本过滤 DOM：
+  // 逐行判断命中，整节没有命中行就隐藏整节（连同它的导航项）。
+  // 改成"给每行加 data-keywords"要手写 30 多个属性，且必然与文案漂移，得不偿失。
+  // 这里刻意不写依赖数组：设置是异步加载的、任务进度还会周期刷新 DOM，过滤必须跟着
+  // 每次渲染重新应用。也正因为如此，本 effect 内**不能** setState（那才是真的可能
+  // 无限更新）——空态提示改成预先渲染、由这里切类。
+  useEffect(() => {
+    const q = settingsQuery.trim().toLowerCase();
+    let visible = 0;
+    document.querySelectorAll('.settings-section').forEach(section => {
+      const rows = section.querySelectorAll('.settings-row');
+      let anyVisible = false;
+      if (rows.length === 0) {
+        // 没有标准行的分区（如统计的数字块）：按整节文本判断
+        anyVisible = !q || section.textContent.toLowerCase().includes(q);
+      } else {
+        rows.forEach(row => {
+          const hit = !q || row.textContent.toLowerCase().includes(q);
+          row.classList.toggle('settings-filtered-out', !hit);
+          if (hit) anyVisible = true;
+        });
+      }
+      section.classList.toggle('settings-filtered-out', !anyVisible);
+      if (anyVisible) visible += 1;
+      const link = document.querySelector(`.settings-nav a[href="#${section.id}"]`);
+      if (link) link.classList.toggle('settings-filtered-out', !anyVisible);
+    });
+    const hint = document.querySelector('[data-settings-no-match]');
+    if (hint) hint.classList.toggle('settings-filtered-out', !(q && visible === 0));
+  });
+
+  // 当前分区高亮：10 个分区的长页面，导航不给反馈的话用户不知道自己读到哪了
+  useEffect(() => {
+    const sections = Array.from(document.querySelectorAll('.settings-section'));
+    if (sections.length === 0 || typeof IntersectionObserver === 'undefined') return undefined;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) setActiveSection(entry.target.id);
+        });
+      },
+      // 顶部 20% 到中部之间命中，避免"下一节刚露头就抢走高亮"
+      { rootMargin: '-20% 0px -70% 0px' }
+    );
+    sections.forEach(section => observer.observe(section));
+    return () => observer.disconnect();
+  }, []);
 
   // ── 跨机同步 ──（表单/对比/启动取消/进度轮询见 useSync）
   const {
@@ -413,19 +463,32 @@ export default function Settings() {
 
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="设置分类">
-          <a href="#settings-section-cbz">CBZ 归档</a>
-          <a href="#settings-section-cbz-convert">CBZ 转换</a>
-          <a href="#settings-section-library">漫画库</a>
-          <a href="#settings-section-reader">阅读器</a>
-          <a href="#settings-section-appearance">外观</a>
-          <a href="#settings-section-tags">标签管理</a>
-          <a href="#settings-section-categories">分类管理</a>
-          <a href="#settings-section-stats">统计</a>
-          <a href="#settings-section-sync">跨机同步</a>
-          <a href="#settings-section-backup">备份与恢复</a>
+          <input
+            type="text"
+            className="settings-nav-search"
+            value={settingsQuery}
+            onChange={(e) => setSettingsQuery(e.target.value)}
+            placeholder="搜索设置…"
+            aria-label="搜索设置项"
+          />
+          <a href="#settings-section-cbz" className={activeSection === 'settings-section-cbz' ? 'active' : ''}>CBZ 归档</a>
+          <a href="#settings-section-cbz-convert" className={activeSection === 'settings-section-cbz-convert' ? 'active' : ''}>CBZ 转换</a>
+          <a href="#settings-section-library" className={activeSection === 'settings-section-library' ? 'active' : ''}>漫画库</a>
+          <a href="#settings-section-lan" className={activeSection === 'settings-section-lan' ? 'active' : ''}>局域网与访问</a>
+          <a href="#settings-section-reader" className={activeSection === 'settings-section-reader' ? 'active' : ''}>阅读器</a>
+          <a href="#settings-section-appearance" className={activeSection === 'settings-section-appearance' ? 'active' : ''}>外观</a>
+          <a href="#settings-section-tags" className={activeSection === 'settings-section-tags' ? 'active' : ''}>标签管理</a>
+          <a href="#settings-section-categories" className={activeSection === 'settings-section-categories' ? 'active' : ''}>分类管理</a>
+          <a href="#settings-section-stats" className={activeSection === 'settings-section-stats' ? 'active' : ''}>统计</a>
+          <a href="#settings-section-sync" className={activeSection === 'settings-section-sync' ? 'active' : ''}>跨机同步</a>
+          <a href="#settings-section-backup" className={activeSection === 'settings-section-backup' ? 'active' : ''}>备份与恢复</a>
         </nav>
 
         <div className="settings-content">
+          {/* 空态预先渲染（默认隐藏）：过滤器只切类，避免在无依赖的 effect 里 setState */}
+          <div className="settings-no-match settings-filtered-out" data-settings-no-match>
+            没有匹配的设置项
+          </div>
       {/* CBZ 归档设置 */}
       <div id="settings-section-cbz" className="settings-section">
         <div className="settings-section-title">📦 CBZ 归档</div>
@@ -639,9 +702,16 @@ export default function Settings() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* 局域网与访问：此前这三项（开关 / 访问地址 / 口令）塞在「漫画库」分区末尾，
+          锚点也叫「漫画库」——语义上它们与书库无关，用户按"局域网"找也找不到。
+          原分区在此处收尾，下面这个新分区由原本的 </div> 收尾。 */}
+      <div id="settings-section-lan" className="settings-section">
+        <div className="settings-section-title">🌐 局域网与访问</div>
         <div className="settings-row">
           <div>
-            <div className="settings-row-label">局域网访问</div>
+            <div className="settings-row-label">允许局域网设备访问</div>
             <div className="settings-row-desc">
               设为「仅本机」时服务只监听 127.0.0.1；设为「局域网」后在手机/平板浏览器访问 http://本机IP:5002/ 或任意 OPDS 阅读器。
               <strong> 重启应用后生效</strong>

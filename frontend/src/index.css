@@ -1660,6 +1660,28 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 }
 .settings-content { flex: 1; min-width: 0; }
 
+/* 设置搜索：按文本过滤是运行期给行/节加这个类（见 Settings.js 的注释） */
+.settings-filtered-out { display: none; }
+.settings-nav-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.settings-nav a.active {
+  background: var(--accent);
+  color: #fff;
+}
+.settings-no-match {
+  padding: 24px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
 @media (max-width: 768px) {
   .settings-layout { flex-direction: column; }
   .settings-nav {
