@@ -1254,3 +1254,92 @@ describe('Library 键盘层', () => {
     expect(within(help).getByText('⌘K / Ctrl-K')).toBeInTheDocument();
   });
 });
+
+// 回归：搜不到结果时，整个页面（含搜索框）此前会被「欢迎使用 MangaViewer」顶掉，
+// 用户只能切到别的页面再切回来才能重新搜索。根因是欢迎页用 archives.length === 0
+// 判定，而 archives 是"当前筛选的结果集"——把"筛不出来"误当成了"书库是空的"。
+describe('Library 搜不到结果时页面必须留在原地', () => {
+  function renderWithReader() {
+    return render(
+      <MemoryRouter>
+        <Routes>
+          <Route path="/" element={
+            <SettingsProvider>
+              <TagsProvider>
+                <ToastProvider>
+                  <Library enableSession={false} />
+                </ToastProvider>
+              </TagsProvider>
+            </SettingsProvider>
+          } />
+          <Route path="/history" element={<div>HISTORY_PAGE</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  const withResults = [
+    { id: 1, title: '漫画A', archive_type: 'cbz', page_count: 10, cover_url: '/c', tags: [] },
+  ];
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    api.getContinueReading.mockResolvedValue([]);
+    // 按请求参数返回，而不是"第几次调用"：这样断言的是"服务端真按搜索词过滤"这条语义，
+    // 也不会因为多一次/少一次请求而误判
+    api.getArchives.mockImplementation((params = {}) =>
+      Promise.resolve(params.search ? [] : withResults)
+    );
+  });
+
+  test('搜不到时不出现欢迎页，搜索框仍在（此前必须切走再切回才能重搜）', async () => {
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('搜索漫画'), { target: { value: '不存在的名字' } });
+
+    await waitFor(() => expect(screen.getByText('没有匹配的漫画')).toBeInTheDocument());
+    // 关键断言：搜索框与头部还在，没有整页被顶掉
+    expect(screen.getByLabelText('搜索漫画')).toBeInTheDocument();
+    expect(screen.queryByText(/欢迎使用 MangaViewer/)).toBeNull();
+  });
+
+  test('空态告诉用户是哪几个筛选条件把结果筛没了', async () => {
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('搜索漫画'), { target: { value: '不存在' } });
+    fireEvent.change(screen.getByLabelText('阅读状态'), { target: { value: 'unread' } });
+
+    await waitFor(() => expect(screen.getByText('没有匹配的漫画')).toBeInTheDocument());
+    const sub = document.querySelector('.empty-state-sub');
+    expect(sub.textContent).toContain('搜索「不存在」');
+    expect(sub.textContent).toContain('阅读状态「未读」');
+  });
+
+  test('空态里的「清除筛选」能直接回到结果，不用切页面', async () => {
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('搜索漫画'), { target: { value: '不存在' } });
+    await waitFor(() => expect(screen.getByText('没有匹配的漫画')).toBeInTheDocument());
+
+    // 空态里那个按钮（头部也有一个同名按钮，这里限定在空态内点）
+    const emptyState = document.querySelector('.empty-state');
+    fireEvent.click(within(emptyState).getByRole('button', { name: /清除筛选/ }));
+
+    await waitFor(() => expect(screen.getByLabelText('搜索漫画').value).toBe(''));
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+  });
+
+  test('书库真的为空（且没有任何筛选）时仍然显示欢迎页', async () => {
+    api.getArchives.mockResolvedValue([]);
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText(/欢迎使用 MangaViewer/)).toBeInTheDocument());
+    // 未筛选的空库给的是"怎么加漫画"的指引，而不是"没有匹配"
+    expect(screen.queryByText('没有匹配的漫画')).toBeNull();
+  });
+});

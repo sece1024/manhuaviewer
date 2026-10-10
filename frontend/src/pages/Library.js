@@ -584,6 +584,9 @@ export default function Library({ mode = 'library', enableSession }) {
 
   const handleSearch = useCallback((val) => {
     setSearch(val);
+    // 立刻置 loading：列表为空时用骨架屏占住"正在找"的空窗。
+    // 已有结果时不显示骨架（loading 分支还要求 displayArchives 为空），所以不打断阅读。
+    setLoading(true);
     clearTimeout(searchDebounceRef.current);
     searchDebounceRef.current = setTimeout(() => {
       loadArchives({ search: val, tag: selectedTagRef.current });
@@ -1112,6 +1115,28 @@ export default function Library({ mode = 'library', enableSession }) {
   );
   const showContinue = !hasActiveFilter && continueItems.length > 0;
 
+  // 空结果时告诉用户"是哪几个筛选条件把结果筛没了"——只写"没有匹配的漫画"无从下手
+  const activeFilterSummary = useMemo(() => {
+    const parts = [];
+    if (search) parts.push(`搜索「${search}」`);
+    if (selectedTag) parts.push(`标签「${selectedTag}」`);
+    if (readFilter !== 'all') {
+      parts.push(`阅读状态「${{ unread: '未读', in_progress: '在读', finished: '已读完' }[readFilter] || readFilter}」`);
+    }
+    if (tagState !== 'all') {
+      parts.push(`标签状态「${tagState === 'untagged' ? '未打标签' : '已打标签'}」`);
+    }
+    if (typeFilter && typeFilter !== 'all') {
+      parts.push(`类型「${typeFilter === 'folder' ? '文件夹' : '压缩包'}」`);
+    }
+    if (selectedCategory) {
+      const name = categories.find(c => c.id === selectedCategory)?.name;
+      parts.push(`分类「${name || selectedCategory}」`);
+    }
+    if (addedRange) parts.push('添加日期');
+    return parts.join(' · ');
+  }, [addedRange, categories, readFilter, search, selectedCategory, selectedTag, tagState, typeFilter]);
+
   // 触底自动加载更多：滚动接近底部自动拉下一页（底部按钮保留作手动兜底）。
   // 用 appendLockRef 防止 IO 回调与点击在短时间内重复请求同一页。
   useEffect(() => {
@@ -1159,8 +1184,12 @@ export default function Library({ mode = 'library', enableSession }) {
     [categories]
   );
 
-  // Welcome screen — 书库彻底为空时显示（合并“漫画库/收藏”双 tab 后不再按类型区分）
-  if (archives.length === 0) {
+  // 欢迎页只在「没有任何筛选」且**不在加载中**时出现。
+  // 此前只判 `archives.length === 0`，而 archives 是"当前筛选的结果集"——于是搜不到时
+  // 整个页面（连搜索框一起）被欢迎页顶掉，用户只能切到别的页面再切回来才能重搜。
+  // 也不在 loading 时判定：清空搜索到结果回来之间有空窗，否则会闪一下欢迎页。
+  const showWelcome = archives.length === 0 && !hasActiveFilter && !loading;
+  if (showWelcome) {
     return (
       <div className="welcome-screen">
         <div className="welcome-screen-icon">📚</div>
@@ -1521,16 +1550,20 @@ export default function Library({ mode = 'library', enableSession }) {
           </div>
         ) : displayArchives.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-state-icon">{typeFilter === 'archive' ? '📦' : '📚'}</div>
+            <div className="empty-state-icon">{hasActiveFilter ? '🔍' : '📚'}</div>
             <div className="empty-state-text">
-              {search || selectedTag
-                ? '没有匹配的漫画'
-                : typeFilter === 'archive'
-                  ? '暂无压缩包档案（CBZ/RAR/7Z）；可在左侧切换为「全部」查看文件夹漫画'
-                  : typeFilter === 'folder'
-                    ? '暂无文件夹档案；可在左侧切换为「全部」查看压缩包漫画'
-                    : '点击「打开文件」添加漫画'}
+              {hasActiveFilter ? '没有匹配的漫画' : '书库是空的'}
             </div>
+            {hasActiveFilter ? (
+              <>
+                {/* 说清楚"是哪几个条件把结果筛没了"——只写"没有匹配"用户无从下手 */}
+                <div className="empty-state-sub">当前筛选：{activeFilterSummary}</div>
+                <button className="btn btn-secondary" onClick={clearFilters}>✕ 清除筛选</button>
+              </>
+            ) : (
+              // 走到这里 typeFilter 必然是「全部」（否则 hasActiveFilter 为真），无需再按类型分支
+              <div className="empty-state-sub">点上面的「扫描漫画目录」把漫画加入书库</div>
+            )}
           </div>
         ) : viewMode === 'grid' ? (
           <div className={`archive-grid${cardDensity === 'normal' ? '' : ` density-${cardDensity}`}`}>

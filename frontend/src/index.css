@@ -626,6 +626,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 }
 .empty-state-icon { font-size: 48px; margin-bottom: 12px; filter: drop-shadow(0 6px 12px rgba(0,0,0,0.12)); }
 .empty-state-text { font-size: 15px; }
+.empty-state-sub {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+/* 筛不出结果时给出动作（清除筛选），所以空态要能纵向排一个按钮 */
+.empty-state .btn { margin-top: 14px; }
 
 /* ── Toggle Button ── */
 .toggle-group {
