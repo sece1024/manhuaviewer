@@ -1,4 +1,4 @@
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import { ToastProvider, useToast } from '../components/Toast';
 
 function TestComponent() {
@@ -67,5 +67,50 @@ describe('Toast 组件', () => {
     });
     expect(screen.queryByText('测试消息')).not.toBeInTheDocument();
     jest.useRealTimers();
+  });
+});
+
+describe('Toast 动作（撤销）', () => {
+  function ActionComponent({ onClick }) {
+    const toast = useToast();
+    return (
+      <button onClick={() => toast('已移除《漫画A》', 'success', undefined, { label: '撤销', onClick })}>
+        触发
+      </button>
+    );
+  }
+
+  test('带动作的提示渲染出可点按钮，点击后执行动作并收起提示', () => {
+    const onClick = jest.fn();
+    render(
+      <ToastProvider>
+        <ActionComponent onClick={onClick} />
+      </ToastProvider>
+    );
+
+    fireEvent.click(screen.getByText('触发'));
+
+    const action = screen.getByRole('button', { name: '撤销' });
+    expect(screen.getByText('已移除《漫画A》')).toBeInTheDocument();
+
+    fireEvent.click(action);
+    expect(onClick).toHaveBeenCalledTimes(1);
+    // 动作已执行：提示立即收起，免得用户怀疑有没有生效
+    expect(screen.queryByText('已移除《漫画A》')).toBeNull();
+  });
+
+  test('不带动作的提示不会凭空多出按钮（第 3 参仍是时长，不是动作）', () => {
+    function PlainComponent() {
+      const toast = useToast();
+      return <button onClick={() => toast('普通提示', 'success', 3000)}>普通触发</button>;
+    }
+    render(
+      <ToastProvider>
+        <PlainComponent />
+      </ToastProvider>
+    );
+    fireEvent.click(screen.getByText('普通触发'));
+    expect(screen.getByText('普通提示')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '撤销' })).toBeNull();
   });
 });

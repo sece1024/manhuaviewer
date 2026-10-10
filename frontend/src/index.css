@@ -363,6 +363,19 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   max-width: 400px;
 }
 .toast-message { flex: 1; }
+/* 提示条上的动作（目前用于「从库中移除」的撤销）：必须在提示消失前都点得到 */
+.toast-action {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.toast-action:hover { background: rgba(255, 255, 255, 0.3); }
 .toast-dismiss {
   background: none;
   border: none;

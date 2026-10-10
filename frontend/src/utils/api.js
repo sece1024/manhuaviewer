@@ -336,6 +336,11 @@ const api = {
   batchDeleteArchives: (ids) =>
     request('/archives/batch-delete', { method: 'POST', body: JSON.stringify({ ids }) })
       .then(r => { _invalidate('/archives'); _invalidate('/history'); return r; }),
+  // 撤销刚才的移除：token 来自删除响应，一次性、10 分钟内有效。
+  // 恢复的是档案行 + 标签/分类关联 + 书签 + 阅读进度，因此要作废书库与历史的缓存。
+  undoDeleteArchive: (token) =>
+    request('/archives/undo-delete', { method: 'POST', body: JSON.stringify({ token }) })
+      .then(r => { _invalidate('/archives'); _invalidate('/history'); _invalidate('/tags'); return r; }),
   updateTitle: (id, title) =>
     request(`/archives/${id}/title`, { method: 'PUT', body: JSON.stringify({ title }) })
       .then(r => { _invalidate('/archives'); return r; }),

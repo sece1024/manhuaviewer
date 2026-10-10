@@ -13,17 +13,28 @@ import api from '../utils/api';
  * `flushPending` 供调用方在**换档前**手动落盘：防抖定时器即将被清掉，且组件复用不卸载
  * （组内章节跳转/末页续章不会触发卸载 flush），否则旧档案最后几秒的阅读位置会丢失。
  */
-export default function useProgressPersistence({ archive, archiveId, pages, currentIndex }) {
+export default function useProgressPersistence({ archive, archiveId, pages, currentIndex, onSaveError }) {
   const lastSavedRef = useRef(null);
   const saveTimerRef = useRef(null);
   const saveParamsRef = useRef({ archiveId: null, currentIndex: 0, pagesLength: 0 });
+  // 失败只报一次：进度保存每次翻页都会防抖触发，持续失败（口令过期/后端不可达）
+  // 若每次都提示会把界面刷爆
+  const reportedErrorRef = useRef(false);
+  const onSaveErrorRef = useRef(onSaveError);
+  onSaveErrorRef.current = onSaveError;
 
   const commitSave = useCallback((aid, index, len) => {
     if (!Number.isFinite(aid) || aid <= 0 || !Number.isFinite(len) || len <= 0) return;
     const fingerprint = `${aid}:${index}:${len}`;
     if (lastSavedRef.current === fingerprint) return;
     lastSavedRef.current = fingerprint;
-    api.saveHistory(aid, index, len).catch(() => {});
+    api.saveHistory(aid, index, len).catch((e) => {
+      // 此前这里是静默吞掉：用户最在意的那份状态（读到哪了）可以无声消失，
+      // 而本机继续翻页一切正常，根本不会察觉
+      if (reportedErrorRef.current) return;
+      reportedErrorRef.current = true;
+      if (onSaveErrorRef.current) onSaveErrorRef.current(e);
+    });
   }, []);
 
   // 保存进度参数镜像（供卸载/换档 flush 读取最新值）。

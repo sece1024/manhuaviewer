@@ -953,3 +953,116 @@ describe('Library 卡片操作面板（触屏可达性）', () => {
     await waitFor(() => expect(screen.getByText('移除漫画')).toBeInTheDocument());
   });
 });
+
+// 「从库中移除」删的是库记录（磁盘文件不动），但级联会带走标签/分类/书签/进度。
+// 所以删除后必须留一条能点得到的退路，而不是只有一句二次确认。
+describe('Library 移除后可撤销', () => {
+  function renderLibrary2() {
+    return render(
+      <MemoryRouter>
+        <Routes>
+          <Route path="/" element={
+            <SettingsProvider>
+              <TagsProvider>
+                <ToastProvider>
+                  <Library enableSession={false} />
+                </ToastProvider>
+              </TagsProvider>
+            </SettingsProvider>
+          } />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    api.getContinueReading.mockResolvedValue([]);
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '漫画A', archive_type: 'cbz', page_count: 10, cover_url: '/c', tags: [] },
+    ]);
+  });
+
+  test('单个移除后提示条带「撤销」，点它调用撤销接口并回到库中', async () => {
+    api.deleteArchive.mockResolvedValue({ success: true, undo_token: 'tok-1' });
+    api.undoDeleteArchive.mockResolvedValue({ success: true, restored: 1, skipped: 0 });
+
+    renderLibrary2();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    // 走触屏路径（⋯ → 从库中移除），顺带覆盖操作面板的接线
+    fireEvent.click(screen.getByRole('button', { name: '更多操作：漫画A' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: '漫画操作' })).getByRole('button', { name: /从库中移除/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '移除' }));
+
+    await waitFor(() => expect(api.deleteArchive).toHaveBeenCalledWith(1));
+    // 提示里带上书名，用户才知道自己刚删了哪本
+    const undoBtn = await screen.findByRole('button', { name: '撤销' });
+    expect(screen.getByText('已移除《漫画A》')).toBeInTheDocument();
+
+    fireEvent.click(undoBtn);
+    await waitFor(() => expect(api.undoDeleteArchive).toHaveBeenCalledWith('tok-1'));
+    expect(await screen.findByText(/已恢复 1 个档案/)).toBeInTheDocument();
+  });
+
+  test('撤销时若有路径已被重新扫描入库，如实说明而不是假装全部恢复', async () => {
+    api.deleteArchive.mockResolvedValue({ success: true, undo_token: 'tok-2' });
+    api.undoDeleteArchive.mockResolvedValue({ success: true, restored: 1, skipped: 2 });
+
+    renderLibrary2();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '更多操作：漫画A' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: '漫画操作' })).getByRole('button', { name: /从库中移除/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '移除' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: '撤销' }));
+    expect(await screen.findByText(/另有 2 个已在库中/)).toBeInTheDocument();
+  });
+
+  test('批量删除整批一个令牌，撤销一次还原整批', async () => {
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '漫画A', archive_type: 'cbz', page_count: 10, cover_url: '/c', tags: [] },
+      { id: 2, title: '漫画B', archive_type: 'cbz', page_count: 10, cover_url: '/c', tags: [] },
+    ]);
+    api.batchDeleteArchives.mockResolvedValue({ success: true, affected: 2, undo_token: 'tok-batch' });
+    api.undoDeleteArchive.mockResolvedValue({ success: true, restored: 2, skipped: 0 });
+
+    renderLibrary2();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '选择' }));
+    fireEvent.click(screen.getByText('漫画A'));
+    fireEvent.click(screen.getByText('漫画B'));
+    // 工具栏的「删除」与确认框的「删除」同名：必须限定在对话框内点，否则会命中两个
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    const confirm = await screen.findByRole('dialog', { name: '批量删除' });
+    fireEvent.click(within(confirm).getByRole('button', { name: '删除' }));
+
+    await waitFor(() => expect(api.batchDeleteArchives).toHaveBeenCalledWith([1, 2]));
+    fireEvent.click(await screen.findByRole('button', { name: '撤销' }));
+    await waitFor(() => expect(api.undoDeleteArchive).toHaveBeenCalledWith('tok-batch'));
+  });
+
+  test('转换为 CBZ 的确认框列出将被删除的原文件（唯一会删磁盘文件的操作）', async () => {
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '会消失的漫画A', archive_type: '7z', page_count: 10, cover_url: '/c', tags: [] },
+      { id: 2, title: '会消失的漫画B', archive_type: 'rar', page_count: 10, cover_url: '/c', tags: [] },
+    ]);
+    renderLibrary2();
+    await waitFor(() => expect(screen.getByText('会消失的漫画A')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '选择' }));
+    fireEvent.click(screen.getByText('会消失的漫画A'));
+    fireEvent.click(screen.getByText('会消失的漫画B'));
+    fireEvent.click(screen.getByRole('button', { name: '转为 CBZ' }));
+
+    const dialog = await screen.findByRole('dialog', { name: '转换为 CBZ' });
+    expect(within(dialog).getByText(/将删除以下原文件/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/· 会消失的漫画A/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/· 会消失的漫画B/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/此操作不可撤销/)).toBeInTheDocument();
+  });
+});

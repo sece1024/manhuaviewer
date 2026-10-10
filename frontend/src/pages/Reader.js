@@ -121,7 +121,11 @@ export default function Reader() {
   const wideSpreadStickyRef = useRef(false);
 
   // —— 抽取的 hook：进度持久化（防抖保存 + 换档/卸载 flush）与图片预加载（LRU）——
-  const { flushPending } = useProgressPersistence({ archive, archiveId, pages, currentIndex });
+  const { flushPending } = useProgressPersistence({
+    archive, archiveId, pages, currentIndex,
+    // 进度保存失败要说一声（只提示一次）：此前静默吞掉，用户读到哪了丢了也不知道
+    onSaveError: () => toast('阅读进度保存失败（网络或访问口令问题）；本机仍可继续阅读', 'error'),
+  });
   const { pageReady, loadedPageIdsRef } = usePagePreloader({ pages, currentIndex, longImage });
 
   // 稳定的 sentinel ref 回调：从 data-idx 读索引，避免每次渲染产生新函数

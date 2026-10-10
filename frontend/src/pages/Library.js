@@ -743,15 +743,49 @@ export default function Library({ mode = 'library', enableSession }) {
     confirmRemoveFor(id);
   }, [confirmRemoveFor]);
 
+  // 撤销刚才的移除：把提示条上的动作接到后端的一次性令牌。
+  // 刻意不用 useCallback：它只在事件回调里使用（不是传给 memo 组件的 prop），
+  // 而 memo 化会引入 loadArchives 的依赖告警——别的 useCallback 已经踩过三次。
+  const handleUndoDelete = async (token) => {
+    try {
+      const r = await api.undoDeleteArchive(token);
+      const restored = r?.restored ?? 0;
+      const skipped = r?.skipped ?? 0;
+      if (skipped > 0) {
+        // 跳过的是撤销窗口内已被重新扫描入库的路径：如实说明，别让用户以为全没了
+        toast(`已恢复 ${restored} 个；另有 ${skipped} 个已在库中（期间被扫描重新入库）`, 'warning');
+      } else {
+        toast(`已恢复 ${restored} 个档案（含标签 / 书签 / 进度）`, 'success');
+      }
+      loadArchives({ search: searchRef.current, tag: selectedTagRef.current });
+      refreshContinue();
+    } catch (e) {
+      toast(e.message || '撤销失败', 'error');
+    }
+  };
+
+  // 带「撤销」动作的提示；后端没给令牌（理论上不会）时退化成普通提示
+  const toastWithUndo = (message, token) => {
+    if (!token) {
+      toast(message, 'success');
+      return;
+    }
+    toast(message, 'success', undefined, {
+      label: '撤销',
+      onClick: () => handleUndoDelete(token),
+    });
+  };
+
   const handleConfirmRemove = async () => {
     setConfirmOpen(false);
     const id = confirmTarget;
     if (!id) return;
+    const title = archives.find(a => a.id === id)?.title;
     try {
-      await api.deleteArchive(id);
-      toast('已移除', 'success');
+      const r = await api.deleteArchive(id);
       loadArchives({ search, tag: selectedTag });
       refreshContinue();
+      toastWithUndo(title ? `已移除《${title}》` : '已移除', r?.undo_token);
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -892,11 +926,11 @@ export default function Library({ mode = 'library', enableSession }) {
     if (ids.length === 0) return;
     setBatchDeleteConfirmOpen(false);
     try {
-      await api.batchDeleteArchives(ids);
-      toast(`已删除 ${ids.length} 个档案`, 'success');
+      const r = await api.batchDeleteArchives(ids);
       handleExitSelectMode();
       loadArchives({ search, tag: selectedTag });
       refreshContinue();
+      toastWithUndo(`已删除 ${ids.length} 个档案`, r?.undo_token);
     } catch (e) {
       toast(e.message, 'error');
     }
@@ -915,6 +949,12 @@ export default function Library({ mode = 'library', enableSession }) {
       },
     ];
   }, [confirmRemoveFor, openCategoryPickerFor, openRenameFor, openTagPickerFor, sheetTarget]);
+
+  // 「转换为 CBZ」确认框里列出的原文件（只在打开时计算）
+  const convertTargetTitles = useMemo(() => {
+    if (!convertConfirmOpen) return [];
+    return archives.filter(a => selectedIds.has(a.id)).map(a => a.title);
+  }, [archives, convertConfirmOpen, selectedIds]);
 
   // 分组已在服务端完成：`archives` 里的每一项要么是普通档案，要么是带 _isGroup 的组卡片。
   const groupedArchives = archives;
@@ -1474,7 +1514,27 @@ export default function Library({ mode = 'library', enableSession }) {
       <ConfirmDialog
         open={convertConfirmOpen}
         title="转换为 CBZ"
-        message={`将把选中的 ${selectedIds.size} 个档案转换为同目录 CBZ，并在成功后删除原文件。此操作不可撤销（标签 / 阅读历史 / 书签会保留）。确定继续吗？`}
+        // 列入真实文件名：这是唯一真正删磁盘文件的操作，只说"N 个"等于让用户
+        // 在看不见代价的情况下按下不可撤销的按钮
+        message={(
+          <>
+            将把选中的 {selectedIds.size} 个档案转换为同目录 CBZ，并在成功后删除原文件。
+            此操作不可撤销（标签 / 阅读历史 / 书签会保留）。
+            {convertTargetTitles.length > 0 && (
+              <span style={{ display: 'block', marginTop: 8, color: 'var(--text-primary)' }}>
+                将删除以下原文件：
+                {convertTargetTitles.slice(0, 5).map(t => (
+                  <span key={t} style={{ display: 'block', fontSize: 12 }}>· {t}</span>
+                ))}
+                {convertTargetTitles.length > 5 && (
+                  <span style={{ display: 'block', fontSize: 12 }}>
+                    · 等共 {convertTargetTitles.length} 个
+                  </span>
+                )}
+              </span>
+            )}
+          </>
+        )}
         confirmText="开始转换"
         danger
         onConfirm={() => {
