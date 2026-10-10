@@ -71,6 +71,26 @@ describe('api.js 请求行为', () => {
     expect(global.fetch.mock.calls.length).toBe(before + 1); // 缓存已失效
   });
 
+  // 继续阅读横条的数据源：固定 read=in_progress + 按最近阅读排序，且与书库列表
+  // 共用缓存键，因此 saveHistory 的查询级失效必须能把它一起作废（否则读完一本
+  // 返回书库，横条还停在 30s 的旧进度上）
+  test('getContinueReading 固定查询在读 + 最近阅读，并随阅读进度失效', async () => {
+    global.fetch = jest.fn(() => okJson([]));
+    await api.getContinueReading();
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toContain('read=in_progress');
+    expect(url).toContain('sort_by=updated');
+    expect(url).toContain('limit=6');
+
+    // 第二次命中缓存
+    await api.getContinueReading();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    await api.saveHistory(1, 3, 10);
+    await api.getContinueReading();
+    expect(global.fetch).toHaveBeenCalledTimes(3); // 1 次首拉 + 1 次 saveHistory + 1 次重拉
+  });
+
   test('错误对象携带 HTTP 状态码，供调用方区分 404 与 5xx', async () => {
     global.fetch = jest.fn(() => errJson(404, { error: 'Archive not found' }));
     await expect(api.getArchiveTags(999)).rejects.toMatchObject({ status: 404 });

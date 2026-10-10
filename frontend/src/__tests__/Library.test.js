@@ -651,3 +651,93 @@ describe('Library 阅读状态（未读 / 在读 / 已读完）', () => {
     });
   });
 });
+
+describe('Library 继续阅读横条', () => {
+  function renderWithReader() {
+    return render(
+      <MemoryRouter>
+        <Routes>
+          <Route path="/" element={
+            <SettingsProvider>
+              <TagsProvider>
+                <ToastProvider>
+                  <Library />
+                </ToastProvider>
+              </TagsProvider>
+            </SettingsProvider>
+          } />
+          <Route path="/reader/:archiveId" element={
+            <div>
+              READER_PAGE
+              <button onClick={() => window.history.back()}>退出阅读器</button>
+            </div>
+          } />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  const reading = {
+    id: 7, title: '读到一半的书', archive_type: 'cbz', page_count: 180,
+    read_page: 11, cover_url: '/api/archives/7/cover', tags: [],
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '列表里的书', archive_type: 'cbz', page_count: 10, cover_url: '/c', tags: [] },
+    ]);
+  });
+
+  test('展示在读项与进度，点击直接续读', async () => {
+    api.getContinueReading.mockResolvedValue([reading]);
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('继续阅读')).toBeInTheDocument());
+    // 进度按 1 基页码显示，用户能看到"读到哪了"
+    expect(screen.getByText('第 12/180 页')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('继续阅读《读到一半的书》'));
+    // 一律进阅读器（组卡片也直接续读在读到的那一话，而不是先展开章节）
+    await waitFor(() => expect(screen.getByText('READER_PAGE')).toBeInTheDocument());
+  });
+
+  test('没有任何在读档案时不渲染横条', async () => {
+    api.getContinueReading.mockResolvedValue([]);
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('列表里的书')).toBeInTheDocument());
+    expect(screen.queryByText('继续阅读')).toBeNull();
+  });
+
+  test('接口未就绪（返回非数组）时静默隐藏，不影响书库主列表', async () => {
+    api.getContinueReading.mockResolvedValue(undefined);
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('列表里的书')).toBeInTheDocument());
+    expect(screen.queryByText('继续阅读')).toBeNull();
+  });
+
+  test('用户加了筛选后隐藏，避免与列表表达两套筛选条件', async () => {
+    api.getContinueReading.mockResolvedValue([reading]);
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('继续阅读')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('阅读状态'), { target: { value: 'finished' } });
+    await waitFor(() => expect(screen.queryByText('继续阅读')).toBeNull());
+  });
+
+  test('「查看全部在读」把筛选切到在读', async () => {
+    api.getContinueReading.mockResolvedValue([reading]);
+    renderWithReader();
+    await waitFor(() => expect(screen.getByText('继续阅读')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('查看全部在读'));
+    await waitFor(() => {
+      // limit=50 用于区分主列表请求与横条自身的 limit=6 请求
+      expect(api.getArchives).toHaveBeenCalledWith(
+        expect.objectContaining({ read: 'in_progress', limit: 50 })
+      );
+    });
+  });
+});

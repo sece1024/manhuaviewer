@@ -278,6 +278,9 @@ export default function Library({ mode = 'library', enableSession }) {
   const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
   // 分页状态（page 用 ref，避免 loadMore 的 memoized 闭包读到过期值）
   const PAGE_SIZE = 50;
+  const CONTINUE_LIMIT = 6; // 继续阅读横条条数：一行放得下，超出请走「在读」筛选
+  const [continueItems, setContinueItems] = useState([]);
+  const [continueTick, setContinueTick] = useState(0);
   const pageRef = useRef(1);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -345,6 +348,20 @@ export default function Library({ mode = 'library', enableSession }) {
   const reloadCategories = useCallback(() => {
     return api.getCategories().then(data => { setCategories(data); return data; }).catch(() => []);
   }, []);
+
+  // ── 继续阅读：「在读」且最近读过的几条，横向铺在书库顶部 ──
+  // 必须单独拉一次：主列表受当前排序/筛选分页控制，最近在读的条目未必落在第 1 页。
+  // tick 用于在删除档案后主动重拉（其余场景由挂载 + saveHistory 的缓存失效覆盖）。
+  const refreshContinue = useCallback(() => setContinueTick(t => t + 1), []);
+  useEffect(() => {
+    let cancelled = false;
+    // Promise.resolve + Array.isArray 双重兜底：测试 automock 下该方法返回 undefined，
+    // 此时横条保持隐藏，不会与主列表里的同名卡片抢 getByText
+    Promise.resolve(api.getContinueReading(CONTINUE_LIMIT))
+      .then(items => { if (!cancelled) setContinueItems(Array.isArray(items) ? items : []); })
+      .catch(() => { if (!cancelled) setContinueItems([]); });
+    return () => { cancelled = true; };
+  }, [continueTick]);
 
   // 日期树（年 → 月计数）。Promise.resolve 包一层：测试的 automock 下方法返回
   // undefined 而非 Promise，直接 .then 会崩；首次拿到树时默认展开最新一年。
@@ -634,6 +651,7 @@ export default function Library({ mode = 'library', enableSession }) {
       await api.deleteArchive(id);
       toast('已移除', 'success');
       loadArchives({ search, tag: selectedTag });
+      refreshContinue();
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -773,6 +791,7 @@ export default function Library({ mode = 'library', enableSession }) {
       toast(`已删除 ${ids.length} 个档案`, 'success');
       handleExitSelectMode();
       loadArchives({ search, tag: selectedTag });
+      refreshContinue();
     } catch (e) {
       toast(e.message, 'error');
     }
@@ -792,6 +811,15 @@ export default function Library({ mode = 'library', enableSession }) {
       typeFilter === 'folder' ? a.archive_type === 'folder' : a.archive_type !== 'folder'
     );
   }, [groupedArchives, typeFilter]);
+
+  // 顶部续读区只在「没加任何筛选」的首页状态出现：用户一旦主动筛选，横条与下面的
+  // 列表就表达了两套不同条件，会让人怀疑列表漏了东西；此时把 `read=in_progress`
+  // 交给筛选下拉即可（横条上的「查看全部在读」正是这个入口）。
+  const hasActiveFilter = Boolean(
+    search || selectedTag || selectedCategory || addedRange ||
+    (typeFilter && typeFilter !== 'all') || readFilter !== 'all'
+  );
+  const showContinue = !hasActiveFilter && continueItems.length > 0;
 
   // 触底自动加载更多：滚动接近底部自动拉下一页（底部按钮保留作手动兜底）。
   // 用 appendLockRef 防止 IO 回调与点击在短时间内重复请求同一页。
@@ -1080,6 +1108,50 @@ export default function Library({ mode = 'library', enableSession }) {
               onConvertCbz={() => { handleConvertFolderToCbz(); setShowMobileMenu(false); }}
             />
           </div>
+        )}
+
+        {/* 继续阅读：打开应用后最常见的动作是「接着上次看」，把它放在列表之前，
+            一次点击即可续读；这里展示的是服务端《在读 + 最近阅读》的前 N 条 */}
+        {showContinue && (
+          <section className="continue-strip" aria-label="继续阅读">
+            <div className="continue-strip-head">
+              <span className="continue-strip-title">继续阅读</span>
+              <button
+                className="btn btn-sm btn-secondary"
+                onClick={() => setReadFilter('in_progress')}
+                title="在书库中筛出所有读到一半的漫画"
+              >
+                查看全部在读
+              </button>
+            </div>
+            <div className="continue-strip-row">
+              {continueItems.map(a => (
+                <button
+                  key={a.id}
+                  type="button"
+                  className="continue-item"
+                  onClick={() => openArchive(a.id)}
+                  title={`继续阅读《${a.title}》`}
+                >
+                  <span className="continue-item-cover">
+                    <LazyImage src={a.cover_url} alt="" />
+                    <span className="archive-card-progress">
+                      <span
+                        className="archive-card-progress-bar"
+                        style={{
+                          width: `${a.page_count > 0
+                            ? Math.min(100, (((a.read_page || 0) + 1) / a.page_count) * 100)
+                            : 0}%`,
+                        }}
+                      />
+                    </span>
+                  </span>
+                  <span className="continue-item-title">{a.title}</span>
+                  <span className="continue-item-meta">{formatReadProgress(a)}</span>
+                </button>
+              ))}
+            </div>
+          </section>
         )}
 
         {/* 档案列表 */}

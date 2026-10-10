@@ -308,6 +308,16 @@ const api = {
   // 按添加日期的年/月聚合（侧栏"日期"树）。缓存键 /archives/added-tree 落在
   // _invalidate('/archives') 的前缀规则内：任何档案写操作都会自动作废它。
   getAddedTree: () => request('/archives/added-tree'),
+  // 「继续阅读」：按最近阅读排序的在读档案，供书库顶部横向续读区使用。
+  // 与 getArchives 走同一端点，只是固定了 read/sort —— 于是客户端缓存键与
+  // saveHistory 的 _invalidateQuery('/archives') 失效规则自动共享，不必额外维护。
+  // 单独抽成方法还有一个好处：测试里 automock 返回 undefined，未显式配置的用例
+  // 不会凭空多出一排卡片（否则卡片标题与列表重复，getByText 会因多个匹配而失败）。
+  getContinueReading: (limit = 6) =>
+    request(`/archives?read=in_progress&sort_by=updated&sort_order=desc&limit=${limit}&page=1`)
+      .then(archives =>
+        archives.map(a => ({ ...a, cover_url: imageUrl(a.cover_url || `/api/archives/${a.id}/cover`) }))
+      ),
   getPages: (archiveId) => request(`/archives/${archiveId}/pages`).then(data => ({
     ...data,
     pages: data.pages.map(p => ({ ...p, url: imageUrl(p.url), thumb_url: imageUrl(p.thumb_url) })),
