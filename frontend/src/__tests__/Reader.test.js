@@ -616,3 +616,55 @@ describe('Reader 触摸手势（iPad / 网页端）', () => {
     }
   });
 });
+// ⋯ 菜单此前是 12 个按钮平铺的一行：既不给分组也不写快捷键，用户得从 12 个词里认路。
+describe('Reader 更多操作菜单（分组 + 快捷键标注）', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getBookmarks.mockResolvedValue({ pages: [] });
+    api.getArchiveSiblings.mockResolvedValue([]);
+    api.saveHistory.mockResolvedValue({});
+    api.addBookmark.mockResolvedValue({});
+    api.removeBookmark.mockResolvedValue({});
+  });
+
+  test('按用途分组，并标出与快捷键的对应关系', async () => {
+    renderReader();
+    await waitFor(() => expect(screen.getByRole('region', { name: /页面阅读区/ })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '打开更多菜单' }));
+
+    const menu = screen.getByRole('dialog', { name: '更多操作' });
+    expect(within(menu).getByText('显示与导航')).toBeInTheDocument();
+    expect(within(menu).getByText('书签与封面')).toBeInTheDocument();
+    expect(within(menu).getByText('整理')).toBeInTheDocument();
+    // 快捷键不再是"只存在于 F1 表格里"的知识
+    expect(within(menu).getByText('T')).toBeInTheDocument();
+    expect(within(menu).getByText('G')).toBeInTheDocument();
+    expect(within(menu).getByText('R')).toBeInTheDocument();
+  });
+
+  test('缩略图入口仍能打开总览，且菜单自己先收起（不再平铺挤压阅读区）', async () => {
+    renderReader();
+    await waitFor(() => expect(screen.getByRole('region', { name: /页面阅读区/ })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '打开更多菜单' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: '更多操作' })).getByText('缩略图总览'));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '更多操作' })).toBeNull());
+  });
+
+  test('书签菜单项保留菜单打开：标题在「添加/移除」之间翻转就是操作生效的反馈', async () => {
+    api.addBookmark.mockResolvedValue({});
+    renderReader();
+    await waitFor(() => expect(screen.getByRole('region', { name: /页面阅读区/ })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '打开更多菜单' }));
+    const menu = screen.getByRole('dialog', { name: '更多操作' });
+    fireEvent.click(within(menu).getByText('在本页添加书签'));
+
+    await waitFor(() => expect(api.addBookmark).toHaveBeenCalled());
+    // 菜单还在，且标题已翻转
+    expect(within(screen.getByRole('dialog', { name: '更多操作' })).getByText('移除本页书签')).toBeInTheDocument();
+  });
+});

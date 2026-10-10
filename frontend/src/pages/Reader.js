@@ -913,30 +913,79 @@ export default function Reader() {
         </span>
       </div>
 
-      {/* 展开菜单：缩略图、跳转、旋转、缩放、翻页方向、标签、CBZ */}
+      {/* ⋯ 菜单：此前是 12 个按钮平铺的一行，既不给分组也不写快捷键——用户得从
+          12 个词里认路，还得记住哪些键做同样的事。改成弹层 + 按用途分组 + 每行标注
+          快捷键；顺带不再挤压阅读区（平铺时会占掉两三行高度）。 */}
       {showMenu && (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: 8 }}>
-          <button className="btn btn-secondary btn-sm" onClick={() => { setShowThumbnails(true); setShowMenu(false); }}>📋 缩略图</button>
-          <button className="btn btn-secondary btn-sm" onClick={() => { setShowJump(true); setShowMenu(false); }}>🔢 跳转</button>
-          <button className="btn btn-secondary btn-sm" onClick={() => { setRotation(r => (r + 90) % 360); setShowMenu(false); }}>↻ 旋转</button>
-          <button className="btn btn-secondary btn-sm" onClick={() => { setScale(1); setTranslate({ x: 0, y: 0 }); setShowMenu(false); }}>1:1 重置</button>
-          <button className="btn btn-secondary btn-sm" onClick={() => { setPageDirection(d => d === 'rtl' ? 'ltr' : 'rtl'); setShowMenu(false); }}>
-            {pageDirection === 'rtl' ? '→← 右翻' : '←→ 左翻'}
-          </button>
-          <button className="btn btn-secondary btn-sm" onClick={handleToggleBookmark}>
-            {bookmarks.has(currentIndex) ? '🔖 移除书签' : '🔖 添加书签'}
-          </button>
-          <button className="btn btn-secondary btn-sm" onClick={handleSetCover}>🖼 设当前页为封面</button>
-          <button className="btn btn-secondary btn-sm" onClick={handleResetCover}>默认封面</button>
-          <button className="btn btn-secondary btn-sm" onClick={() => { setCoverUrlInput(''); setShowCoverUrl(true); setShowMenu(false); }}>🌐 封面 URL</button>
-          <button className="btn btn-secondary btn-sm" onClick={() => { handleOpenMetaSearch(); setShowMenu(false); }}>🔎 搜封面</button>
-          <button className="btn btn-secondary btn-sm" onClick={() => { setShowTagPicker(true); setShowMenu(false); }}>🏷️ 标签</button>
-          {archive && archive.archive_type === 'folder' && (
-            <button className="btn btn-secondary btn-sm" onClick={() => { handlePackCbz(); setShowMenu(false); }} disabled={packing}>
-              {packing ? '⏳ 打包中...' : '📦 归档 CBZ'}
-            </button>
-          )}
-        </div>
+        <Modal onClose={() => setShowMenu(false)} ariaLabel="更多操作" innerStyle={{ minWidth: 320 }}>
+          <h3 style={{ marginBottom: 12 }}>更多操作</h3>
+          {[
+            {
+              title: '显示与导航',
+              items: [
+                { key: 'T', icon: '📋', label: '缩略图总览', run: () => { setShowThumbnails(true); setShowMenu(false); } },
+                { key: 'G', icon: '🔢', label: `跳转到页（共 ${pages.length} 页）`, run: () => { setShowJump(true); setShowMenu(false); } },
+                { key: 'R', icon: '↻', label: '旋转 90°', run: () => { setRotation(r => (r + 90) % 360); setShowMenu(false); } },
+                { key: '', icon: '⤢', label: '缩放还原到 1:1', run: () => { setScale(1); setTranslate({ x: 0, y: 0 }); setShowMenu(false); } },
+              ],
+            },
+            {
+              title: '阅读方向',
+              items: [
+                {
+                  key: '',
+                  icon: pageDirection === 'rtl' ? '→←' : '←→',
+                  label: pageDirection === 'rtl' ? '当前：右翻（日漫）— 切换为左翻' : '当前：左翻（西漫）— 切换为右翻',
+                  run: () => { setPageDirection(d => d === 'rtl' ? 'ltr' : 'rtl'); setShowMenu(false); },
+                },
+              ],
+            },
+            {
+              title: '书签与封面',
+              items: [
+                {
+                  key: '',
+                  icon: '🔖',
+                  label: bookmarks.has(currentIndex) ? '移除本页书签' : '在本页添加书签',
+                  run: () => { handleToggleBookmark(); },
+                },
+                { key: '', icon: '🖼', label: '把当前页设为封面', run: () => { handleSetCover(); setShowMenu(false); } },
+                { key: '', icon: '✨', label: '恢复默认封面（档案第一页）', run: () => { handleResetCover(); setShowMenu(false); } },
+                { key: '', icon: '🌐', label: '指定远程封面 URL', run: () => { setCoverUrlInput(''); setShowCoverUrl(true); setShowMenu(false); } },
+                { key: '', icon: '🔎', label: '搜索封面（Bangumi，需联网）', run: () => { handleOpenMetaSearch(); setShowMenu(false); } },
+              ],
+            },
+            {
+              title: '整理',
+              items: [
+                { key: '', icon: '🏷️', label: '编辑标签 / 分类', run: () => { setShowTagPicker(true); setShowMenu(false); } },
+                ...(archive && archive.archive_type === 'folder'
+                  ? [{ key: '', icon: '📦', label: packing ? '正在打包…' : '把这个文件夹归档为 CBZ', disabled: packing, run: () => { handlePackCbz(); setShowMenu(false); } }]
+                  : []),
+              ],
+            },
+          ].map(group => (
+            <div className="reader-menu-group" key={group.title}>
+              <div className="reader-menu-title">{group.title}</div>
+              {group.items.map(item => (
+                <button
+                  key={item.label}
+                  type="button"
+                  className="reader-menu-item"
+                  onClick={item.run}
+                  disabled={item.disabled}
+                >
+                  <span className="reader-menu-icon" aria-hidden="true">{item.icon}</span>
+                  <span className="reader-menu-label">{item.label}</span>
+                  {item.key && <kbd className="reader-menu-kbd">{item.key}</kbd>}
+                </button>
+              ))}
+            </div>
+          ))}
+          <div className="settings-row-desc" style={{ marginTop: 10 }}>
+            完整快捷键见 <b>F1</b>
+          </div>
+        </Modal>
       )}
 
       {/* 进度条 */}

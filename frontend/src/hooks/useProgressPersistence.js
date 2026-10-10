@@ -28,7 +28,9 @@ export default function useProgressPersistence({ archive, archiveId, pages, curr
     const fingerprint = `${aid}:${index}:${len}`;
     if (lastSavedRef.current === fingerprint) return;
     lastSavedRef.current = fingerprint;
-    api.saveHistory(aid, index, len).catch((e) => {
+    // Promise.resolve 包一层：测试的 automock 下方法返回 undefined，
+    // 直接 .catch 会同步抛错（与本仓库其它 hook 的兜底写法一致）
+    Promise.resolve(api.saveHistory(aid, index, len)).catch((e) => {
       // 此前这里是静默吞掉：用户最在意的那份状态（读到哪了）可以无声消失，
       // 而本机继续翻页一切正常，根本不会察觉
       if (reportedErrorRef.current) return;
