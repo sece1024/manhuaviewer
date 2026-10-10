@@ -263,6 +263,9 @@ impl Database {
     fn init_settings(&self) -> Result<()> {
         let defaults = [
             ("root_dir", ""),
+            // 记住的扫描根目录列表（JSON 数组）。root_dir/scan_depth 保留为「最近一次
+            // 使用」的镜像：后端 /api/scan 缺省只认 root_dir，列表纯属界面记忆。
+            ("scan_roots", "[]"),
             ("view_mode", "grid"),
             ("card_density", "normal"),
             ("sort_by", "updated"),

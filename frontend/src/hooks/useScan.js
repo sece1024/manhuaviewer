@@ -44,7 +44,9 @@ export default function useScan({ updateSetting, toast, onStatsRefresh }) {
       if (scanning) return;
       try {
         await updateSetting('root_dir', trimmed);
-        await updateSetting('scan_depth', depth);
+        // 后端设置表是 HashMap<String, String>：深度必须序列化成字符串，
+        // 否则设置页从列表里传数字深度时整个 PUT 会因类型不匹配而失败
+        await updateSetting('scan_depth', String(Number(depth) || 1));
       } catch (e) {
         toast(e.message, 'error');
         return;

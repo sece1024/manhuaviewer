@@ -2,6 +2,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import Library from '../pages/Library';
 import { clearLibrarySessions } from '../hooks/useLibrarySession';
+import { resetJobsStore } from '../hooks/useJobs';
 import { ToastProvider } from '../components/Toast';
 import { SettingsProvider } from '../hooks/useSettings';
 import { TagsProvider } from '../hooks/useTags';
@@ -9,6 +10,12 @@ import { TagsProvider } from '../hooks/useTags';
 jest.mock('../utils/api');
 const api = require('../utils/api').default;
 const { membershipGeneration } = require('../utils/api');
+
+// 任务层是模块级单例，会跨用例存活（例如"批量转 CBZ"用例会把转换任务留在跑），
+// 每个用例都从干净的任务状态开始
+beforeEach(() => {
+  resetJobsStore();
+});
 
 function renderLibrary() {
   return render(

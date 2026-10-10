@@ -4,6 +4,7 @@ import Settings from '../pages/Settings';
 import { ToastProvider } from '../components/Toast';
 import { SettingsProvider } from '../hooks/useSettings';
 import { TagsProvider } from '../hooks/useTags';
+import { resetJobsStore } from '../hooks/useJobs';
 
 jest.mock('../utils/api');
 const api = require('../utils/api').default;
@@ -24,6 +25,7 @@ function renderSettings() {
 
 describe('Settings 页面', () => {
   beforeEach(() => {
+    resetJobsStore();
     jest.clearAllMocks();
     api.getSettings.mockResolvedValue({ page_direction: 'rtl', reader_fit: 'height', theme: 'dark' });
     api.getStats.mockResolvedValue({ total_archives: 10, total_pages: 500, total_size: 1024000, total_tags: 5, total_categories: 3, history_count: 20 });
@@ -95,5 +97,80 @@ describe('Settings 页面', () => {
     fireEvent.click(await screen.findByRole('button', { name: '开始转换' }));
 
     await waitFor(() => expect(api.convertCbzStart).toHaveBeenCalled());
+  });
+});
+
+describe('Settings 扫描目录（多根目录记忆）', () => {
+  const twoRoots = JSON.stringify([{ path: '/a', depth: 1 }, { path: '/b', depth: 3 }]);
+
+  beforeEach(() => {
+    resetJobsStore();
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({ scan_roots: twoRoots, root_dir: '/a', scan_depth: '1', theme: 'dark' });
+    api.getStats.mockResolvedValue({});
+    api.getTags.mockResolvedValue([]);
+    api.getCategories.mockResolvedValue([]);
+    api.getLanIps.mockResolvedValue({ ipv4: [], port: 5002 });
+    api.scanStatus.mockResolvedValue({ running: false, total: 0, done: 0 });
+    api.syncStatus.mockResolvedValue({ running: false });
+    api.convertCbzStatus.mockResolvedValue({ running: false });
+  });
+
+  test('列出记住的每个目录，各自按自己的深度独立扫描', async () => {
+    renderSettings();
+    await waitFor(() => expect(screen.getByText('/a')).toBeInTheDocument());
+    expect(screen.getByText('/b')).toBeInTheDocument();
+
+    const buttons = screen.getAllByRole('button', { name: '立即扫描' });
+    expect(buttons).toHaveLength(2);
+    // 第 2 条是 /b（深度 3）：扫描必须带上它自己的深度，而不是"当前深度"
+    fireEvent.click(buttons[1]);
+    await waitFor(() => expect(api.scan).toHaveBeenCalledWith('/b', 3));
+    expect(api.updateSettings).toHaveBeenCalledWith({ scan_depth: '3' });
+  });
+
+  test('「加入列表」把新目录写进 scan_roots（深度转字符串，后端设置表只收 string）', async () => {
+    renderSettings();
+    await waitFor(() => expect(screen.getByText('/a')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('扫描目录路径'), { target: { value: '/new' } });
+    fireEvent.click(screen.getByRole('button', { name: '加入列表' }));
+
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith({
+      scan_roots: JSON.stringify([
+        { path: '/new', depth: 1 },
+        { path: '/a', depth: 1 },
+        { path: '/b', depth: 3 },
+      ]),
+    }));
+  });
+
+  test('「移除」忘记该目录；移除 root_dir 指向的那条同时清空镜像', async () => {
+    renderSettings();
+    await waitFor(() => expect(screen.getByText('/a')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '移除扫描目录 /a' }));
+
+    // root_dir 是「最近使用」的镜像；不清空它，下次渲染会用它把 /a 重新种回列表，
+    // 看起来就像"移除没生效"
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith({ root_dir: '' }));
+    expect(api.updateSettings).toHaveBeenCalledWith({
+      scan_roots: JSON.stringify([{ path: '/b', depth: 3 }]),
+    });
+  });
+
+  test('列表为空时用旧的 root_dir 种一条（升级不丢扫描目录）', async () => {
+    api.getSettings.mockResolvedValue({ scan_roots: '[]', root_dir: '/legacy', scan_depth: '2' });
+    renderSettings();
+    await waitFor(() => expect(screen.getByText('/legacy')).toBeInTheDocument());
+    expect(screen.getAllByRole('button', { name: '立即扫描' })).toHaveLength(1);
+  });
+
+  test('完全没有目录时给出引导，「加入列表」在输入为空时不可点', async () => {
+    api.getSettings.mockResolvedValue({ scan_roots: '[]', root_dir: '' });
+    renderSettings();
+    await waitFor(() => expect(screen.getByText(/还没有扫描目录/)).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: '立即扫描' })).toBeNull();
+    expect(screen.getByRole('button', { name: '加入列表' })).toBeDisabled();
   });
 });

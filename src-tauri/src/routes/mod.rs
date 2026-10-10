@@ -239,6 +239,7 @@ fn strip_private_fields(value: &mut serde_json::Value) {
                         | "parent_dir"
                         | "_parentDir"
                         | "root_dir"
+                        | "scan_roots"
                         | "cbz_export_dir"
                 ) && !LAN_SENSITIVE_SETTINGS.contains(&k.as_str());
                 if keep && (v.is_object() || v.is_array()) {

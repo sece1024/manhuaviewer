@@ -1,6 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api, { setServerToken } from '../utils/api';
 import { formatSize } from '../utils/format';
+import {
+  parseScanRoots, addScanRoot, removeScanRoot, updateScanRootDepth,
+  serializeScanRoots, clampDepth,
+} from '../utils/scanRoots';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
@@ -211,7 +215,54 @@ export default function Settings() {
     }
   };
 
-  // 选择书库根目录
+  // 扫描目录列表：settings 是唯一数据源（列表为空时用旧的单根 root_dir 种一条，
+  // 保证升级上来的用户不会看到"扫描目录丢了"）
+  const scanRoots = useMemo(
+    () => parseScanRoots(settings.scan_roots, settings.root_dir, settings.scan_depth),
+    [settings.scan_roots, settings.root_dir, settings.scan_depth]
+  );
+
+  const persistScanRoots = useCallback(
+    (next) => updateSetting('scan_roots', serializeScanRoots(next)),
+    [updateSetting]
+  );
+
+  // 加入列表。对话框选中的目录也走这里，所以「选择…」= 选中并记住，一步到位。
+  const handleAddRoot = async (path, depth) => {
+    const trimmed = (path || '').trim();
+    if (!trimmed) {
+      toast('请先选择或输入漫画目录', 'warning');
+      return;
+    }
+    if (scanRoots[0]?.path === trimmed && scanRoots.length > 0) {
+      toast('该目录已在列表最前，可直接点「立即扫描」', 'info');
+      return;
+    }
+    await persistScanRoots(addScanRoot(scanRoots, trimmed, depth));
+    setRootDir(trimmed);
+    toast('已加入扫描目录', 'success');
+  };
+
+  const handleRemoveRoot = async (path) => {
+    // 根目录镜像不能指向一个刚被"忘记"的目录，否则它会在下次渲染时被重新种回列表
+    // （parseScanRoots 在列表为空时用 root_dir 兜底），看起来就像"移除没生效"
+    if (path === (settings.root_dir || '')) {
+      await updateSetting('root_dir', '');
+    }
+    await persistScanRoots(removeScanRoot(scanRoots, path));
+    toast('已移除该扫描目录', 'success');
+  };
+
+  const handleRootDepthChange = async (path, depth) => {
+    const next = clampDepth(depth);
+    await persistScanRoots(updateScanRootDepth(scanRoots, path, next));
+    // 最近使用的那一条同步给 scan_depth，保持后端「缺省读 root_dir/scan_depth」的行为一致
+    if (path === (settings.root_dir || '')) {
+      await updateSetting('scan_depth', String(next));
+    }
+  };
+
+  // 选择漫画目录（桌面端）：选中即加入列表
   const handleSelectScanDir = async () => {
     if (!isTauri) {
       toast('目录选择仅在桌面应用中可用', 'warning');
@@ -221,19 +272,20 @@ export default function Settings() {
       const selected = await window.__TAURI__.dialog.open({
         directory: true,
         multiple: false,
-        title: '选择书库根目录',
+        title: '选择要扫描的漫画目录',
       });
       if (selected) {
         setRootDir(selected);
-        await handleUpdateSetting('root_dir', selected);
+        await handleAddRoot(selected, scanDepth);
       }
     } catch (e) {
       toast('选择目录失败: ' + e.message, 'error');
     }
   };
 
-  // 增量扫描根目录：先持久化根目录与深度，再触发扫描（进度见 useScan）
-  const handleScanClick = () => handleScan(rootDir, scanDepth);
+  // 增量扫描某个根目录：useScan 会先持久化 root_dir/scan_depth（= 最近一次使用），
+  // 再启动任务；清理只作用于该目录范围内，不影响列表里其它目录
+  const handleScanClick = (path, depth) => handleScan(path, depth);
 
   const handleCreateTag = async () => {
     if (!newTagName.trim()) return;
@@ -488,19 +540,62 @@ export default function Settings() {
           </button>
         </div>
         <div className="settings-row">
-          <div>
-            <div className="settings-row-label">书库根目录（批量扫描）</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="settings-row-label">扫描目录</div>
             <div className="settings-row-desc">
-              保存根目录后点「立即扫描」：新增档案入库、变更档案更新、磁盘上已删除的文件会被清理
+              按目录增量入库：新增档案入库、变更档案更新，并清理<b>该目录范围内</b>磁盘上已删除的档案
+              （不影响列表里的其它目录）。可记住多个目录，例如内置盘 + 移动硬盘，不必每次改路径。
             </div>
-            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            {scanRoots.length === 0 ? (
+              <div className="scan-root-empty">还没有扫描目录：选一个漫画目录即可开始入库</div>
+            ) : (
+              <div className="scan-root-list">
+                {scanRoots.map(root => (
+                  <div className="scan-root-item" key={root.path}>
+                    <span className="scan-root-path" title={root.path}>{root.path}</span>
+                    <select
+                      value={root.depth}
+                      onChange={(e) => handleRootDepthChange(root.path, e.target.value)}
+                      aria-label="扫描深度"
+                      disabled={scanning}
+                    >
+                      {[1, 2, 3, 4, 5].map(d => <option key={d} value={d}>{d} 层</option>)}
+                    </select>
+                    <button
+                      className="btn btn-sm btn-primary"
+                      onClick={() => handleScanClick(root.path, root.depth)}
+                      disabled={scanning}
+                    >
+                      {scanning ? '扫描中...' : '立即扫描'}
+                    </button>
+                    <button
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => handleRemoveRoot(root.path)}
+                      disabled={scanning}
+                      aria-label={`移除扫描目录 ${root.path}`}
+                    >
+                      移除
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="scan-root-add">
               <input
                 type="text"
                 value={rootDir}
                 onChange={(e) => setRootDir(e.target.value)}
-                placeholder="漫画书库目录路径"
-                style={{ flex: 1 }}
+                placeholder="漫画目录路径"
+                aria-label="扫描目录路径"
+                style={{ flex: 1, minWidth: 0 }}
               />
+              <select
+                value={scanDepth}
+                onChange={(e) => setScanDepth(e.target.value)}
+                aria-label="新目录的扫描深度"
+              >
+                {[1, 2, 3, 4, 5].map(d => <option key={d} value={d}>{d} 层</option>)}
+              </select>
               <button
                 className="btn btn-sm"
                 onClick={handleSelectScanDir}
@@ -509,22 +604,21 @@ export default function Settings() {
               >
                 选择…
               </button>
+              <button
+                className="btn btn-sm"
+                onClick={() => handleAddRoot(rootDir, scanDepth)}
+                disabled={!rootDir.trim()}
+              >
+                加入列表
+              </button>
             </div>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
-            <select value={scanDepth} onChange={(e) => setScanDepth(e.target.value)} aria-label="扫描深度">
-              {[1, 2, 3, 4, 5].map(d => <option key={d} value={d}>{d} 层</option>)}
-            </select>
-            <button className="btn btn-sm btn-primary" onClick={handleScanClick} disabled={scanning}>
-              {scanning ? '扫描中...' : '立即扫描'}
-            </button>
           </div>
         </div>
         {scanning && (
           <div style={{ background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', padding: 12 }}>
             <div style={{ fontSize: 13, marginBottom: 6 }}>
               {scanInfo.total > 0
-                ? `已扫描 ${scanInfo.done} / ${scanInfo.total}（新增 ${scanInfo.added} · 更新 ${scanInfo.updated} · 跳过 ${scanInfo.unchanged}）`
+                ? `已扫描 ${scanInfo.done} / ${scanInfo.total}（新增 ${scanInfo.added} · 更新 ${scanInfo.updated} · 跳过 ${scanInfo.unchanged} · 清理 ${scanInfo.removed}）`
                 : '准备中...'}
               {scanInfo.current && (
                 <span style={{ color: 'var(--text-secondary)' }}> —— {scanInfo.current}</span>
