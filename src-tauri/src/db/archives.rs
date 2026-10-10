@@ -72,6 +72,45 @@ fn tag_state_clause(state: Option<&str>) -> &'static str {
     }
 }
 
+/// 删除前的档案快照：撤销删除要把这一行连同它的标签/分类/书签/阅读进度**原样**放回去。
+///
+/// 为什么复用备份通道（`import_backup`）做不到这件事：备份以 path 为键，只恢复档案的
+/// 四个字段与关联，用途是"导入到另一台机器"；而撤销必须精确——要还原原 id
+/// （`archives.id` 是 AUTOINCREMENT，id 不会被复用，所以安全）、原始 created_at
+/// （否则"添加时间"与侧栏日期树都会变）、手动封面 / 远程封面，以及合并组的归属。
+///
+/// 刻意不记 pages：压缩包的页面清单由 `page_cache::load_page_rows` 在缓存失效或为空时
+/// 自动重建（见该函数），撤销时不需要把几百行页记录一起搬回去。
+/// 也不记 thumbnail_path / thumb_accessed_at：封面缓存目录在删除时已被清掉，
+/// 恢复时留空让缩略图按需重新生成，而不是指向一个不存在的目录。
+#[derive(Debug, Clone)]
+pub struct ArchiveSnapshot {
+    pub id: i64,
+    pub title: String,
+    pub path: String,
+    pub archive_type: String,
+    pub page_count: i64,
+    pub cover_image: Option<String>,
+    pub remote_cover: Option<String>,
+    pub file_size: i64,
+    pub group_id: Option<i64>,
+    pub page_list_mtime: i64,
+    pub file_mtime: i64,
+    pub title_auto: i64,
+    pub last_read_at: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub tag_ids: Vec<i64>,
+    pub category_ids: Vec<i64>,
+    /// (page_index, created_at)
+    pub bookmarks: Vec<(i64, Option<String>)>,
+    /// (page_index, total_pages, updated_at)
+    pub reading: Option<(i64, i64, Option<String>)>,
+    /// 被删档案是合并组主档案时，成员的 group_id 会被 `ON DELETE SET NULL` 清掉；
+    /// 记下这些成员，撤销时把归属还回去（否则合并组会被悄悄拆散）。
+    pub group_member_ids: Vec<i64>,
+}
+
 impl Database {
     pub fn get_archive(&self, id: i64) -> Result<Option<ArchiveRow>> {
         let conn = self.conn()?;
@@ -669,9 +708,219 @@ impl Database {
         Ok(affected)
     }
 
+    /// 在同一个事务里读取快照并删除单个档案（读与删之间不能有其它写操作插入）。
+    pub fn delete_archive_with_snapshot(&self, id: i64) -> Result<Option<ArchiveSnapshot>> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let snapshot = Self::snapshot_archive(&tx, id)?;
+        if snapshot.is_none() {
+            return Ok(None);
+        }
+        tx.execute("DELETE FROM archives WHERE id = ?", [id])?;
+        tx.commit()?;
+        Ok(snapshot)
+    }
+
+    /// 批量删除：整体一个事务，返回每个成功取到快照并删除的档案（顺序与 ids 一致）。
+    pub fn delete_archives_with_snapshots(&self, ids: &[i64]) -> Result<Vec<ArchiveSnapshot>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let mut snapshots = Vec::new();
+        for &id in ids {
+            if let Some(snapshot) = Self::snapshot_archive(&tx, id)? {
+                tx.execute("DELETE FROM archives WHERE id = ?", [id])?;
+                snapshots.push(snapshot);
+            }
+        }
+        tx.commit()?;
+        Ok(snapshots)
+    }
+
+    /// 撤销删除：把快照原样写回，单事务。
+    ///
+    /// 返回 (恢复数, 跳过数)。跳过的是"路径已被重新入库"的条目——删除后若恰好跑过扫描，
+    /// 同一路径会带着新 id 回到库里，此时插入旧 id 会撞 UNIQUE(path)，整批撤销就会失败。
+    /// 宁可跳过并如实告诉用户，也不要让撤销整体失败。
+    pub fn restore_archive_snapshots(
+        &self,
+        snapshots: &[ArchiveSnapshot],
+    ) -> Result<(usize, usize)> {
+        if snapshots.is_empty() {
+            return Ok((0, 0));
+        }
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let mut restored = 0;
+        let mut skipped = 0;
+
+        for snap in snapshots {
+            let existing: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM archives WHERE path = ?",
+                    [&snap.path],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if existing.is_some() {
+                skipped += 1;
+                continue;
+            }
+
+            tx.execute(
+                "INSERT INTO archives (
+                     id, title, path, archive_type, page_count, cover_image, remote_cover,
+                     file_size, group_id, page_list_mtime, file_mtime, title_auto,
+                     last_read_at, created_at, updated_at
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rusqlite::params![
+                    snap.id,
+                    snap.title,
+                    snap.path,
+                    snap.archive_type,
+                    snap.page_count,
+                    snap.cover_image,
+                    snap.remote_cover,
+                    snap.file_size,
+                    snap.group_id,
+                    snap.page_list_mtime,
+                    snap.file_mtime,
+                    snap.title_auto,
+                    snap.last_read_at,
+                    snap.created_at,
+                    snap.updated_at,
+                ],
+            )?;
+
+            for tag_id in &snap.tag_ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO archive_tags (archive_id, tag_id) VALUES (?, ?)",
+                    (snap.id, tag_id),
+                )?;
+            }
+            for category_id in &snap.category_ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO archive_categories (archive_id, category_id) VALUES (?, ?)",
+                    (snap.id, category_id),
+                )?;
+            }
+            for (page_index, created_at) in &snap.bookmarks {
+                tx.execute(
+                    "INSERT OR IGNORE INTO bookmarks (archive_id, page_index, created_at) VALUES (?, ?, ?)",
+                    rusqlite::params![snap.id, page_index, created_at],
+                )?;
+            }
+            if let Some((page_index, total_pages, updated_at)) = &snap.reading {
+                tx.execute(
+                    "INSERT OR REPLACE INTO history (archive_id, page_index, total_pages, updated_at)
+                     VALUES (?, ?, ?, ?)",
+                    rusqlite::params![snap.id, page_index, total_pages, updated_at],
+                )?;
+            }
+            // 合并组归属：这些成员在删除主档案时被 SET NULL，现在恢复
+            for member_id in &snap.group_member_ids {
+                tx.execute(
+                    "UPDATE archives SET group_id = ? WHERE id = ? AND group_id IS NULL",
+                    (snap.id, member_id),
+                )?;
+            }
+            restored += 1;
+        }
+
+        tx.commit()?;
+        Ok((restored, skipped))
+    }
+
+    /// 读取一个档案的完整快照（不含 pages 与缩略图缓存字段，见 [`ArchiveSnapshot`]）。
+    fn snapshot_archive(
+        tx: &rusqlite::Transaction<'_>,
+        id: i64,
+    ) -> Result<Option<ArchiveSnapshot>> {
+        let archive = tx
+            .query_row(
+                "SELECT id, title, path, archive_type, page_count, cover_image, remote_cover,
+                        file_size, group_id, page_list_mtime, file_mtime, title_auto,
+                        last_read_at, created_at, updated_at
+                 FROM archives WHERE id = ?",
+                [id],
+                |row| {
+                    Ok(ArchiveSnapshot {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        path: row.get(2)?,
+                        archive_type: row.get(3)?,
+                        page_count: row.get(4)?,
+                        cover_image: row.get(5)?,
+                        remote_cover: row.get(6)?,
+                        file_size: row.get(7)?,
+                        group_id: row.get(8)?,
+                        page_list_mtime: row.get(9)?,
+                        file_mtime: row.get(10)?,
+                        title_auto: row.get(11)?,
+                        last_read_at: row.get(12)?,
+                        created_at: row.get(13)?,
+                        updated_at: row.get(14)?,
+                        tag_ids: Vec::new(),
+                        category_ids: Vec::new(),
+                        bookmarks: Vec::new(),
+                        reading: None,
+                        group_member_ids: Vec::new(),
+                    })
+                },
+            )
+            .optional()?;
+        let Some(mut snap) = archive else {
+            return Ok(None);
+        };
+
+        let mut stmt = tx.prepare("SELECT tag_id FROM archive_tags WHERE archive_id = ?")?;
+        snap.tag_ids = stmt
+            .query_map([id], |row| row.get(0))?
+            .filter_map(log_and_skip)
+            .collect();
+        drop(stmt);
+
+        let mut stmt =
+            tx.prepare("SELECT category_id FROM archive_categories WHERE archive_id = ?")?;
+        snap.category_ids = stmt
+            .query_map([id], |row| row.get(0))?
+            .filter_map(log_and_skip)
+            .collect();
+        drop(stmt);
+
+        let mut stmt = tx.prepare(
+            "SELECT page_index, created_at FROM bookmarks WHERE archive_id = ? ORDER BY page_index",
+        )?;
+        snap.bookmarks = stmt
+            .query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(log_and_skip)
+            .collect();
+        drop(stmt);
+
+        snap.reading = tx
+            .query_row(
+                "SELECT page_index, total_pages, updated_at FROM history WHERE archive_id = ?",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+
+        // 只有主档案（group_id = 自身 id）才需要记成员：删它会把成员的 group_id 置 NULL
+        if snap.group_id == Some(id) {
+            let mut stmt = tx.prepare("SELECT id FROM archives WHERE group_id = ?")?;
+            snap.group_member_ids = stmt
+                .query_map([id], |row| row.get(0))?
+                .filter_map(log_and_skip)
+                .collect();
+        }
+
+        Ok(Some(snap))
+    }
+
     pub fn update_archive_title(&self, id: i64, title: &str) -> Result<usize> {
-        self.conn()?.execute(
-            "UPDATE archives SET title = ?, title_auto = 0, updated_at = datetime('now') WHERE id = ?",
+        self.conn()?.execute(            "UPDATE archives SET title = ?, title_auto = 0, updated_at = datetime('now') WHERE id = ?",
             (title, id),
         )
     }
@@ -1375,5 +1624,154 @@ mod sibling_tests {
         let db = setup();
         add(&db, "A", "/lib/series/A.cbz");
         assert!(db.get_siblings_in_dir(9999).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod undo_tests {
+    use super::*;
+
+    fn setup() -> Database {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let db = Database::new(temp_file.path().to_str().unwrap()).unwrap();
+        db.init().unwrap();
+        db
+    }
+
+    fn add(db: &Database, title: &str, path: &str) -> i64 {
+        db.upsert_scanned_archive(title, path, "cbz", 10, 100, 5)
+            .unwrap()
+    }
+
+    /// 删除 → 撤销：档案行（原 id、原始 created_at、手动封面）与标签/分类/书签/进度
+    /// 必须一模一样地回来。这是"撤销"和"重新扫描入库"的本质区别。
+    #[test]
+    fn snapshot_restores_metadata_exactly() {
+        let db = setup();
+        let id = add(&db, "书A", "/x/a.cbz");
+        db.save_history(id, 3, 10).unwrap();
+        db.add_bookmark(id, 4).unwrap();
+        let tag = db.create_tag("artist", "是谁", "#fff").unwrap();
+        db.assign_tag(id, tag).unwrap();
+        let cat = db.create_category("动作", "#0f0", false, "").unwrap();
+        db.assign_category(id, cat).unwrap();
+        // 手动封面 + 一个可辨认的 created_at（撤销后"添加时间"和日期树都不该变）
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE archives SET created_at = '2020-01-02 03:04:05', cover_image = 'p3.jpg' WHERE id = ?",
+                [id],
+            )
+            .unwrap();
+
+        let snap = db
+            .delete_archive_with_snapshot(id)
+            .unwrap()
+            .expect("应取到快照");
+        assert!(db.get_archive(id).unwrap().is_none(), "删除后应查不到");
+        assert!(
+            db.get_archive_tags(id).unwrap().is_empty(),
+            "级联应清掉标签关联"
+        );
+
+        assert_eq!(db.restore_archive_snapshots(&[snap]).unwrap(), (1, 0));
+
+        let row = db.get_archive(id).unwrap().expect("应恢复原行");
+        assert_eq!(row.id, id, "应恢复原 id（AUTOINCREMENT 不复用，安全）");
+        assert_eq!(row.title, "书A");
+        assert_eq!(row.cover_image.as_deref(), Some("p3.jpg"));
+        assert_eq!(row.created_at, "2020-01-02 03:04:05");
+        assert_eq!(db.get_archive_tags(id).unwrap().len(), 1);
+        assert_eq!(db.get_archive_categories(id).unwrap().len(), 1);
+        assert_eq!(db.list_bookmarks(id).unwrap(), vec![4]);
+        assert_eq!(
+            db.get_history_for_archive(id).unwrap().unwrap().page_index,
+            3
+        );
+    }
+
+    /// 删除合并组主档案会把成员的 group_id 置 NULL（ON DELETE SET NULL）；
+    /// 撤销必须把归属还回去，否则组会被悄悄拆散。
+    #[test]
+    fn snapshot_relinks_group_members() {
+        let db = setup();
+        let first = add(&db, "第一话", "/x/1.cbz");
+        let second = add(&db, "第二话", "/x/2.cbz");
+        db.merge_archives(&[first, second]).unwrap();
+        assert_eq!(
+            db.get_archive(second).unwrap().unwrap().group_id,
+            Some(first)
+        );
+
+        let snap = db.delete_archive_with_snapshot(first).unwrap().unwrap();
+        assert_eq!(
+            db.get_archive(second).unwrap().unwrap().group_id,
+            None,
+            "删除主档案会 SET NULL 成员的 group_id"
+        );
+
+        assert_eq!(db.restore_archive_snapshots(&[snap]).unwrap(), (1, 0));
+        assert_eq!(
+            db.get_archive(second).unwrap().unwrap().group_id,
+            Some(first),
+            "撤销后成员应重新归组"
+        );
+        assert_eq!(
+            db.get_archive(first).unwrap().unwrap().group_id,
+            Some(first)
+        );
+    }
+
+    /// 删除后路径恰好被重新扫描入库（新 id）：撤销应跳过而不是撞 UNIQUE(path) 整批失败。
+    #[test]
+    fn restore_skips_paths_that_came_back() {
+        let db = setup();
+        let old_id = add(&db, "旧", "/x/same.cbz");
+        let snap = db.delete_archive_with_snapshot(old_id).unwrap().unwrap();
+        let new_id = add(&db, "新", "/x/same.cbz");
+        assert_ne!(old_id, new_id);
+
+        assert_eq!(db.restore_archive_snapshots(&[snap]).unwrap(), (0, 1));
+        // 库里仍是重新入库的那一条，没有被旧快照覆盖
+        let row = db.get_archive(new_id).unwrap().unwrap();
+        assert_eq!(row.title, "新");
+        assert!(db.get_archive(old_id).unwrap().is_none());
+    }
+
+    /// 批量删除一次性拿到整批快照，撤销一次全部还原
+    #[test]
+    fn batch_delete_snapshots_restore_together() {
+        let db = setup();
+        let a = add(&db, "A", "/x/a.cbz");
+        let b = add(&db, "B", "/x/b.cbz");
+        let c = add(&db, "C", "/x/c.cbz");
+
+        let snaps = db.delete_archives_with_snapshots(&[a, b, c]).unwrap();
+        assert_eq!(snaps.len(), 3);
+        assert_eq!(
+            db.list_archives(None, None, None, None, None, "title", "asc", 50, 0)
+                .unwrap()
+                .len(),
+            0
+        );
+
+        assert_eq!(db.restore_archive_snapshots(&snaps).unwrap(), (3, 0));
+        assert_eq!(
+            db.list_archives(None, None, None, None, None, "title", "asc", 50, 0)
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    /// 不存在的 id：不产生快照，也不报错（并发下可能已被别人删掉）
+    #[test]
+    fn deleting_missing_archive_yields_no_snapshot() {
+        let db = setup();
+        assert!(db.delete_archive_with_snapshot(999).unwrap().is_none());
+        assert!(db
+            .delete_archives_with_snapshots(&[998, 999])
+            .unwrap()
+            .is_empty());
     }
 }

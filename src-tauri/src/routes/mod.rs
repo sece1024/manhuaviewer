@@ -399,6 +399,8 @@ pub fn create_router(state: AppState) -> Router {
             "/archives/batch-delete",
             post(archives::batch_delete_archives),
         )
+        // 撤销「从库中移除」：删除返回的 undo_token 一次性有效（见 services::undo）
+        .route("/archives/undo-delete", post(archives::undo_delete))
         .route(
             "/archives/regenerate-titles",
             post(archives::regenerate_titles),
@@ -545,6 +547,9 @@ mod tests {
             db,
             data_dir,
             last_thumb_eviction: Arc::new(std::sync::Mutex::new(None)),
+            undo: Arc::new(std::sync::Mutex::new(
+                crate::services::undo::UndoBuffer::new(),
+            )),
         };
         let app = create_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

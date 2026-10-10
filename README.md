@@ -4,6 +4,7 @@
 
 ## ✨ 功能特性
 
+- ↩️ **误删可撤销** — 「从库中移除」删的只是库里的记录（磁盘源文件不动），删除后提示条上可一键还原标签/分类/书签/阅读进度；撤销窗口 10 分钟
 - 📚 **漫画库** — 封面卡片网格 / 列表视图切换，按标签、分类、名称、阅读状态（未读/在读/已读完）筛选；顶部「继续阅读」横条一键续读
 - 📖 **阅读器** — 单页/双页/长图模式，RTL/LTR 翻页方向，适应高度/宽度/原始大小
 - 📦 **压缩包支持** — ZIP/CBZ/RAR/CBR/7Z 直接浏览，无需解压
@@ -124,7 +125,7 @@ frontend/
 | `/api/archives` | GET | 档案列表（支持 search, tag, category_id, group_id, sort/sort_by, order/sort_order, page, limit, read=unread/in_progress/finished 阅读状态, tag_state=untagged/tagged 标签状态, added_from/added_to 按添加日期过滤，YYYY-MM-DD，from 含 to 不含） |
 | `/api/archives/added-tree` | GET | 按添加日期的年/月聚合（侧栏"日期"树；本机时区分桶，年降序、月升序） |
 | `/api/archives/:id` | GET | 档案详情 |
-| `/api/archives/:id` | DELETE | 删除档案 |
+| `/api/archives/:id` | DELETE | 删除档案；响应带一次性 `undo_token`，配合下一条可在 10 分钟内撤销 |
 | `/api/archives/:id/title` | PUT | 重命名档案 |
 | `/api/archives/:id/cover` | GET | 封面缩略图 |
 | `/api/archives/:id/pages` | GET | 页面列表 |
@@ -137,7 +138,8 @@ frontend/
 | `/api/archives/:id/bookmarks/:page_index` | DELETE | 移除书签 |
 | `/api/metadata/search` | GET | Bangumi 元数据搜索（?q=） |
 | `/api/update/check` | GET | 检查 GitHub Releases 更新 |
-| `/api/archives/batch-delete` | POST | 批量删除档案 |
+| `/api/archives/batch-delete` | POST | 批量删除档案（整批一个 `undo_token`） |
+| `/api/archives/undo-delete` | POST | 撤销刚才的移除（`{token}`），把档案行、标签/分类关联、书签与阅读进度原样还原；跳过在撤销窗口内已被重新扫描入库的路径 |
 | `/api/archives/regenerate-titles` | POST | 按文件名重新生成标题 |
 | `/api/archives/:id/file` | POST | 下载档案原文件（跨机同步用） |
 | `/api/archives/pack-cbz` | POST | 将文件夹打包为 CBZ |

@@ -8,6 +8,7 @@ pub mod metadata;
 pub mod page_cache;
 pub mod scanner;
 pub mod thumbnail;
+pub mod undo;
 
 use std::path::Path;
 

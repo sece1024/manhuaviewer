@@ -905,6 +905,9 @@ mod tests {
             db,
             data_dir,
             last_thumb_eviction: Arc::new(std::sync::Mutex::new(None)),
+            undo: Arc::new(std::sync::Mutex::new(
+                crate::services::undo::UndoBuffer::new(),
+            )),
         };
         let app = crate::routes::create_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1406,6 +1409,9 @@ mod tests {
             db: remote_db.clone(),
             data_dir: remote_dir.path().to_path_buf(),
             last_thumb_eviction: Arc::new(std::sync::Mutex::new(None)),
+            undo: Arc::new(std::sync::Mutex::new(
+                crate::services::undo::UndoBuffer::new(),
+            )),
         };
         let app = axum::Router::new()
             .route(

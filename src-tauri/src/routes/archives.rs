@@ -613,13 +613,44 @@ pub async fn delete_archive(State(state): State<Arc<AppState>>, Path(id): Path<i
     let page_thumb_dir = state.data_dir.join("page_thumbs").join(id.to_string());
     let extract_dir = state.data_dir.join("extract").join(id.to_string());
 
-    match super::run_db(&state, move |db| db.delete_archive(id)).await {
-        Ok(_) => {
-            // 删除封面 / 页面缩略图目录与解压缓存目录
-            let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
-            let _ = tokio::fs::remove_dir_all(&page_thumb_dir).await;
-            let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-            Json(serde_json::json!({ "success": true })).into_response()
+    // 删除与快照在同一个事务里完成：否则刚读完快照、还没删，就可能被别的写操作插进来
+    let snapshot = match super::run_db(&state, move |db| db.delete_archive_with_snapshot(id)).await
+    {
+        Ok(snapshot) => snapshot,
+        Err(e) => return internal_error(e),
+    };
+
+    // 删除封面 / 页面缩略图目录与解压缓存目录
+    let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
+    let _ = tokio::fs::remove_dir_all(&page_thumb_dir).await;
+    let _ = tokio::fs::remove_dir_all(&extract_dir).await;
+
+    let undo_token = snapshot.map(|s| state.undo.lock().unwrap().push(vec![s]));
+    Json(serde_json::json!({ "success": true, "undo_token": undo_token })).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct UndoDeleteRequest {
+    pub token: String,
+}
+
+/// POST /api/archives/undo-delete — 撤销刚才的「从库中移除」。
+///
+/// 磁盘上的源文件从来没被删过，所以这里要还原的是**元数据**：档案行（原 id / 原始
+/// created_at / 手动封面 / 合并组归属）、标签与分类关联、书签、阅读进度。令牌一次性，
+/// 有效期见 `services::undo`。
+pub async fn undo_delete(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<UndoDeleteRequest>,
+) -> Response {
+    let Some(snapshots) = state.undo.lock().unwrap().take(&payload.token) else {
+        return error_response(StatusCode::GONE, "撤销已过期（或在别处已被撤销）");
+    };
+    match super::run_db(&state, move |db| db.restore_archive_snapshots(&snapshots)).await {
+        Ok((restored, skipped)) => {
+            // skipped = 路径在撤销窗口内已被重新扫描入库的条目（见 db 层注释）
+            Json(serde_json::json!({ "success": true, "restored": restored, "skipped": skipped }))
+                .into_response()
         }
         Err(e) => internal_error(e),
     }
@@ -640,8 +671,8 @@ pub async fn batch_delete_archives(
 
     let ids = payload.ids;
     let ids_db = ids.clone();
-    match super::run_db(&state, move |db| db.batch_delete_archives(&ids_db)).await {
-        Ok(affected) => {
+    match super::run_db(&state, move |db| db.delete_archives_with_snapshots(&ids_db)).await {
+        Ok(snapshots) => {
             // 逐个清理封面 / 页面缩略图目录与解压缓存目录
             for id in &ids {
                 let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
@@ -651,7 +682,13 @@ pub async fn batch_delete_archives(
                 let extract_dir = state.data_dir.join("extract").join(id.to_string());
                 let _ = tokio::fs::remove_dir_all(&extract_dir).await;
             }
-            Json(serde_json::json!({ "success": true, "affected": affected })).into_response()
+            let affected = snapshots.len();
+            // 整批一个令牌：界面提示是"已删除 N 个 / 撤销"，撤销就应一次还原这一批
+            let undo_token = Some(state.undo.lock().unwrap().push(snapshots));
+            Json(serde_json::json!({
+                "success": true, "affected": affected, "undo_token": undo_token
+            }))
+            .into_response()
         }
         Err(e) => internal_error(e),
     }

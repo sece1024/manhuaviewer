@@ -17,6 +17,8 @@ pub struct AppState {
     /// Timestamp of the last thumbnail eviction run, so the expensive LRU
     /// scan runs at most every `THUMB_EVICTION_INTERVAL`.
     pub last_thumb_eviction: Arc<Mutex<Option<std::time::Instant>>>,
+    /// 刚刚删除的档案快照（撤销删除用，短期内存缓冲，见 services::undo）
+    pub undo: Arc<Mutex<services::undo::UndoBuffer>>,
 }
 
 /// Logs a fatal startup error, shows a native error dialog so the user isn't
@@ -116,6 +118,7 @@ async fn main() {
         db: Arc::new(database),
         data_dir: data_dir.clone(),
         last_thumb_eviction: Arc::new(Mutex::new(None)),
+        undo: Arc::new(Mutex::new(services::undo::UndoBuffer::new())),
     };
 
     // 定时备份后台任务（每小时检查一次设置，默认关闭）
