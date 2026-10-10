@@ -69,3 +69,42 @@ describe('App 侧边栏收起', () => {
     window.history.pushState({}, '', '/');
   });
 });
+
+// 命令面板是"所有操作的统一入口"，但快捷键本身是隐藏功能——所以既要有 ⌘K，
+// 也要有侧边栏那个看得见的按钮。
+describe('App 命令面板入口', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    window.localStorage.clear();
+    apiModule.localStorageGet.mockImplementation(realLocalStorageGet);
+    apiModule.localStorageSet.mockImplementation(realLocalStorageSet);
+    Object.values(api).forEach(fn => { fn.mockResolvedValue([]); });
+    api.getSettings.mockResolvedValue({});
+    api.getLanIps.mockResolvedValue({ ipv4: [], port: 5002 });
+    api.getArchives.mockResolvedValue([]);
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    window.history.pushState({}, '', '/');
+  });
+
+  test('⌘K / Ctrl-K 打开面板，Esc 关闭', async () => {
+    render(<App />);
+    await waitFor(() => expect(document.querySelector('.app-layout')).toBeInTheDocument());
+
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    expect(await screen.findByRole('dialog', { name: '命令面板' })).toBeInTheDocument();
+    expect(screen.getByLabelText('搜索命令或漫画')).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '命令面板' })).toBeNull());
+  });
+
+  test('侧边栏的可见入口也能打开（快捷键不该是唯一入口）', async () => {
+    render(<App />);
+    await waitFor(() => expect(document.querySelector('.app-layout')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '打开命令面板' }));
+
+    expect(await screen.findByRole('dialog', { name: '命令面板' })).toBeInTheDocument();
+  });
+});

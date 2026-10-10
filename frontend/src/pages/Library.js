@@ -13,6 +13,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import TagTriage from '../components/TagTriage';
 import CardActionSheet from '../components/CardActionSheet';
 import useLongPress from '../hooks/useLongPress';
+import useCommands from '../hooks/useCommands';
 import CbzConvertPanel from '../components/CbzConvertPanel';
 import Modal from '../components/Modal';
 import useCbzConvert from '../hooks/useCbzConvert';
@@ -601,6 +602,21 @@ export default function Library({ mode = 'library', enableSession }) {
     updateSetting('card_density', density);
   };
 
+  // 清除全部筛选。search 不走「筛选变化重拉」effect（它自己有防抖路径），
+  // 所以这里顺带 +1 reloadTick 保证一定会重拉一次，而不是"改了却没刷新"。
+  const clearFilters = useCallback(() => {
+    clearTimeout(searchDebounceRef.current);
+    setSearch(''); searchRef.current = '';
+    setSelectedTag(''); selectedTagRef.current = '';
+    setSelectedCategory(null); selectedCategoryRef.current = null;
+    setAddedRange(null); addedRangeRef.current = null;
+    setReadFilter('all'); readFilterRef.current = 'all';
+    setTagState('all'); tagStateRef.current = 'all';
+    setTypeFilter('all'); typeFilterRef.current = 'all';
+    updateSetting('type_filter', 'all');
+    setReloadTick(t => t + 1);
+  }, [updateSetting]);
+
   const handleTagFilter = (tagName) => {
     clearTimeout(searchDebounceRef.current);
     const next = selectedTag === tagName ? '' : tagName;
@@ -956,6 +972,31 @@ export default function Library({ mode = 'library', enableSession }) {
     return archives.filter(a => selectedIds.has(a.id)).map(a => a.title);
   }, [archives, convertConfirmOpen, selectedIds]);
 
+  // 命令面板：这一屏的操作由页面自己登记（面板在外壳上，拿不到这里的 setState）。
+  // 回调经 ref 取最新值，命令列表引用保持稳定——否则每次渲染重登记都会让面板重渲染。
+  const paletteActionsRef = useRef({});
+  paletteActionsRef.current = {
+    scan: handleScanDirectory,
+    view: () => handleViewMode(viewMode === 'grid' ? 'list' : 'grid'),
+    triage: () => { setTagState('untagged'); setShowTriage(true); },
+    select: () => { setSelectMode(true); setSelectedIds(new Set()); },
+    clearFilters,
+  };
+  const paletteCommands = useMemo(() => {
+    const act = (key) => () => paletteActionsRef.current[key]();
+    return [
+      { id: 'lib-scan', group: '书库', icon: '🗂️', label: '扫描目录…', keywords: 'scan add 添加 入库 批量', run: act('scan') },
+      { id: 'lib-triage', group: '书库', icon: '🏷️', label: '整理标签（逐本给未打标签的书打标）', keywords: 'triage tag 整理 打标签', run: act('triage') },
+      { id: 'lib-view', group: '书库', icon: '▦', label: viewMode === 'grid' ? '切换为列表视图' : '切换为网格视图', keywords: 'view 视图 网格 列表', run: act('view') },
+      { id: 'lib-select', group: '书库', icon: '☑️', label: '进入多选模式', keywords: 'select 多选 批量 选择', run: act('select') },
+      { id: 'filter-inprogress', group: '筛选', icon: '📖', label: '筛出「在读」', keywords: 'filter 在读 未读完 reading', run: () => setReadFilter('in_progress') },
+      { id: 'filter-unread', group: '筛选', icon: '🆕', label: '筛出「未读」', keywords: 'filter 未读 unread', run: () => setReadFilter('unread') },
+      { id: 'filter-untagged', group: '筛选', icon: '🏷️', label: '筛出「未打标签」', keywords: 'filter 未整理 untagged', run: () => setTagState('untagged') },
+      { id: 'filter-clear', group: '筛选', icon: '🧹', label: '清除全部筛选', keywords: 'clear reset 重置 清理', run: act('clearFilters') },
+    ];
+  }, [viewMode]);
+  useCommands(paletteCommands);
+
   // 分组已在服务端完成：`archives` 里的每一项要么是普通档案，要么是带 _isGroup 的组卡片。
   const groupedArchives = archives;
 
@@ -1238,6 +1279,16 @@ export default function Library({ mode = 'library', enableSession }) {
               <button className={cardDensity === 'normal' ? 'active' : ''} onClick={() => handleDensityChange('normal')} title="标准尺寸" aria-label="标准封面">中</button>
               <button className={cardDensity === 'compact' ? 'active' : ''} onClick={() => handleDensityChange('compact')} title="紧凑（封面优先）" aria-label="紧凑封面">小</button>
             </div>
+          )}
+
+          {hasActiveFilter && (
+            <button
+              className="btn btn-secondary"
+              onClick={clearFilters}
+              title="清除搜索、标签、分类、日期与状态筛选"
+            >
+              ✕ 清除筛选
+            </button>
           )}
 
           <button className="btn btn-secondary" onClick={() => setShowSidebar(v => !v)} title="过滤器" aria-label={showSidebar ? '隐藏过滤器' : '显示过滤器'}>

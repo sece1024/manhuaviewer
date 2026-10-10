@@ -8,6 +8,7 @@ import { TagsProvider } from './hooks/useTags';
 import ErrorBoundary from './components/ErrorBoundary';
 import Modal from './components/Modal';
 import JobIndicator from './components/JobIndicator';
+import CommandPalette from './components/CommandPalette';
 import api, { localStorageGet, localStorageSet, setServerToken } from './utils/api';
 
 // 非首屏页面按需加载，减小首屏 bundle
@@ -33,6 +34,8 @@ function AppContent() {
   const { settings } = useSettings();
   const [lanUrls, setLanUrls] = useState([]);
   // 局域网口令登录弹窗：api.js 在任何请求收到 401 时派发事件（桌面端回环不会 401）
+  // 命令面板：全局入口，任何页面都能开（含阅读器——它是"我来错地方了"的逃生门）
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [tokenOpen, setTokenOpen] = useState(false);
   const [tokenInput, setTokenInput] = useState('');
 
@@ -40,6 +43,19 @@ function AppContent() {
     const onAuthRequired = () => setTokenOpen(true);
     window.addEventListener('mv:auth-required', onAuthRequired);
     return () => window.removeEventListener('mv:auth-required', onAuthRequired);
+  }, []);
+
+  // ⌘K / Ctrl-K 开面板。用 e.key 同时认 'k' 与 'K'，并 preventDefault 掉浏览器
+  // 自带的 Ctrl-K（Chrome 是"搜索"、Safari 是"聚焦地址栏"）
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen(v => !v);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
   const handleTokenSubmit = () => {
@@ -107,6 +123,16 @@ function AppContent() {
             {sidebarCollapsed ? '»' : '«'}
           </button>
         </div>
+        <button
+          type="button"
+          className="sidebar-command-entry"
+          onClick={() => setPaletteOpen(true)}
+          aria-label="打开命令面板"
+        >
+          <span className="nav-icon">🔍</span>
+          <span className="nav-label">命令 / 搜索</span>
+          <kbd className="sidebar-command-kbd">⌘K</kbd>
+        </button>
         <nav className="sidebar-nav">
           <NavLink to="/" end aria-label="漫画库">
             <span className="nav-icon">📚</span>
@@ -180,6 +206,8 @@ function AppContent() {
           </NavLink>
         </nav>
       )}
+
+      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
 
       {/* 局域网口令登录：配置了口令后，LAN 端一切请求（读+写）都返回 401 触发 */}
       {tokenOpen && (

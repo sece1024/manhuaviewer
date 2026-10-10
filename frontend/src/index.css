@@ -394,6 +394,139 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .toast-info { background: var(--accent); }
 @keyframes toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
 
+/* ── 命令面板（⌘K）── */
+.sidebar-command-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% - 24px);
+  margin: 8px 12px 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-command-entry:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.sidebar-command-kbd {
+  margin-left: auto;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 11px;
+}
+/* 收起成图标窄栏时只留图标（与导航项一致） */
+.app-layout.sidebar-collapsed .sidebar-command-entry {
+  width: 40px;
+  margin: 8px auto 4px;
+  justify-content: center;
+  padding: 8px 0;
+}
+.app-layout.sidebar-collapsed .sidebar .sidebar-command-kbd { display: none; }
+
+.palette-overlay {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+.palette {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 560px;
+  margin: 0 16px;
+  max-height: 70vh;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-lg);
+  animation: palette-in 0.15s var(--ease-out) both;
+}
+@keyframes palette-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.palette-input {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding: 14px 16px;
+  font-size: 15px;
+  background: transparent;
+}
+.palette-input:focus { outline: none; }
+.palette-list {
+  overflow-y: auto;
+  padding: 6px;
+}
+.palette-group-title {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.palette-item:hover { background: var(--bg-tertiary); }
+.palette-item.active {
+  background: var(--accent);
+  color: #fff;
+}
+.palette-icon { width: 20px; text-align: center; flex-shrink: 0; }
+.palette-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-hint {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.palette-item.active .palette-hint { color: rgba(255, 255, 255, 0.85); }
+.palette-empty {
+  padding: 18px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+.palette-foot {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.palette-foot kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  font-family: monospace;
+  font-size: 11px;
+}
+
 /* ── 长任务指示器（扫描 / 同步 / 转 CBZ）──
    常驻右下角，任何页面都能看到任务还在不在跑；z-index 低于 toast，避免盖住提示 */
 .job-indicator {

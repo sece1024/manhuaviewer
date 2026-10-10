@@ -4,6 +4,7 @@ import Library from '../pages/Library';
 import { clearLibrarySessions } from '../hooks/useLibrarySession';
 import { resetJobsStore } from '../hooks/useJobs';
 import useJobs from '../hooks/useJobs';
+import CommandPalette from '../components/CommandPalette';
 import { ToastProvider } from '../components/Toast';
 import { SettingsProvider } from '../hooks/useSettings';
 import { TagsProvider } from '../hooks/useTags';
@@ -1064,5 +1065,76 @@ describe('Library 移除后可撤销', () => {
     expect(within(dialog).getByText(/· 会消失的漫画A/)).toBeInTheDocument();
     expect(within(dialog).getByText(/· 会消失的漫画B/)).toBeInTheDocument();
     expect(within(dialog).getByText(/此操作不可撤销/)).toBeInTheDocument();
+  });
+});
+
+// 命令面板的另一半在页面侧：页面把自己这一屏的操作登记给面板。
+// 这里守的是"登记的命令真的能改动这一屏的状态"，而不只是列在面板里好看。
+describe('Library 命令面板投稿', () => {
+  function renderWithPalette() {
+    return render(
+      <MemoryRouter>
+        <Routes>
+          <Route path="/" element={
+            <SettingsProvider>
+              <TagsProvider>
+                <ToastProvider>
+                  <Library enableSession={false} />
+                  <CommandPalette onClose={jest.fn()} />
+                </ToastProvider>
+              </TagsProvider>
+            </SettingsProvider>
+          } />
+          <Route path="/reader/:archiveId" element={<div>READER_PAGE</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    api.getContinueReading.mockResolvedValue([]);
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '漫画A', archive_type: 'cbz', page_count: 10, cover_url: '/c', tags: [] },
+    ]);
+  });
+
+  test('登记了书库与筛选两组命令', async () => {
+    renderWithPalette();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    expect(await screen.findByText('扫描目录…')).toBeInTheDocument();
+    expect(screen.getByText('整理标签（逐本给未打标签的书打标）')).toBeInTheDocument();
+    expect(screen.getByText('清除全部筛选')).toBeInTheDocument();
+  });
+
+  test('「清除全部筛选」真的清掉筛选并重拉列表（此前只能逐个改回「全部」）', async () => {
+    renderWithPalette();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('阅读状态'), { target: { value: 'unread' } });
+    await waitFor(() => expect(screen.getByLabelText('阅读状态').value).toBe('unread'));
+    const before = api.getArchives.mock.calls.length;
+
+    fireEvent.click(await screen.findByText('清除全部筛选'));
+
+    await waitFor(() => expect(screen.getByLabelText('阅读状态').value).toBe('all'));
+    await waitFor(() => expect(api.getArchives.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  test('有筛选时顶栏出现可见的「清除筛选」按钮（命令面板不该是唯一入口）', async () => {
+    renderWithPalette();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    expect(screen.queryByRole('button', { name: /清除筛选/ })).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('标签状态'), { target: { value: 'untagged' } });
+
+    const clearBtn = await screen.findByRole('button', { name: /清除筛选/ });
+    fireEvent.click(clearBtn);
+    await waitFor(() => expect(screen.getByLabelText('标签状态').value).toBe('all'));
   });
 });
