@@ -787,3 +787,47 @@ describe('Library 内容入口（批量入库）', () => {
     await waitFor(() => expect(api.getArchives.mock.calls.length).toBeGreaterThan(before));
   });
 });
+
+describe('Library 标签状态筛选（整理模式的输入集合）', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+    api.getContinueReading.mockResolvedValue([]);
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '漫画A', archive_type: 'cbz', page_count: 10, cover_url: '/c', tags: [] },
+    ]);
+  });
+
+  test('三个取值与后端 tag_state 一致，只把非「全部」的值传给后端', async () => {
+    renderLibrary();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    const select = screen.getByLabelText('标签状态');
+    expect(Array.from(select.options).map(o => o.value)).toEqual(['all', 'untagged', 'tagged']);
+    // 默认「全部」不应往请求里塞参数，避免每条列表请求都被当成筛选
+    expect(api.getArchives).toHaveBeenCalledWith(expect.not.objectContaining({ tag_state: expect.anything() }));
+
+    fireEvent.change(select, { target: { value: 'untagged' } });
+    await waitFor(() => {
+      expect(api.getArchives).toHaveBeenCalledWith(expect.objectContaining({ tag_state: 'untagged' }));
+    });
+
+    fireEvent.change(select, { target: { value: 'tagged' } });
+    await waitFor(() => {
+      expect(api.getArchives).toHaveBeenCalledWith(expect.objectContaining({ tag_state: 'tagged' }));
+    });
+  });
+
+  test('标签状态属于筛选：生效时隐藏「继续阅读」横条', async () => {
+    api.getContinueReading.mockResolvedValue([
+      { id: 9, title: '读到一半', page_count: 100, read_page: 10, cover_url: '/c', tags: [] },
+    ]);
+    renderLibrary();
+    await waitFor(() => expect(screen.getByText('继续阅读')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('标签状态'), { target: { value: 'untagged' } });
+    await waitFor(() => expect(screen.queryByText('继续阅读')).toBeNull());
+  });
+});

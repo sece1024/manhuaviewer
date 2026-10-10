@@ -144,6 +144,7 @@ export default function useLibrarySession({
         page: 1,
         search: s.search,
         ...(s.readFilter && s.readFilter !== 'all' ? { read: s.readFilter } : {}),
+        ...(s.tagState && s.tagState !== 'all' ? { tag_state: s.tagState } : {}),
         ...(s.selectedTag ? { tag: s.selectedTag } : {}),
         ...(s.selectedCategory ? { category_id: s.selectedCategory } : {}),
         // 日期过滤也要带上，否则比对会用未过滤列表顶掉会话里的过滤视图
@@ -156,6 +157,7 @@ export default function useLibrarySession({
           filterRefs.searchRef.current !== s.search ||
           filterRefs.selectedTagRef.current !== s.selectedTag ||
           filterRefs.readFilterRef.current !== (s.readFilter || 'all') ||
+          (filterRefs.tagStateRef ? filterRefs.tagStateRef.current : 'all') !== (s.tagState || 'all') ||
           filterRefs.selectedCategoryRef.current !== s.selectedCategory ||
           (filterRefs.addedRangeRef ? filterRefs.addedRangeRef.current : null) !== (s.addedRange || null)) {
         return;

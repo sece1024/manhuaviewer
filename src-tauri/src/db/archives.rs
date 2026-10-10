@@ -52,6 +52,26 @@ fn read_filter_clause(read: Option<&str>) -> String {
     }
 }
 
+/// 「标签状态」筛选对应的 SQL 片段（`tag_state` 查询参数）。
+///
+/// - `untagged`：一个标签都没有——书库里"还没整理过"的那批，也是整理模式的输入；
+/// - `tagged`：至少有一个标签；
+/// - 其余/缺省：不过滤。
+///
+/// 与搜索语法、标签过滤用的子查询别名（`atx`/`at_f`）区分开，避免同一条 WHERE 里
+/// 多个标签子查询互相串味。
+fn tag_state_clause(state: Option<&str>) -> &'static str {
+    match state {
+        Some("untagged") => {
+            " AND NOT EXISTS (SELECT 1 FROM archive_tags atg WHERE atg.archive_id = a.id)"
+        }
+        Some("tagged") => {
+            " AND EXISTS (SELECT 1 FROM archive_tags atg WHERE atg.archive_id = a.id)"
+        }
+        _ => "",
+    }
+}
+
 impl Database {
     pub fn get_archive(&self, id: i64) -> Result<Option<ArchiveRow>> {
         let conn = self.conn()?;
@@ -249,6 +269,7 @@ impl Database {
     /// 拉取所有符合过滤条件的档案（不分页），供服务端分组后统一分页。
     /// `read`: None=全部, "unread"=从未读过, "in_progress"=读到一半, "finished"=已读完,
     /// "read"=有阅读记录（在读 + 已读完）。详见 [`read_filter_clause`]。
+    /// `tag_state`: None=全部, "untagged"=未打标签, "tagged"=已打标签。详见 [`tag_state_clause`]。
     #[allow(clippy::too_many_arguments)]
     pub fn list_archives_all(
         &self,
@@ -258,6 +279,7 @@ impl Database {
         added_from: Option<&str>,
         added_to: Option<&str>,
         read: Option<&str>,
+        tag_state: Option<&str>,
         sort: &str,
         order: &str,
     ) -> Result<Vec<ArchiveRow>> {
@@ -266,6 +288,7 @@ impl Database {
             Self::build_archive_filters(&conn, search, tag, category_id, added_from, added_to)?;
 
         where_clause.push_str(&read_filter_clause(read));
+        where_clause.push_str(tag_state_clause(tag_state));
 
         let order_clause = order_expr_for(sort);
         let direction = if order == "asc" { "ASC" } else { "DESC" };
@@ -305,6 +328,7 @@ impl Database {
         added_from: Option<&str>,
         added_to: Option<&str>,
         read: Option<&str>,
+        tag_state: Option<&str>,
         sort: &str,
         order: &str,
         limit: i64,
@@ -315,6 +339,7 @@ impl Database {
             Self::build_archive_filters(&conn, search, tag, category_id, added_from, added_to)?;
 
         where_clause.push_str(&read_filter_clause(read));
+        where_clause.push_str(tag_state_clause(tag_state));
 
         let sort_expr = order_expr_for(sort);
         let direction = if order == "asc" { "ASC" } else { "DESC" };
@@ -1067,7 +1092,7 @@ mod read_state_tests {
     }
 
     fn titles(db: &Database, read: Option<&str>) -> Vec<String> {
-        db.list_archives_all(None, None, None, None, None, read, "title", "asc")
+        db.list_archives_all(None, None, None, None, None, read, None, "title", "asc")
             .unwrap()
             .into_iter()
             .map(|a| a.title)
@@ -1173,6 +1198,115 @@ mod read_state_tests {
             titles(&db, Some("finished")),
             any_order(vec!["靠history判定"])
         );
+    }
+}
+
+#[cfg(test)]
+mod tag_state_tests {
+    use super::*;
+
+    fn setup() -> Database {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let db = Database::new(temp_file.path().to_str().unwrap()).unwrap();
+        db.init().unwrap();
+        db
+    }
+
+    fn add(db: &Database, title: &str) -> i64 {
+        db.upsert_scanned_archive(title, &format!("/x/{title}.cbz"), "cbz", 5, 10, 1)
+            .unwrap()
+    }
+
+    fn titles(db: &Database, tag: Option<&str>, tag_state: Option<&str>) -> Vec<String> {
+        db.list_archives_all(None, tag, None, None, None, None, tag_state, "title", "asc")
+            .unwrap()
+            .into_iter()
+            .map(|a| a.title)
+            .collect()
+    }
+
+    fn any_order(mut v: Vec<&str>) -> Vec<String> {
+        v.sort();
+        v.into_iter().map(String::from).collect()
+    }
+
+    /// 纯函数：缺省/未知取值不过滤；且绝不能复用搜索语法与标签过滤的子查询别名
+    /// （`atx`/`at_f`）——同一条 WHERE 里共用别名会让两个标签条件互相串味。
+    #[test]
+    fn tag_state_clause_is_isolated_from_other_tag_subqueries() {
+        assert!(tag_state_clause(None).is_empty());
+        assert!(tag_state_clause(Some("all")).is_empty());
+        assert!(tag_state_clause(Some("whatever")).is_empty());
+
+        for value in ["untagged", "tagged"] {
+            let clause = tag_state_clause(Some(value));
+            assert!(
+                !clause.contains("atx"),
+                "{value} 不能复用搜索语法的别名 atx"
+            );
+            assert!(
+                !clause.contains("at_f"),
+                "{value} 不能复用标签过滤的别名 at_f"
+            );
+        }
+        assert!(tag_state_clause(Some("untagged")).contains("NOT EXISTS"));
+        assert!(tag_state_clause(Some("tagged")).contains("EXISTS"));
+        assert!(!tag_state_clause(Some("tagged")).contains("NOT EXISTS"));
+    }
+
+    /// 未打标签 / 已打标签各自取到正确的集合
+    #[test]
+    fn tag_state_partitions_library() {
+        let db = setup();
+        let tagged = add(&db, "已整理");
+        add(&db, "待整理A");
+        add(&db, "待整理B");
+        let tag = db.create_tag("", "动作", "#fff").unwrap();
+        db.assign_tag(tagged, tag).unwrap();
+
+        assert_eq!(
+            titles(&db, None, Some("untagged")),
+            any_order(vec!["待整理A", "待整理B"])
+        );
+        assert_eq!(titles(&db, None, Some("tagged")), any_order(vec!["已整理"]));
+        assert_eq!(titles(&db, None, None).len(), 3, "缺省 = 全部");
+    }
+
+    /// 与标签过滤组合时语义正确：`tag=X & untagged` 必然为空（两条件互斥），
+    /// `tag=X & tagged` 只剩带 X 的那本——整理模式正是靠这个组合找"还没打某个标签"的书
+    #[test]
+    fn tag_state_combines_with_tag_filter() {
+        let db = setup();
+        let with_x = add(&db, "有动作");
+        let with_y = add(&db, "只有喜剧");
+        add(&db, "没有标签");
+        let action = db.create_tag("", "动作", "#fff").unwrap();
+        let comedy = db.create_tag("", "喜剧", "#fff").unwrap();
+        db.assign_tag(with_x, action).unwrap();
+        db.assign_tag(with_y, comedy).unwrap();
+
+        assert!(titles(&db, Some("动作"), Some("untagged")).is_empty());
+        assert_eq!(
+            titles(&db, Some("动作"), Some("tagged")),
+            any_order(vec!["有动作"])
+        );
+        assert_eq!(
+            titles(&db, Some("喜剧"), Some("tagged")),
+            any_order(vec!["只有喜剧"])
+        );
+    }
+
+    /// 标签被移除后重新回到「未打标签」
+    #[test]
+    fn removing_last_tag_moves_archive_back_to_untagged() {
+        let db = setup();
+        let id = add(&db, "来回");
+        let tag = db.create_tag("", "临时", "#fff").unwrap();
+        db.assign_tag(id, tag).unwrap();
+        assert_eq!(titles(&db, None, Some("tagged")).len(), 1);
+
+        db.remove_tag(id, tag).unwrap();
+        assert_eq!(titles(&db, None, Some("untagged")), any_order(vec!["来回"]));
     }
 }
 

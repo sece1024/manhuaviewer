@@ -243,6 +243,9 @@ export default function Library({ mode = 'library', enableSession }) {
   const [sortOrder, setSortOrder] = useState(() => settings.sort_order || 'desc');
   const [selectedTag, setSelectedTag] = useState('');
   const [readFilter, setReadFilter] = useState('all'); // all | unread | in_progress | finished（与后端 read 参数取值一致）
+  // 标签状态：all | untagged | tagged（与后端 tag_state 取值一致）。“未打标签”既是
+  // 一个筛选，也是整理模式的输入集合
+  const [tagState, setTagState] = useState('all');
   // 档案类型筛选：all | folder | archive（压缩包）。统一书库默认展示全部类型，
   // 该筛选仅收窄显示（原“漫画库/收藏”双 tab 合并而来，类型不再是顶层导航位）。
   const [typeFilter, setTypeFilter] = useState(() => {
@@ -294,6 +297,7 @@ export default function Library({ mode = 'library', enableSession }) {
   const randomSeedRef = useRef(null);
   const selectedTagRef = useRef(selectedTag);
   const readFilterRef = useRef(readFilter);
+  const tagStateRef = useRef(tagState);
   const typeFilterRef = useRef(typeFilter);
   const selectedCategoryRef = useRef(selectedCategory);
   const addedRangeRef = useRef(addedRange);
@@ -346,11 +350,11 @@ export default function Library({ mode = 'library', enableSession }) {
     listScrollEl,
     snapshot: {
       archives, page: pageRef.current, hasMore,
-      search, sortBy, sortOrder, selectedTag, readFilter, typeFilter, selectedCategory,
+      search, sortBy, sortOrder, selectedTag, readFilter, tagState, typeFilter, selectedCategory,
       addedRange,
       expandedGroup, groupMembers,
     },
-    filterRefs: { sortByRef, searchRef, selectedTagRef, readFilterRef, selectedCategoryRef, addedRangeRef },
+    filterRefs: { sortByRef, searchRef, selectedTagRef, readFilterRef, tagStateRef, selectedCategoryRef, addedRangeRef },
     pageRef,
     pageSize: PAGE_SIZE,
     setArchives, setHasMore, setExpandedGroup, setGroupMembers,
@@ -361,6 +365,7 @@ export default function Library({ mode = 'library', enableSession }) {
   useEffect(() => { sortOrderRef.current = sortOrder; }, [sortOrder]);
   useEffect(() => { selectedTagRef.current = selectedTag; }, [selectedTag]);
   useEffect(() => { readFilterRef.current = readFilter; }, [readFilter]);
+  useEffect(() => { tagStateRef.current = tagState; }, [tagState]);
   useEffect(() => { typeFilterRef.current = typeFilter; }, [typeFilter]);
   useEffect(() => { selectedCategoryRef.current = selectedCategory; }, [selectedCategory]);
   useEffect(() => { addedRangeRef.current = addedRange; }, [addedRange]);
@@ -411,11 +416,13 @@ export default function Library({ mode = 'library', enableSession }) {
       const readFilterRestored = ['unread', 'in_progress', 'finished'].includes(s.readFilter)
         ? s.readFilter
         : 'all';
+      const tagStateRestored = ['untagged', 'tagged'].includes(s.tagState) ? s.tagState : 'all';
       setSearch(s.search); searchRef.current = s.search;
       setSortBy(s.sortBy); sortByRef.current = s.sortBy;
       setSortOrder(s.sortOrder); sortOrderRef.current = s.sortOrder;
       setSelectedTag(s.selectedTag); selectedTagRef.current = s.selectedTag;
       setReadFilter(readFilterRestored); readFilterRef.current = readFilterRestored;
+      setTagState(tagStateRestored); tagStateRef.current = tagStateRestored;
       setTypeFilter(s.typeFilter || 'all'); typeFilterRef.current = s.typeFilter || 'all';
       setSelectedCategory(s.selectedCategory); selectedCategoryRef.current = s.selectedCategory;
       setAddedRange(s.addedRange || null); addedRangeRef.current = s.addedRange || null;
@@ -423,7 +430,7 @@ export default function Library({ mode = 'library', enableSession }) {
       // 与这里相同的值并跳过，避免把恢复好的分页/滚动位置覆盖成第 1 页
       restoredFiltersRef.current = {
         sortBy: s.sortBy, sortOrder: s.sortOrder, selectedTag: s.selectedTag,
-        readFilter: readFilterRestored, selectedCategory: s.selectedCategory,
+        readFilter: readFilterRestored, tagState: tagStateRestored, selectedCategory: s.selectedCategory,
         typeFilter: s.typeFilter || 'all', addedRange: s.addedRange || null,
       };
       setArchives(s.archives);
@@ -488,6 +495,9 @@ export default function Library({ mode = 'library', enableSession }) {
       if (readFilterRef.current && readFilterRef.current !== 'all') {
         baseParams.read = readFilterRef.current;
       }
+      if (tagStateRef.current && tagStateRef.current !== 'all') {
+        baseParams.tag_state = tagStateRef.current;
+      }
       const ar = addedRangeRef.current;
       if (ar) {
         baseParams.added_from = ar.added_from;
@@ -524,7 +534,7 @@ export default function Library({ mode = 'library', enableSession }) {
     if (restoredFiltersRef.current) {
       const r = restoredFiltersRef.current;
       const same = r.sortBy === sortBy && r.sortOrder === sortOrder &&
-        r.selectedTag === selectedTag && r.readFilter === readFilter &&
+        r.selectedTag === selectedTag && r.readFilter === readFilter && r.tagState === tagState &&
         r.selectedCategory === selectedCategory && r.typeFilter === typeFilter &&
         r.addedRange === addedRange;
       if (same) {
@@ -535,7 +545,7 @@ export default function Library({ mode = 'library', enableSession }) {
     }
     loadArchives({ search: searchRef.current, tag: selectedTag, category_id: selectedCategory });
     // reloadTick 只在扫描结束后 +1：复用同一条重拉路径（含分页重置、展开组收起）
-  }, [sortBy, sortOrder, selectedTag, readFilter, selectedCategory, typeFilter, addedRange, reloadTick]);
+  }, [sortBy, sortOrder, selectedTag, readFilter, tagState, selectedCategory, typeFilter, addedRange, reloadTick]);
 
   const handleSearch = useCallback((val) => {
     setSearch(val);
@@ -871,7 +881,7 @@ export default function Library({ mode = 'library', enableSession }) {
   // 交给筛选下拉即可（横条上的「查看全部在读」正是这个入口）。
   const hasActiveFilter = Boolean(
     search || selectedTag || selectedCategory || addedRange ||
-    (typeFilter && typeFilter !== 'all') || readFilter !== 'all'
+    (typeFilter && typeFilter !== 'all') || readFilter !== 'all' || tagState !== 'all'
   );
   const showContinue = !hasActiveFilter && continueItems.length > 0;
 
@@ -1103,6 +1113,14 @@ export default function Library({ mode = 'library', enableSession }) {
             <option value="unread">未读</option>
             <option value="in_progress">在读</option>
             <option value="finished">已读完</option>
+          </select>
+
+          {/* 标签状态：与阅读状态并列，因为"哪些还没整理过"是和"哪些还没读完"同级的
+              日常问题；选到「未打标签」时旁边会出现进入整理模式的入口 */}
+          <select value={tagState} onChange={(e) => setTagState(e.target.value)} style={{ minWidth: 96 }} aria-label="标签状态">
+            <option value="all">全部标签</option>
+            <option value="untagged">未打标签</option>
+            <option value="tagged">已打标签</option>
           </select>
 
           <select value={sortBy} onChange={(e) => { randomSeedRef.current = null; setSortBy(e.target.value); }} style={{ minWidth: 100 }} aria-label="排序方式">
