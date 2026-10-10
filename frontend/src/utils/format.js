@@ -38,6 +38,38 @@ export function formatSize(bytes) {
 }
 
 /**
+ * 从档案的阅读进度推导阅读状态：'unread' | 'in_progress' | 'finished'。
+ *
+ * 必须与后端 `db::archives::read_filter_clause` 的判定逐条对齐，否则卡片上的
+ * 标记会和筛选结果打架：
+ * - 没有阅读记录（`read_page` 为 null/undefined）= 未读；
+ * - 总页数未知（`page_count <= 0`）= 在读（判不准时留在工作集里，不让条目凭空消失）；
+ * - 已到末页（`read_page + 1 >= page_count`）= 已读完。
+ *
+ * 注意 `read_page` 是 0 基的 `history.page_index`，所以「第几页」要 +1。
+ */
+export function readStateOf(archive) {
+  const pageIndex = archive && archive.read_page;
+  if (pageIndex === null || pageIndex === undefined) return 'unread';
+  const total = (archive && archive.page_count) || 0;
+  if (total <= 0) return 'in_progress';
+  return pageIndex + 1 >= total ? 'finished' : 'in_progress';
+}
+
+/**
+ * 卡片/列表上的阅读进度文案：未读返回空串（不占位），在读「第 N/M 页」，
+ * 已读完「已读完」。`page_count` 未知时显示「第 N 页」。
+ */
+export function formatReadProgress(archive) {
+  const state = readStateOf(archive);
+  if (state === 'unread') return '';
+  if (state === 'finished') return '已读完';
+  const total = (archive && archive.page_count) || 0;
+  const page = ((archive && archive.read_page) || 0) + 1;
+  return total > 0 ? `第 ${page}/${total} 页` : `第 ${page} 页`;
+}
+
+/**
  * 解析时间字符串。后端时间列均由 SQLite datetime('now') 写入 = **UTC 且不带时区
  * 标记**；naive 形式（"YYYY-MM-DD HH:MM[:SS]" 或 "…T…"）若直接 new Date() 会被
  * 当成本地时间，显示偏掉一个时区（还可能跨天）。这里给 naive 形式补 'Z' 按 UTC

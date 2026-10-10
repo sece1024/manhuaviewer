@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
-import { formatSize, formatDateShort, splitPathParts, lastPathPart } from '../utils/format';
+import { formatSize, formatDateShort, splitPathParts, lastPathPart, readStateOf, formatReadProgress } from '../utils/format';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
@@ -20,6 +20,12 @@ const isTauri = window.__TAURI__ !== undefined;
 // 网格卡片：memoized，避免多选切换时整屏重渲染。
 // 所有回调通过 props 传入（父组件 useCallback 稳定引用）。
 const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove }) {
+  // 阅读状态与进度文案由 utils/format 统一推导，判定口径与后端 read 筛选一致
+  const readState = readStateOf(a);
+  const progressText = formatReadProgress(a);
+  const progressPercent = a.page_count > 0
+    ? Math.min(100, (((a.read_page || 0) + 1) / a.page_count) * 100)
+    : 0;
   return (
     <div
       className={`archive-card ${selectMode && isSelected ? 'archive-card-selected' : ''}`}
@@ -54,9 +60,11 @@ const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, se
             <button className="archive-remove-btn" onClick={(e) => onRemove(e, a.id)} title="移除">✕</button>
           </>
         )}
-        {a.read_page > 0 && (
-          <div className="archive-card-progress">
-            <div className="archive-card-progress-bar" style={{ width: `${(a.read_page / (a.page_count || 1)) * 100}%` }} />
+        {/* 进度条：一旦读过就显示（第 1 页也要有条，否则「在读」看不出来）；
+            宽度按 0 基 read_page +1 计算；已读完单独配色，与「读到一半」区分 */}
+        {readState !== 'unread' && (
+          <div className={`archive-card-progress ${readState === 'finished' ? 'is-finished' : ''}`}>
+            <div className="archive-card-progress-bar" style={{ width: `${progressPercent}%` }} />
           </div>
         )}
       </div>
@@ -71,6 +79,8 @@ const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, se
           ) : (
             <span>{a.page_count} 页</span>
           )}
+          {/* 组的进度来自代表成员，混在「N 话」后面会指代不明，故组只留进度条 */}
+          {!a._isGroup && progressText && <span>· {progressText}</span>}
           {a.file_size > 0 && <span>· {formatSize(a.file_size)}</span>}
           {/* 添加时间：created_at 首次入库即固定，重扫/更新不重置 */}
           {a.created_at && <span>· {formatDateShort(a.created_at)}</span>}
@@ -111,6 +121,8 @@ const ArchiveCard = React.memo(function ArchiveCard({ a, compact, isSelected, se
 
 // 列表行：memoized，同 ArchiveCard
 const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, selectMode, isExpanded, onOpen, onToggleGroup, onToggleSelect, onTag, onCategory, onRename, onRemove }) {
+  // 此前这里直接显示 0 基的 read_page（少一页），且 page_index=0 时整段被隐藏
+  const progressText = formatReadProgress(a);
   return (
     <div
       className={`archive-list-item ${selectMode && isSelected ? 'archive-list-item-selected' : ''}`}
@@ -137,7 +149,7 @@ const ArchiveListItem = React.memo(function ArchiveListItem({ a, isSelected, sel
           {a._isGroup ? `${a.chapter_count} 话` : `${a.page_count} 页`}
           {' · '}{a.archive_type === 'folder' ? '文件夹' : '压缩包'}
           {a.file_size > 0 && ` · ${formatSize(a.file_size)}`}
-          {a.read_page > 0 && ` · 已读 ${a.read_page}/${a.page_count || '?'}`}
+          {progressText && ` · ${progressText}`}
           {a.created_at && ` · ${formatDateShort(a.created_at)}`}
         </div>
         {a.tags && a.tags.length > 0 && (
@@ -227,7 +239,7 @@ export default function Library({ mode = 'library', enableSession }) {
   const [sortBy, setSortBy] = useState(() => settings.sort_by || 'updated');
   const [sortOrder, setSortOrder] = useState(() => settings.sort_order || 'desc');
   const [selectedTag, setSelectedTag] = useState('');
-  const [readFilter, setReadFilter] = useState('all'); // all | read | unread
+  const [readFilter, setReadFilter] = useState('all'); // all | unread | in_progress | finished（与后端 read 参数取值一致）
   // 档案类型筛选：all | folder | archive（压缩包）。统一书库默认展示全部类型，
   // 该筛选仅收窄显示（原“漫画库/收藏”双 tab 合并而来，类型不再是顶层导航位）。
   const [typeFilter, setTypeFilter] = useState(() => {
@@ -355,11 +367,16 @@ export default function Library({ mode = 'library', enableSession }) {
     // 该会话视为陈旧：直接重新拉取，不再用旧列表秒开（否则已删档案名会先出现）
     if (s && !sessionIsStale(s) && s.archives && s.archives.length > 0) {
       // 恢复浏览会话：秒开旧列表，保留已加载分页、展开状态与滚动位置
+      // 旧会话可能带着已废弃的 read 取值（read=有阅读记录），它不是下拉框里的选项，
+      // 直接用会让筛选框显示为空、且用户看不出还挂着一个筛选，故归一化为「全部」
+      const readFilterRestored = ['unread', 'in_progress', 'finished'].includes(s.readFilter)
+        ? s.readFilter
+        : 'all';
       setSearch(s.search); searchRef.current = s.search;
       setSortBy(s.sortBy); sortByRef.current = s.sortBy;
       setSortOrder(s.sortOrder); sortOrderRef.current = s.sortOrder;
       setSelectedTag(s.selectedTag); selectedTagRef.current = s.selectedTag;
-      setReadFilter(s.readFilter || 'all'); readFilterRef.current = s.readFilter || 'all';
+      setReadFilter(readFilterRestored); readFilterRef.current = readFilterRestored;
       setTypeFilter(s.typeFilter || 'all'); typeFilterRef.current = s.typeFilter || 'all';
       setSelectedCategory(s.selectedCategory); selectedCategoryRef.current = s.selectedCategory;
       setAddedRange(s.addedRange || null); addedRangeRef.current = s.addedRange || null;
@@ -367,7 +384,7 @@ export default function Library({ mode = 'library', enableSession }) {
       // 与这里相同的值并跳过，避免把恢复好的分页/滚动位置覆盖成第 1 页
       restoredFiltersRef.current = {
         sortBy: s.sortBy, sortOrder: s.sortOrder, selectedTag: s.selectedTag,
-        readFilter: s.readFilter || 'all', selectedCategory: s.selectedCategory,
+        readFilter: readFilterRestored, selectedCategory: s.selectedCategory,
         typeFilter: s.typeFilter || 'all', addedRange: s.addedRange || null,
       };
       setArchives(s.archives);
@@ -992,7 +1009,8 @@ export default function Library({ mode = 'library', enableSession }) {
           <select value={readFilter} onChange={(e) => setReadFilter(e.target.value)} style={{ minWidth: 88 }} aria-label="阅读状态">
             <option value="all">全部</option>
             <option value="unread">未读</option>
-            <option value="read">已读</option>
+            <option value="in_progress">在读</option>
+            <option value="finished">已读完</option>
           </select>
 
           <select value={sortBy} onChange={(e) => { randomSeedRef.current = null; setSortBy(e.target.value); }} style={{ minWidth: 100 }} aria-label="排序方式">

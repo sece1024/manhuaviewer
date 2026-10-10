@@ -617,6 +617,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   background: var(--accent);
   transition: width 0.3s;
 }
+/* 已读完：满格但换成完成色，与「读到一半」区分开（此前两者是同一条进度条） */
+.archive-card-progress.is-finished .archive-card-progress-bar {
+  background: var(--success, #22c55e);
+}
 
 .archive-card-info {
   padding: 10px 12px;

@@ -363,7 +363,8 @@ pub struct ArchiveQuery {
     pub search: Option<String>,
     pub tag: Option<String>,
     pub category_id: Option<i64>,
-    /// read=已读（有阅读记录）/ unread=未读，缺省全部
+    /// 阅读状态：unread=未读 / in_progress=在读 / finished=已读完 / read=有阅读记录
+    /// （= 在读 + 已读完，旧取值）。缺省不过滤。详见 `db::archives::read_filter_clause`
     pub read: Option<String>,
     pub group_id: Option<i64>,
     /// 随机排序的会话种子：同一 seed 下顺序确定，滚动加载更多不会跨页重复/遗漏

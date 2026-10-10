@@ -8,6 +8,50 @@ use super::{
     ArchiveFilters, ArchiveRow, Database, GroupedArchiveRow, PageRow, ARCHIVE_COLUMNS,
 };
 
+/// 「有效总页数」SQL 表达式：优先取 `archives.page_count`（扫描会刷新，文件补页后
+/// 不会把旧的阅读位置误判成「已读完」），为 0/NULL（文件夹尚未数页）时退回 history
+/// 自己记录的总页数，两者都未知则算 0 —— 0 页既不算「在读」也不算「已读完」。
+///
+/// 必须只有这一处定义：「在读」与「已读完」合起来必须恰好等于「有阅读记录」，
+/// 一旦两边的表达式漂移，筛选结果就会自相矛盾（既漏又重）。
+const EFFECTIVE_TOTAL_PAGES: &str = "COALESCE(NULLIF(a.page_count, 0), hf.total_pages, 0)";
+
+/// 阅读状态筛选对应的 SQL 片段（`read` 查询参数）。
+///
+/// - `unread`：history 无行，从未读过；
+/// - `in_progress`：读过但还不到末页（总页数未知时也归这里，见下）；
+/// - `finished`：读过且最后记录的页已是末页；
+/// - `read`：有阅读记录（= 在读 + 已读完）。这是本功能的旧取值，保留原语义以免
+///   旧客户端（含局域网上的网页端缓存）行为突变；
+/// - 其余/缺省：不过滤。
+///
+/// 三个精确取值必须严格划分「有阅读记录」这一个集合：`unread` 取补集，
+/// `in_progress` 取「不是已读完」，于是 `in_progress ∪ finished = read` 恒成立。
+/// 总页数未知（`EFFECTIVE_TOTAL_PAGES = 0`）时判为「在读」而不是「已读完」：
+/// 宁可让用户在一读的集合里多看到一个已看完的条目，也不能让它在三个筛选下全都消失。
+///
+/// 纯函数（不碰连接、不碰文件系统），便于直接断言生成的 SQL 语义。
+fn read_filter_clause(read: Option<&str>) -> String {
+    let total = EFFECTIVE_TOTAL_PAGES;
+    match read {
+        Some("read") => {
+            " AND EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)".to_string()
+        }
+        Some("unread") => {
+            " AND NOT EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)".to_string()
+        }
+        Some("in_progress") => format!(
+            " AND EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id \
+             AND ({total} <= 0 OR hf.page_index + 1 < {total}))"
+        ),
+        Some("finished") => format!(
+            " AND EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id \
+             AND {total} > 0 AND hf.page_index + 1 >= {total})"
+        ),
+        _ => String::new(),
+    }
+}
+
 impl Database {
     pub fn get_archive(&self, id: i64) -> Result<Option<ArchiveRow>> {
         let conn = self.conn()?;
@@ -203,7 +247,8 @@ impl Database {
     }
 
     /// 拉取所有符合过滤条件的档案（不分页），供服务端分组后统一分页。
-    /// `read`: None=全部, "read"=已有阅读记录, "unread"=从未读过。
+    /// `read`: None=全部, "unread"=从未读过, "in_progress"=读到一半, "finished"=已读完,
+    /// "read"=有阅读记录（在读 + 已读完）。详见 [`read_filter_clause`]。
     #[allow(clippy::too_many_arguments)]
     pub fn list_archives_all(
         &self,
@@ -220,14 +265,7 @@ impl Database {
         let (join_clause, mut where_clause, params) =
             Self::build_archive_filters(&conn, search, tag, category_id, added_from, added_to)?;
 
-        let read_clause = match read {
-            Some("read") => " AND EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)",
-            Some("unread") => {
-                " AND NOT EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)"
-            }
-            _ => "",
-        };
-        where_clause.push_str(read_clause);
+        where_clause.push_str(&read_filter_clause(read));
 
         let order_clause = order_expr_for(sort);
         let direction = if order == "asc" { "ASC" } else { "DESC" };
@@ -276,14 +314,7 @@ impl Database {
         let (join_clause, mut where_clause, mut params) =
             Self::build_archive_filters(&conn, search, tag, category_id, added_from, added_to)?;
 
-        let read_clause = match read {
-            Some("read") => " AND EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)",
-            Some("unread") => {
-                " AND NOT EXISTS (SELECT 1 FROM history hf WHERE hf.archive_id = a.id)"
-            }
-            _ => "",
-        };
-        where_clause.push_str(read_clause);
+        where_clause.push_str(&read_filter_clause(read));
 
         let sort_expr = order_expr_for(sort);
         let direction = if order == "asc" { "ASC" } else { "DESC" };
@@ -956,5 +987,142 @@ mod added_date_tests {
             "只给上界：不含四月书"
         );
         assert_eq!(titles(None, None).len(), 2, "无日期参数 = 全部");
+    }
+}
+
+#[cfg(test)]
+mod read_state_tests {
+    use super::*;
+
+    fn setup() -> Database {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let db = Database::new(temp_file.path().to_str().unwrap()).unwrap();
+        db.init().unwrap();
+        db
+    }
+
+    /// 入库一个指定页数的档案（不写 history = 未读）。
+    fn add(db: &Database, title: &str, page_count: i64) -> i64 {
+        db.upsert_scanned_archive(title, &format!("/x/{title}.cbz"), "cbz", page_count, 10, 1)
+            .unwrap()
+    }
+
+    fn set_page_count(db: &Database, id: i64, page_count: i64) {
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE archives SET page_count = ? WHERE id = ?",
+                rusqlite::params![page_count, id],
+            )
+            .unwrap();
+    }
+
+    fn titles(db: &Database, read: Option<&str>) -> Vec<String> {
+        db.list_archives_all(None, None, None, None, None, read, "title", "asc")
+            .unwrap()
+            .into_iter()
+            .map(|a| a.title)
+            .collect()
+    }
+
+    /// 断言两侧用同一比较器排序，避免依赖 SQLite 的排序规则。
+    fn any_order(mut v: Vec<&str>) -> Vec<String> {
+        v.sort();
+        v.into_iter().map(String::from).collect()
+    }
+
+    /// 纯函数：未指定/未知取值不过滤；三个精确取值都引用同一份「有效总页数」表达式。
+    #[test]
+    fn read_filter_clause_shares_one_total_pages_expression() {
+        assert!(read_filter_clause(None).is_empty());
+        assert!(read_filter_clause(Some("all")).is_empty());
+        assert!(read_filter_clause(Some("whatever")).is_empty());
+
+        for value in ["in_progress", "finished"] {
+            let clause = read_filter_clause(Some(value));
+            assert!(
+                clause.contains(EFFECTIVE_TOTAL_PAGES),
+                "{value} 必须与 EFFECTIVE_TOTAL_PAGES 共用同一表达式，否则集合会既漏又重"
+            );
+        }
+        assert!(read_filter_clause(Some("unread")).contains("NOT EXISTS"));
+        // 旧取值保持「有阅读记录」语义，不加总页数条件
+        let legacy = read_filter_clause(Some("read"));
+        assert!(legacy.contains("EXISTS") && !legacy.contains("NOT EXISTS"));
+        assert!(!legacy.contains(EFFECTIVE_TOTAL_PAGES));
+    }
+
+    /// 三种状态严格划分整个书库：未读 / 在读 / 已读完，且 在读+已读完 = 有阅读记录。
+    #[test]
+    fn read_state_partitions_library() {
+        let db = setup();
+        add(&db, "未读", 10);
+        let reading = add(&db, "在读", 10);
+        let finished = add(&db, "已读完", 10);
+        let just_opened = add(&db, "刚翻开", 10);
+        db.save_history(reading, 3, 10).unwrap();
+        db.save_history(finished, 9, 10).unwrap();
+        db.save_history(just_opened, 0, 10).unwrap();
+
+        assert_eq!(titles(&db, Some("unread")), any_order(vec!["未读"]));
+        assert_eq!(
+            titles(&db, Some("in_progress")),
+            any_order(vec!["在读", "刚翻开"]),
+            "第 1 页关掉也算在读，不能算已读完"
+        );
+        assert_eq!(titles(&db, Some("finished")), any_order(vec!["已读完"]));
+
+        let started = any_order(vec!["在读", "已读完", "刚翻开"]);
+        assert_eq!(
+            titles(&db, Some("read")),
+            started,
+            "旧取值 read 必须等于 在读 + 已读完"
+        );
+        assert_eq!(
+            titles(&db, Some("read")).len(),
+            titles(&db, Some("in_progress")).len() + titles(&db, Some("finished")).len(),
+            "两个新取值必须无重叠地覆盖有阅读记录的集合"
+        );
+        assert_eq!(titles(&db, None).len(), 4, "缺省 = 全部");
+    }
+
+    /// 文件补页后（page_count 变大）旧进度不能被判成已读完。
+    #[test]
+    fn page_count_wins_over_stale_history_total() {
+        let db = setup();
+        let id = add(&db, "补页后", 20);
+        db.save_history(id, 9, 10).unwrap(); // 客户端上次只知道 10 页
+
+        assert!(titles(&db, Some("finished")).is_empty());
+        assert_eq!(titles(&db, Some("in_progress")), any_order(vec!["补页后"]));
+    }
+
+    /// 总页数完全未知（文件夹未数页）时归「在读」，绝不让条目在三个筛选下全部消失。
+    #[test]
+    fn unknown_total_counts_as_in_progress() {
+        let db = setup();
+        let id = add(&db, "页数未知", 0);
+        db.save_history(id, 0, 0).unwrap();
+
+        assert_eq!(titles(&db, Some("unread")).len(), 0);
+        assert_eq!(titles(&db, Some("finished")).len(), 0);
+        assert_eq!(
+            titles(&db, Some("in_progress")),
+            any_order(vec!["页数未知"])
+        );
+    }
+
+    /// page_count 为 0 但 history 记录了总页数时，用 history 的总页数判定读完。
+    #[test]
+    fn history_total_used_when_page_count_unknown() {
+        let db = setup();
+        let id = add(&db, "靠history判定", 5);
+        set_page_count(&db, id, 0);
+        db.save_history(id, 4, 5).unwrap();
+
+        assert_eq!(
+            titles(&db, Some("finished")),
+            any_order(vec!["靠history判定"])
+        );
     }
 }

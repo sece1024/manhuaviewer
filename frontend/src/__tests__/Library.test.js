@@ -578,3 +578,76 @@ describe('Library 浏览会话：滚动位置', () => {
     expect(container.querySelector('.library-main')).not.toBeNull();
   });
 });
+
+describe('Library 阅读状态（未读 / 在读 / 已读完）', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getSettings.mockResolvedValue({});
+    api.getCategories.mockResolvedValue([]);
+    api.getTags.mockResolvedValue([]);
+  });
+
+  test('卡片进度按 1 基页码显示（read_page 是 0 基索引，此前少显示一页）', async () => {
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '读到一半', archive_type: 'cbz', page_count: 180, read_page: 11, cover_url: '/c', tags: [] },
+    ]);
+    renderLibrary();
+    await waitFor(() => expect(screen.getByText('读到一半')).toBeInTheDocument());
+    expect(screen.getByText('· 第 12/180 页')).toBeInTheDocument();
+  });
+
+  test('翻开第 1 页就显示进度（此前 read_page=0 被当成未读、整条隐藏）', async () => {
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '刚翻开', archive_type: 'cbz', page_count: 20, read_page: 0, cover_url: '/c', tags: [] },
+    ]);
+    const { container } = renderLibrary();
+    await waitFor(() => expect(screen.getByText('刚翻开')).toBeInTheDocument());
+    expect(screen.getByText('· 第 1/20 页')).toBeInTheDocument();
+    expect(container.querySelector('.archive-card-progress')).not.toBeNull();
+  });
+
+  test('读完的卡片标注「已读完」并改用完成态进度条', async () => {
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '看完了', archive_type: 'cbz', page_count: 10, read_page: 9, cover_url: '/c', tags: [] },
+    ]);
+    const { container } = renderLibrary();
+    await waitFor(() => expect(screen.getByText('看完了')).toBeInTheDocument());
+    expect(screen.getByText('· 已读完')).toBeInTheDocument();
+    expect(container.querySelector('.archive-card-progress.is-finished')).not.toBeNull();
+  });
+
+  test('未读的卡片不显示进度文案', async () => {
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '还没看', archive_type: 'cbz', page_count: 10, cover_url: '/c', tags: [] },
+    ]);
+    const { container } = renderLibrary();
+    await waitFor(() => expect(screen.getByText('还没看')).toBeInTheDocument());
+    // 只看卡片元信息行，避免误匹配「阅读状态」下拉里的选项文案
+    const meta = container.querySelector('.archive-card-meta');
+    expect(meta.textContent).not.toMatch(/已读完|第 \d+\/\d+ 页/);
+    expect(container.querySelector('.archive-card-progress')).toBeNull();
+  });
+
+  test('阅读状态下拉只有三个精确取值，并把选中的值传给后端 read 参数', async () => {
+    api.getArchives.mockResolvedValue([
+      { id: 1, title: '漫画A', archive_type: 'cbz', page_count: 10, cover_url: '/c', tags: [] },
+    ]);
+    renderLibrary();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    const select = screen.getByLabelText('阅读状态');
+    expect(Array.from(select.options).map(o => o.textContent)).toEqual(['全部', '未读', '在读', '已读完']);
+    // 旧的「已读」取值（等价于 有阅读记录）不应再出现在 UI 里
+    expect(Array.from(select.options).map(o => o.value)).not.toContain('read');
+
+    fireEvent.change(select, { target: { value: 'in_progress' } });
+    await waitFor(() => {
+      expect(api.getArchives).toHaveBeenCalledWith(expect.objectContaining({ read: 'in_progress' }));
+    });
+
+    fireEvent.change(select, { target: { value: 'finished' } });
+    await waitFor(() => {
+      expect(api.getArchives).toHaveBeenCalledWith(expect.objectContaining({ read: 'finished' }));
+    });
+  });
+});

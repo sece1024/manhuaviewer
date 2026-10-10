@@ -1,4 +1,4 @@
-import { formatSize, formatDate, formatDateShort, splitPathParts, lastPathPart } from '../utils/format';
+import { formatSize, formatDate, formatDateShort, splitPathParts, lastPathPart, readStateOf, formatReadProgress } from '../utils/format';
 
 describe('formatSize', () => {
   test('空值返回空字符串', () => {
@@ -104,5 +104,52 @@ describe('lastPathPart', () => {
   test('空值', () => {
     expect(lastPathPart('')).toBe('');
     expect(lastPathPart(null)).toBe('');
+  });
+});
+
+// 判定口径必须与后端 db::archives::read_filter_clause 一致，
+// 否则卡片上的标记会和「阅读状态」筛选的结果互相矛盾
+describe('readStateOf', () => {
+  test('没有阅读记录 = 未读', () => {
+    expect(readStateOf({ page_count: 10 })).toBe('unread');
+    expect(readStateOf({ page_count: 10, read_page: null })).toBe('unread');
+  });
+
+  test('第 1 页也是在读（0 基索引不能当未读）', () => {
+    expect(readStateOf({ page_count: 10, read_page: 0 })).toBe('in_progress');
+  });
+
+  test('中间页在读', () => {
+    expect(readStateOf({ page_count: 10, read_page: 3 })).toBe('in_progress');
+    expect(readStateOf({ page_count: 10, read_page: 8 })).toBe('in_progress');
+  });
+
+  test('末页 = 已读完', () => {
+    expect(readStateOf({ page_count: 10, read_page: 9 })).toBe('finished');
+    expect(readStateOf({ page_count: 1, read_page: 0 })).toBe('finished');
+  });
+
+  test('总页数未知时判为在读，不让条目在三个筛选下全部消失', () => {
+    expect(readStateOf({ page_count: 0, read_page: 5 })).toBe('in_progress');
+    expect(readStateOf({ page_count: 0, read_page: 0 })).toBe('in_progress');
+  });
+});
+
+describe('formatReadProgress', () => {
+  test('未读不占位', () => {
+    expect(formatReadProgress({ page_count: 10 })).toBe('');
+  });
+
+  test('在按 1 基显示页数（read_page 是 0 基索引）', () => {
+    expect(formatReadProgress({ page_count: 180, read_page: 11 })).toBe('第 12/180 页');
+    expect(formatReadProgress({ page_count: 180, read_page: 0 })).toBe('第 1/180 页');
+  });
+
+  test('已读完显示完成文案', () => {
+    expect(formatReadProgress({ page_count: 10, read_page: 9 })).toBe('已读完');
+  });
+
+  test('总页数未知时只显示当前页', () => {
+    expect(formatReadProgress({ page_count: 0, read_page: 4 })).toBe('第 5 页');
   });
 });
