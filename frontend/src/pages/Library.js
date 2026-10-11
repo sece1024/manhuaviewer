@@ -298,6 +298,9 @@ export default function Library({ mode = 'library', enableSession }) {
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState(null);
+  // 「同时删除原文件」勾选态：单删与批删各一份，打开弹窗时复位（默认不勾）
+  const [deleteFiles, setDeleteFiles] = useState(false);
+  const [batchDeleteFiles, setBatchDeleteFiles] = useState(false);
   const [convertConfirmOpen, setConvertConfirmOpen] = useState(false);
   // 重命名弹窗
   const [renamingId, setRenamingId] = useState(null);
@@ -769,6 +772,7 @@ export default function Library({ mode = 'library', enableSession }) {
   // 「从库中移除」：核心逻辑与事件分离，操作面板（无需 stopPropagation）可直接调用
   const confirmRemoveFor = useCallback((id) => {
     setConfirmTarget(id);
+    setDeleteFiles(false); // 每次打开默认不删文件
     setConfirmOpen(true);
   }, []);
   const handleRemoveArchive = useCallback((e, id) => {
@@ -815,10 +819,15 @@ export default function Library({ mode = 'library', enableSession }) {
     if (!id) return;
     const title = archives.find(a => a.id === id)?.title;
     try {
-      const r = await api.deleteArchive(id);
+      const r = await api.deleteArchive(id, { deleteFiles });
       loadArchives({ search, tag: selectedTag });
       refreshContinue();
-      toastWithUndo(title ? `已移除《${title}》` : '已移除', r?.undo_token);
+      if (deleteFiles) {
+        // 源文件已删，撤销无从谈起
+        toast(title ? `已移除《${title}》（含源文件）` : '已移除（含源文件）', 'success');
+      } else {
+        toastWithUndo(title ? `已移除《${title}》` : '已移除', r?.undo_token);
+      }
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -962,11 +971,15 @@ export default function Library({ mode = 'library', enableSession }) {
     if (ids.length === 0) return;
     setBatchDeleteConfirmOpen(false);
     try {
-      const r = await api.batchDeleteArchives(ids);
+      const r = await api.batchDeleteArchives(ids, { deleteFiles: batchDeleteFiles });
       handleExitSelectMode();
       loadArchives({ search, tag: selectedTag });
       refreshContinue();
-      toastWithUndo(`已删除 ${ids.length} 个档案`, r?.undo_token);
+      if (batchDeleteFiles) {
+        toast(`已删除 ${ids.length} 个档案（含源文件）`, 'success');
+      } else {
+        toastWithUndo(`已删除 ${ids.length} 个档案`, r?.undo_token);
+      }
     } catch (e) {
       toast(e.message, 'error');
     }
@@ -1704,7 +1717,7 @@ export default function Library({ mode = 'library', enableSession }) {
           <button className="btn btn-secondary" onClick={() => setConvertConfirmOpen(true)} disabled={selectedIds.size === 0}>
             转为 CBZ
           </button>
-          <button className="btn btn-danger" onClick={() => setBatchDeleteConfirmOpen(true)} disabled={selectedIds.size === 0}>
+          <button className="btn btn-danger" onClick={() => { setBatchDeleteFiles(false); setBatchDeleteConfirmOpen(true); }} disabled={selectedIds.size === 0}>
             删除
           </button>
           <button className="btn btn-secondary" onClick={handleExitSelectMode}>
@@ -1728,6 +1741,17 @@ export default function Library({ mode = 'library', enableSession }) {
         message={`确定要从库中移除已选的 ${selectedIds.size} 个档案吗？此操作不会删除磁盘上的源文件。`}
         confirmText="删除"
         danger
+        extra={(
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={batchDeleteFiles}
+              onChange={(e) => setBatchDeleteFiles(e.target.checked)}
+              aria-label="同时删除磁盘上的源文件"
+            />
+            <span style={{ color: 'var(--text-primary)' }}>同时删除磁盘上的源文件（不可撤销）</span>
+          </label>
+        )}
         onConfirm={handleBatchDelete}
         onCancel={() => setBatchDeleteConfirmOpen(false)}
       />
@@ -1931,6 +1955,17 @@ export default function Library({ mode = 'library', enableSession }) {
         message="确定从库中移除该漫画？此操作不会删除实际文件。"
         danger
         confirmText="移除"
+        extra={(
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={deleteFiles}
+              onChange={(e) => setDeleteFiles(e.target.checked)}
+              aria-label="同时删除磁盘上的源文件"
+            />
+            <span style={{ color: 'var(--text-primary)' }}>同时删除磁盘上的源文件（不可撤销）</span>
+          </label>
+        )}
         onConfirm={handleConfirmRemove}
         onCancel={() => setConfirmOpen(false)}
       />

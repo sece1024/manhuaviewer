@@ -331,10 +331,12 @@ const api = {
   removeBookmark: (archiveId, pageIndex) =>
     request(`/archives/${archiveId}/bookmarks/${pageIndex}`, { method: 'DELETE' })
       .then(r => { _invalidate(`/archives/${archiveId}/bookmarks`); return r; }),
-  deleteArchive: (id) =>
-    request(`/archives/${id}`, { method: 'DELETE' }).then(r => { _invalidate('/archives'); _invalidate('/history'); return r; }),
-  batchDeleteArchives: (ids) =>
-    request('/archives/batch-delete', { method: 'POST', body: JSON.stringify({ ids }) })
+  // opts.deleteFiles：同时删除磁盘上的源文件（不可撤销，后端不返回 undo_token）
+  deleteArchive: (id, opts = {}) =>
+    request(`/archives/${id}${opts.deleteFiles ? '?delete_files=1' : ''}`, { method: 'DELETE' })
+      .then(r => { _invalidate('/archives'); _invalidate('/history'); return r; }),
+  batchDeleteArchives: (ids, opts = {}) =>
+    request('/archives/batch-delete', { method: 'POST', body: JSON.stringify({ ids, delete_files: !!opts.deleteFiles }) })
       .then(r => { _invalidate('/archives'); _invalidate('/history'); return r; }),
   // 撤销刚才的移除：token 来自删除响应，一次性、10 分钟内有效。
   // 恢复的是档案行 + 标签/分类关联 + 书签 + 阅读进度，因此要作废书库与历史的缓存。

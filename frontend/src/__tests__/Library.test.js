@@ -999,7 +999,7 @@ describe('Library 移除后可撤销', () => {
     fireEvent.click(within(screen.getByRole('dialog', { name: '漫画操作' })).getByRole('button', { name: /从库中移除/ }));
     fireEvent.click(await screen.findByRole('button', { name: '移除' }));
 
-    await waitFor(() => expect(api.deleteArchive).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(api.deleteArchive).toHaveBeenCalledWith(1, { deleteFiles: false }));
     // 提示里带上书名，用户才知道自己刚删了哪本
     const undoBtn = await screen.findByRole('button', { name: '撤销' });
     expect(screen.getByText('已移除《漫画A》')).toBeInTheDocument();
@@ -1042,9 +1042,29 @@ describe('Library 移除后可撤销', () => {
     const confirm = await screen.findByRole('dialog', { name: '批量删除' });
     fireEvent.click(within(confirm).getByRole('button', { name: '删除' }));
 
-    await waitFor(() => expect(api.batchDeleteArchives).toHaveBeenCalledWith([1, 2]));
+    await waitFor(() => expect(api.batchDeleteArchives).toHaveBeenCalledWith([1, 2], { deleteFiles: false }));
     fireEvent.click(await screen.findByRole('button', { name: '撤销' }));
     await waitFor(() => expect(api.undoDeleteArchive).toHaveBeenCalledWith('tok-batch'));
+  });
+
+  test('勾选「同时删除源文件」后：带 deleteFiles 删除，且不再提供撤销', async () => {
+    api.deleteArchive.mockResolvedValue({ success: true, undo_token: null, deleted_files: true });
+
+    renderLibrary2();
+    await waitFor(() => expect(screen.getByText('漫画A')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '更多操作：漫画A' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: '漫画操作' })).getByRole('button', { name: /从库中移除/ }));
+    await screen.findByRole('button', { name: '移除' });
+
+    // 勾上「同时删除磁盘上的源文件」
+    fireEvent.click(screen.getByLabelText('同时删除磁盘上的源文件'));
+    fireEvent.click(screen.getByRole('button', { name: '移除' }));
+
+    await waitFor(() => expect(api.deleteArchive).toHaveBeenCalledWith(1, { deleteFiles: true }));
+    // 源文件已删：提示不含撤销动作
+    expect(await screen.findByText('已移除《漫画A》（含源文件）')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '撤销' })).toBeNull();
   });
 
   test('转换为 CBZ 的确认框列出将被删除的原文件（唯一会删磁盘文件的操作）', async () => {

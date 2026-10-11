@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 
-export default function ConfirmDialog({ open, title, message, confirmText = '确定', cancelText = '取消', danger, onConfirm, onCancel }) {
+export default function ConfirmDialog({ open, title, message, confirmText = '确定', cancelText = '取消', danger, extra, onConfirm, onCancel }) {
   const cancelRef = useRef(null);
 
   useEffect(() => {
@@ -33,6 +33,7 @@ export default function ConfirmDialog({ open, title, message, confirmText = '确
       <div className="modal" onClick={e => e.stopPropagation()}>
         <h3 style={{ margin: '0 0 8px' }}>{title}</h3>
         <p style={{ color: 'var(--text-secondary)', margin: '0 0 20px' }}>{message}</p>
+        {extra && <div style={{ margin: '-8px 0 20px' }}>{extra}</div>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button ref={cancelRef} className="btn" onClick={onCancel}>{cancelText}</button>
           <button className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} onClick={onConfirm}>{confirmText}</button>
