@@ -478,7 +478,6 @@ const api = {
   // 本机局域网可达 IPv4 + 端口：{ ipv4: [...], port }
   getLanIps: () => request('/lan-ip'),
   // 更新检查：{ current, latest, update_available, release_url }
-  checkUpdate: () => request('/update/check'),
 
   // Backup & Restore
   exportBackup: () => `${BASE}/backup`,

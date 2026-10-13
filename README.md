@@ -119,7 +119,7 @@ src-tauri/                          # Tauri + Rust 后端
     │   ├── archives.rs             # 按域拆分的 SQL（另有 tags/categories/history/settings/bookmarks/backup）
     │   ├── schema.rs               # 幂等建表 SQL
     │   └── migrations.rs           # 旧版数据表迁移 + 列补充
-    ├── routes/                     # Axum 路由（archives/tags/categories/history/settings/scan/convert/sync/metadata/update/opds + auth 局域网鉴权）
+    ├── routes/                     # Axum 路由（archives/tags/categories/history/settings/scan/convert/sync/metadata/opds + auth 局域网鉴权）
     └── services/                   # 业务逻辑（archive/scanner/thumbnail/cbz/backup/cleanup/cache_budget/page_cache/metadata/fs_ext）
 
 frontend/
@@ -156,7 +156,6 @@ frontend/
 | `/api/archives/:id/bookmarks` | GET/POST | 书签列表 / 添加书签 |
 | `/api/archives/:id/bookmarks/:page_index` | DELETE | 移除书签 |
 | `/api/metadata/search` | GET | Bangumi 元数据搜索（?q=） |
-| `/api/update/check` | GET | 检查 GitHub Releases 更新 |
 | `/api/archives/batch-delete` | POST | 批量删除档案（整批一个 `undo_token`） |
 | `/api/archives/undo-delete` | POST | 撤销刚才的移除（`{token}`），把档案行、标签/分类关联、书签与阅读进度原样还原；跳过在撤销窗口内已被重新扫描入库的路径 |
 | `/api/archives/regenerate-titles` | POST | 按文件名重新生成标题 |

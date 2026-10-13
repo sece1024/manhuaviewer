@@ -9,7 +9,6 @@ pub mod scan;
 pub mod settings;
 pub mod sync;
 pub mod tags;
-pub mod update;
 
 use crate::AppState;
 use axum::{
@@ -453,7 +452,6 @@ pub fn create_router(state: AppState) -> Router {
         .route("/stats", get(settings::get_stats))
         .route("/lan-ip", get(settings::lan_ip))
         .route("/metadata/search", get(metadata::search))
-        .route("/update/check", get(update::update_check))
         // Backup
         .route("/backup", get(settings::export_backup))
         .route("/restore", post(settings::import_backup))
