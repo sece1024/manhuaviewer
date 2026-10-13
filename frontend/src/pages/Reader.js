@@ -14,6 +14,10 @@ import usePagePreloader from '../hooks/usePagePreloader';
 import useProgressPersistence from '../hooks/useProgressPersistence';
 import { spreadTooWide, WIDE_SPREAD_MIN_PAGE_RATIO } from '../utils/spreadFit';
 import { nextInSeries } from '../utils/seriesOrder';
+import { screenDeltaToLocal, swapsAxes } from '../utils/rotatePan';
+
+/// 拖动位移小于这个像素数就仍按"点击"处理：否则手一抖就吞掉翻页点击
+const DRAG_CLICK_SLOP_PX = 4;
 
 export default function Reader() {
   const { archiveId } = useParams();
@@ -78,7 +82,9 @@ export default function Reader() {
   const [autoSingleWide, setAutoSingleWide] = useState(() => settings.reader_auto_single !== '0');
 
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
-  const dragRef = useRef({ active: false, startX: 0, startY: 0, origX: 0, origY: 0 });
+  const dragRef = useRef({ active: false, startX: 0, startY: 0, origX: 0, origY: 0, rotation: 0 });
+  // 拖动是否真的移动过：用于吞掉随后的 click（点按翻页不受影响）
+  const dragMovedRef = useRef(false);
   const containerRef = useRef(null);
   // 阅读区 DOM 元素也同步到 state：数据加载完成前不渲染阅读区（早退分支返回“加载中”），
   // 尺寸监听 / 原生手势监听必须等容器真正挂载后再执行，否则会像以前那样在 ref 还是
@@ -523,16 +529,18 @@ export default function Reader() {
 
   // 键盘 D 键开关双页：开启时重置双页加载态，保证新跨页走 spinner + 淡入
   const toggleDouble = useCallback(() => {
-    setDoublePage(v => {
-      if (!v) {
-        setLongImage(false);
-        setDoubleLoaded(false);
-        setDoubleFailed(false);
-        wideSpreadStickyRef.current = false; // 重新开启双页：过宽判定从零开始测量
-      }
-      return !v;
-    });
-  }, [setDoublePage, setLongImage]);
+    // 副作用必须在 updater **外面**做：updater 必须是纯函数（React 可能重复调用它），
+    // 在里面 setLongImage/setDoubleLoaded 会触发"渲染期间更新其它组件"的告警，
+    // 加载态也可能被重置两次。下一个值从当前 state 直接算。
+    const next = !doublePage;
+    if (next) {
+      setLongImage(false); // 开启双页时关闭长图
+      setDoubleLoaded(false);
+      setDoubleFailed(false);
+      wideSpreadStickyRef.current = false; // 重新开启双页：过宽判定从零开始测量
+    }
+    setDoublePage(next);
+  }, [doublePage, setDoublePage, setLongImage]);
 
   // 快捷键（通过自定义 hook 管理，减少组件依赖数量）
   useReaderKeyboard({
@@ -544,7 +552,7 @@ export default function Reader() {
     showMenu, setShowMenu,
     showTagPicker, setShowTagPicker,
     chapterEndOpen, setChapterEndOpen,
-    setDoublePage: toggleDouble, setLongImage, setRotation, setFitMode,
+    setDoublePage: toggleDouble, setLongImage, setRotation, setFitMode, fitMode,
     onFitModeChange: (val) => updateSetting('reader_fit', val),
     showOverlay, containerRef,
     doublePageDisabled: containerTooNarrow || longImage,
@@ -664,6 +672,7 @@ export default function Reader() {
     container: containerEl,
     enabled: !longImage,
     scale,
+    rotation,
     translate,
     pageDirection,
     onPrev: goPrev,
@@ -680,25 +689,42 @@ export default function Reader() {
     },
   });
 
+  // 是否允许拖动平移：放大后，或处于 90°/270°（此时图片的可视包围盒与布局盒不一致，
+  // 超出容器的部分会被 overflow:hidden 裁掉，必须能手拖出来看）
+  const canPan = scale > 1.05 || swapsAxes(rotation);
+
   // 鼠标
   const handleMouseDown = (e) => {
-    if (e.button === 1 || (e.button === 0 && scale > 1.05)) {
+    if (e.button === 1 || (e.button === 0 && canPan)) {
       e.preventDefault();
-      dragRef.current = { active: true, startX: e.clientX, startY: e.clientY, origX: translate.x, origY: translate.y };
+      dragRef.current = {
+        active: true, startX: e.clientX, startY: e.clientY,
+        origX: translate.x, origY: translate.y, rotation,
+      };
+      dragMovedRef.current = false;
     }
   };
 
   const handleMouseMove = (e) => {
     if (!dragRef.current.active) return;
+    const rawX = e.clientX - dragRef.current.startX;
+    const rawY = e.clientY - dragRef.current.startY;
+    // 几像素以内不算拖动：否则手一抖就吞掉随后的 click（点按翻页会变得时灵时不灵）
+    if (Math.hypot(rawX, rawY) > DRAG_CLICK_SLOP_PX) dragMovedRef.current = true;
+    // transform 是 scale(s) rotate(r) translate(...)，本地位移在屏幕上表现为 R(r)·t，
+    // 所以屏幕位移要反向旋转回去，图片才会跟着光标走
+    const local = screenDeltaToLocal(rawX, rawY, dragRef.current.rotation);
     setTranslate({
-      x: dragRef.current.origX + (e.clientX - dragRef.current.startX),
-      y: dragRef.current.origY + (e.clientY - dragRef.current.startY),
+      x: dragRef.current.origX + local.x,
+      y: dragRef.current.origY + local.y,
     });
   };
 
   const handleMouseUp = () => { dragRef.current.active = false; };
 
   const handleClick = (e) => {
+    // 刚刚拖动过 → 吞掉浏览器补发的 click；否则"拖动平移"会顺手翻一页
+    if (dragMovedRef.current) { dragMovedRef.current = false; return; }
     if (longImage || scale > 1.05) return;
     // 滑动刚结束时浏览器可能补发一个 click（iPad Safari）：忽略，避免一次滑动翻两页
     if (gestureHandledRecently()) return;
@@ -999,7 +1025,7 @@ export default function Reader() {
         style={{
           background: settings.reader_bg || 'var(--bg-tertiary)',
           border: '1px solid var(--border)',
-          cursor: longImage ? 'default' : (scale > 1.05 ? 'grab' : 'pointer'),
+          cursor: longImage ? 'default' : (canPan ? 'grab' : 'pointer'),
           touchAction: longImage ? 'pan-y' : 'none',
           overflow: longImage ? 'auto' : 'hidden',
           alignItems: longImage ? 'flex-start' : 'center',

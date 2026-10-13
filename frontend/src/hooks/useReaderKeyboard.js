@@ -26,6 +26,7 @@ export default function useReaderKeyboard({
   setLongImage,
   setRotation,
   setFitMode,
+  fitMode,
   onFitModeChange,
   showOverlay,
   containerRef,
@@ -63,11 +64,10 @@ export default function useReaderKeyboard({
       case 'd': case 'D':
         // 关闭双页任何时候都允许；仅“开启”受窗口宽度/长图模式限制——
         // 否则在窄窗口（containerTooNarrow）或长图模式下开启后，D 会被同一条件锁死，退不出来。
+        // 注意 setDoublePage 是 Reader 的 toggleDouble：它自己处理"关闭长图/重置加载态"
+        // 等副作用，所以这里**不要**再传 updater 进去（传了也会被忽略，看着像做了事）
         if (!e.ctrlKey && (doublePage || !doublePageDisabled)) {
-          setDoublePage(v => {
-            if (!v) setLongImage(false); // 开启双页时关闭长图
-            return !v;
-          });
+          setDoublePage();
         }
         break;
       case 'Home': goPage(0); break;
@@ -82,14 +82,15 @@ export default function useReaderKeyboard({
         break;
       case 't': case 'T': setShowThumbnails(v => !v); break;
       case 'g': case 'G': setShowJump(true); break;
-      case 'w': case 'W':
-        setFitMode(m => {
-          const next = m === 'height' ? 'width' : m === 'width' ? 'original' : 'height';
-          if (onFitModeChange) onFitModeChange(next);
-          showOverlay(`适应: ${next === 'height' ? '高度' : next === 'width' ? '宽度' : '原始'}`);
-          return next;
-        });
+      case 'w': case 'W': {
+        // 下一个值在 updater **外面**算：updater 必须是纯函数（React 可能重复调用它），
+        // 在里面调 updateSetting 会触发"渲染期间更新其它组件"的告警，也可能写两次设置。
+        const next = fitMode === 'height' ? 'width' : fitMode === 'width' ? 'original' : 'height';
+        setFitMode(next);
+        if (onFitModeChange) onFitModeChange(next);
+        showOverlay(`适应: ${next === 'height' ? '高度' : next === 'width' ? '宽度' : '原始'}`);
         break;
+      }
       case 'F1':
         e.preventDefault();
         setShowHelp(v => !v);
@@ -110,7 +111,7 @@ export default function useReaderKeyboard({
       default: break;
     }
   }, [
-    goPrev, goNext, goPage, pagesLength, longImage, doublePage, doublePageDisabled,
+    goPrev, goNext, goPage, pagesLength, longImage, doublePage, doublePageDisabled, fitMode,
     showThumbnails, showJump, showMenu, showHelp, showTagPicker,
     chapterEndOpen, setChapterEndOpen,
     setDoublePage, setLongImage, setRotation, setFitMode, onFitModeChange, showOverlay, containerRef,

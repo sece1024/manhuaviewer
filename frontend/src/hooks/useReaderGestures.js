@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { TAP_MAX_DISTANCE_PX, isDoubleTap, isTap, resolveSwipe } from '../utils/swipeGesture';
+import { screenDeltaToLocal, swapsAxes } from '../utils/rotatePan';
 
 // 手势被消费后，抑制浏览器补发的合成事件（click/dblclick）的时间窗。
 // iPad Safari 在 touchend 之后仍可能补一个 click：滑动会被当成点击 → 一次滑动翻两页；
@@ -16,7 +17,8 @@ const SYNTHETIC_EVENT_GUARD_MS = 500;
  *
  * 手势映射（长图模式 enabled=false，纵向滚动交给浏览器原生）：
  *   · 单指水平滑动 → onNext/onPrev（方向由 pageDirection 决定，见 utils/swipeGesture.js）
- *   · 放大（scale>1.05）后单指拖动 → onPan（与鼠标拖动一致）
+ *   · 放大（scale>1.05）**或旋转 90°/270°** 后单指拖动 → onPan（与鼠标拖动一致）；
+ *     位移会按旋转角度换算回图片本地坐标，否则旋转后拖动方向是错的
  *   · 双指捏合 → onPinch(factor)
  *   · 单击 → 不拦截，放行给阅读区 onClick（左右点击区翻页）
  *   · 双击 → onDoubleTapZoom；并抑制浏览器的 dblclick
@@ -29,6 +31,7 @@ export default function useReaderGestures({
   container,
   enabled = true,
   scale = 1,
+  rotation = 0,
   translate = { x: 0, y: 0 },
   pageDirection = 'rtl',
   onPrev,
@@ -42,9 +45,9 @@ export default function useReaderGestures({
 }) {
   // 回调与状态的最新值镜像：手势在原生事件里执行，读 ref 取最新值，
   // 这样监听只在「容器变化/模式切换」时重挂，不随每次 state 更新重挂。
-  const latest = useRef({ scale, translate, pageDirection, onPrev, onNext, onPan, onPanStart, onPanEnd, onPinch, onWheelZoom, onDoubleTapZoom });
+  const latest = useRef({ scale, rotation, translate, pageDirection, onPrev, onNext, onPan, onPanStart, onPanEnd, onPinch, onWheelZoom, onDoubleTapZoom });
   useEffect(() => {
-    latest.current = { scale, translate, pageDirection, onPrev, onNext, onPan, onPanStart, onPanEnd, onPinch, onWheelZoom, onDoubleTapZoom };
+    latest.current = { scale, rotation, translate, pageDirection, onPrev, onNext, onPan, onPanStart, onPanEnd, onPinch, onWheelZoom, onDoubleTapZoom };
   });
 
   // 手势过程中的临时状态（不参与渲染）
@@ -52,7 +55,7 @@ export default function useReaderGestures({
     armed: false,
     startX: 0, startY: 0, startAt: 0,
     panning: false, origX: 0, origY: 0,
-    pinchDist: 0, lastTapAt: 0,
+    pinchDist: 0, lastTapAt: 0, rotation: 0,
   });
   const handledAt = useRef(0);
 
@@ -83,10 +86,14 @@ export default function useReaderGestures({
       g.startY = t.clientY;
       g.startAt = Date.now();
       g.pinchDist = 0;
-      // 放大后单指是「平移查看」，不再翻页（与鼠标拖动一致）
-      g.panning = (s.scale || 1) > 1.05;
+      // 放大后单指是「平移查看」，不再翻页（与鼠标拖动一致）。
+      // 旋转 90°/270° 时也允许：此时图片可视包围盒与布局盒不一致，超出容器的部分
+      // 会被 overflow:hidden 裁掉，不给拖就等于那部分内容永远看不到
+      g.panning = (s.scale || 1) > 1.05 || swapsAxes(s.rotation);
       g.origX = s.translate ? s.translate.x : 0;
       g.origY = s.translate ? s.translate.y : 0;
+      // 旋转角度在按下时快照：拖动过程中若发生旋转，位移换算不该跟着变
+      g.rotation = s.rotation || 0;
       // 拖动中的变换不加过渡（否则每帧都会追一段动画，跟手变糊）
       if (g.panning && s.onPanStart) s.onPanStart();
     };
@@ -108,10 +115,10 @@ export default function useReaderGestures({
       if (g.panning) {
         e.preventDefault();
         if (s.onPan) {
-          s.onPan(
-            g.origX + (t.clientX - g.startX),
-            g.origY + (t.clientY - g.startY)
-          );
+          // 屏幕位移 → 图片本地位移：transform 是 scale(s) rotate(r) translate(...)，
+          // 本地位移在屏幕上表现为 R(r)·t，所以不换算的话旋转后拖动方向是错的
+          const local = screenDeltaToLocal(t.clientX - g.startX, t.clientY - g.startY, g.rotation);
+          s.onPan(g.origX + local.x, g.origY + local.y);
         }
         return;
       }
@@ -129,7 +136,12 @@ export default function useReaderGestures({
       g.armed = false;
       g.panning = false;
       g.pinchDist = 0;
-      if (wasPanning) { if (armed && latest.current.onPanEnd) latest.current.onPanEnd(); return; }
+      if (wasPanning) {
+        // 与滑动/双击一致：标记"刚消费过手势"，让阅读区忽略可能补发的 click
+        handledAt.current = Date.now();
+        if (armed && latest.current.onPanEnd) latest.current.onPanEnd();
+        return;
+      }
       if (!armed || e.changedTouches.length === 0) return;
 
       const t = e.changedTouches[0];
