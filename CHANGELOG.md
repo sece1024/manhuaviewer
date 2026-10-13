@@ -10,6 +10,22 @@
 
 ### 🚀 新特性
 
+- *(archives)* 移除漫画时可选择一并删除磁盘源文件([091c199](https://github.com/sece1024/manhuaviewer/commit/091c199e6dd21f710b733dbc87cce6d0967bb69a))
+
+
+### 🐛 修复
+
+- *(reader)* 旋转后能看到全部内容，拖动方向与屏幕一致([70ad137](https://github.com/sece1024/manhuaviewer/commit/70ad13797b6fa9fc16b2135a7b4482574e913299))
+
+
+### 🚜 重构
+
+- *(settings)* 移除「检查更新」功能([106d81e](https://github.com/sece1024/manhuaviewer/commit/106d81eb378a4eaab01d4bfb1646c9bed2dfccd1))
+
+## [3.7.0](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.0) - 2026-10-10
+
+### 🚀 新特性
+
 - *(library)* 阅读状态改为 未读/在读/已读完，进度按 1 基页码显示([0f8091c](https://github.com/sece1024/manhuaviewer/commit/0f8091cb5ebfa75edb6061b793c0df00f3de7feb))
 - *(library)* 书库顶部新增「继续阅读」横条，一次点击续读([6f36e98](https://github.com/sece1024/manhuaviewer/commit/6f36e986696ebe0f0e305146e526a0c6a630116b))
 - *(reader)* 末页读完弹面板并给出「下一卷」，不再静默跳回第 1 页([ab0838f](https://github.com/sece1024/manhuaviewer/commit/ab0838fd79d6d50827aa66f49e1a90b6ffff0f5e))
