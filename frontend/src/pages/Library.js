@@ -392,7 +392,7 @@ export default function Library({ mode = 'library', enableSession }) {
       addedRange,
       expandedGroup, groupMembers,
     },
-    filterRefs: { sortByRef, searchRef, selectedTagRef, readFilterRef, tagStateRef, selectedCategoryRef, addedRangeRef },
+    filterRefs: { sortByRef, searchRef, selectedTagRef, readFilterRef, tagStateRef, typeFilterRef, selectedCategoryRef, addedRangeRef },
     pageRef,
     pageSize: PAGE_SIZE,
     setArchives, setHasMore, setExpandedGroup, setGroupMembers,
@@ -547,6 +547,9 @@ export default function Library({ mode = 'library', enableSession }) {
       }
       if (tagStateRef.current && tagStateRef.current !== 'all') {
         baseParams.tag_state = tagStateRef.current;
+      }
+      if (typeFilterRef.current && typeFilterRef.current !== 'all') {
+        baseParams.archive_type = typeFilterRef.current;
       }
       const ar = addedRangeRef.current;
       if (ar) {
@@ -1031,19 +1034,15 @@ export default function Library({ mode = 'library', enableSession }) {
   useCommands(paletteCommands);
 
   // 分组已在服务端完成：`archives` 里的每一项要么是普通档案，要么是带 _isGroup 的组卡片。
-  const groupedArchives = archives;
+  // 类型筛选也由服务端完成（/archives?archive_type=...）：客户端只持有当前一页，
+  // 在这里再过滤会把整页筛空、并让「加载更多」永远不可达。
+  const displayArchives = archives;
 
   // 类型筛选（filter，不再是顶层导航位）：默认全部，可按容器类型收窄
   const handleTypeFilter = (v) => {
     setTypeFilter(v);
     updateSetting('type_filter', v);
   };
-  const displayArchives = useMemo(() => {
-    if (typeFilter === 'all') return groupedArchives;
-    return groupedArchives.filter(a =>
-      typeFilter === 'folder' ? a.archive_type === 'folder' : a.archive_type !== 'folder'
-    );
-  }, [groupedArchives, typeFilter]);
 
   // 顶部续读区只在「没加任何筛选」的首页状态出现：用户一旦主动筛选，横条与下面的
   // 列表就表达了两套不同条件，会让人怀疑列表漏了东西；此时把 `read=in_progress`
@@ -1738,7 +1737,7 @@ export default function Library({ mode = 'library', enableSession }) {
       <ConfirmDialog
         open={batchDeleteConfirmOpen}
         title="批量删除"
-        message={`确定要从库中移除已选的 ${selectedIds.size} 个档案吗？此操作不会删除磁盘上的源文件。`}
+        message={`确定要从库中移除已选的 ${selectedIds.size} 个档案吗？默认不删除磁盘源文件；勾选下方选项后会一并删除且不可撤销。`}
         confirmText="删除"
         danger
         extra={(
@@ -1952,7 +1951,7 @@ export default function Library({ mode = 'library', enableSession }) {
       <ConfirmDialog
         open={confirmOpen}
         title="移除漫画"
-        message="确定从库中移除该漫画？此操作不会删除实际文件。"
+        message="确定从库中移除该漫画？默认不删除磁盘源文件；勾选下方选项后会一并删除且不可撤销。"
         danger
         confirmText="移除"
         extra={(

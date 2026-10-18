@@ -9,10 +9,18 @@
     <title>MangaViewer</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>" />
     <script>
-      // 首帧前应用主题，避免深色用户冷启动时闪现浅色背景
+      // 首帧前应用主题，避免深色用户冷启动时闪现浅色背景。
+      // 与 hooks/useTheme.js 保持同一套取值：非法值回退深色，system 先解析成实际主题
+      // （否则 data-theme="system" 不匹配任何 CSS，会先闪一帧浅色）。
       (function () {
         try {
           var t = localStorage.getItem('theme') || 'dark';
+          if (t === 'system') {
+            t = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+              ? 'light'
+              : 'dark';
+          }
+          if (t !== 'light' && t !== 'dark' && t !== 'eye-care') t = 'dark';
           document.documentElement.setAttribute('data-theme', t);
         } catch (e) {}
       })();

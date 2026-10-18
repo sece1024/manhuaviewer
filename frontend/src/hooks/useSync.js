@@ -70,9 +70,9 @@ export default function useSync({ settings, updateSetting, toast, onStatsRefresh
     }
     try {
       await Promise.all([
-        updateSetting('sync_remote_url', syncUrl.trim()),
-        updateSetting('sync_remote_token', syncToken.trim()),
-        updateSetting('sync_dir', syncDir.trim()),
+        updateSetting('sync_remote_url', syncUrl.trim(), { throwOnError: true }),
+        updateSetting('sync_remote_token', syncToken.trim(), { throwOnError: true }),
+        updateSetting('sync_dir', syncDir.trim(), { throwOnError: true }),
       ]);
     } catch (e) {
       toast(e.message || '同步参数保存失败', 'error');

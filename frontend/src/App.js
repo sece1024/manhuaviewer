@@ -2,8 +2,8 @@ import { useState, useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import Library from './pages/Library';
 import { ToastProvider } from './components/Toast';
-import { SettingsProvider } from './hooks/useSettings';
-import useSettings from './hooks/useSettings';
+import useSettings, { SettingsProvider } from './hooks/useSettings';
+import useTheme, { ThemeProvider } from './hooks/useTheme';
 import { TagsProvider } from './hooks/useTags';
 import ErrorBoundary from './components/ErrorBoundary';
 import Modal from './components/Modal';
@@ -24,8 +24,8 @@ const PageFallback = () => (
 );
 
 function AppContent() {
-  // localStorage 读取走 try/catch（隐私模式/存储禁用时不抛错，回退默认主题）
-  const [theme, setTheme] = useState(() => localStorageGet('theme') || 'dark');
+  // 主题由 ThemeProvider 统一管理（纯客户端偏好，见 hooks/useTheme.js）
+  const { theme, setTheme } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // 侧边栏收起：iPad/小屏上 240px 的导航栏会吃掉近三成宽度，收成图标窄栏把空间还给内容。
   // 纯客户端偏好（按设备记忆）：iPad 需要收，桌面外接大屏往往不需要，放服务端设置反而别扭。
@@ -97,11 +97,6 @@ function AppContent() {
     if (mainEl) mainEl.scrollTop = 0;
   }, [location.pathname]);
 
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorageSet('theme', theme);
-  }, [theme]);
-
   return (
     <div className={`app-layout ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${isReader ? 'reader-immersive' : ''}`}>
       <div
@@ -152,6 +147,7 @@ function AppContent() {
             <option value="light">☀️ 浅色</option>
             <option value="dark">🌙 深色</option>
             <option value="eye-care">🌿 护眼</option>
+            <option value="system">🖥️ 跟随系统</option>
           </select>
           {lanActive && lanUrls.length > 0 && (
             <a
@@ -239,15 +235,17 @@ function AppContent() {
 function App() {
   return (
     <ErrorBoundary>
-      <ToastProvider>
-        <SettingsProvider>
-          <TagsProvider>
-            <Router>
-              <AppContent />
-            </Router>
-          </TagsProvider>
-        </SettingsProvider>
-      </ToastProvider>
+      <ThemeProvider>
+        <ToastProvider>
+          <SettingsProvider>
+            <TagsProvider>
+              <Router>
+                <AppContent />
+              </Router>
+            </TagsProvider>
+          </SettingsProvider>
+        </ToastProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }

@@ -250,6 +250,7 @@ export default function Reader() {
     // 重置状态，防止 save effect 用旧数据保存到新 archiveId
     setArchive(null);
     setPages([]);
+    setLoadError(null); // 换档清掉上一本的错误，否则同路由切书后新书也显示旧错误页
     setChapters(null);
     setBookmarks(new Set()); // 换档清掉旧书签
     setCurrentIndex(0);
@@ -888,6 +889,9 @@ export default function Reader() {
       <div className="empty-state">
         <div className="empty-state-icon">📭</div>
         <div className="empty-state-text">无可用页面</div>
+        <div className="empty-state-sub">这个档案里没有可显示的图片（空文件夹或不含图片的压缩包）。</div>
+        {/* 阅读器路由下侧栏与底部导航都被隐藏：这里不给返回按钮就是一个死路 */}
+        <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={() => navigate('/')}>← 返回书库</button>
       </div>
     );
   }
@@ -1323,7 +1327,7 @@ export default function Reader() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
               <tbody>
                 {[
-                  ['← / →', '翻页（方向取决于 RTL/LTR 设置）'],
+                  ['← / →', '上一页 / 下一页（键盘不随 RTL/LTR 反转）'],
                   ['Space', '下一页'],
                   ['↑ / ↓', '翻页（非长图模式）'],
                   ['Home / End', '第一页 / 最后一页'],
@@ -1340,7 +1344,7 @@ export default function Reader() {
                   ['Esc', '关闭弹出面板'],
                   ['', ''],
                   ['单指左右滑动', '翻页（触摸屏/iPad；方向跟随「翻页方向」设置）'],
-                  ['双指捏合 / 双击', '缩放 / 还原（长按拖动可平移）'],
+                  ['双指捏合 / 双击', '缩放 / 还原（放大或旋转 90°/270° 后单指拖动可平移）'],
                   ['滚轮', '连续缩放'],
                 ].map(([key, desc], i) => (
                   key === '' ? (

@@ -7,6 +7,7 @@ import useJobs from '../hooks/useJobs';
 import CommandPalette from '../components/CommandPalette';
 import { ToastProvider } from '../components/Toast';
 import { SettingsProvider } from '../hooks/useSettings';
+import { ThemeProvider } from '../hooks/useTheme';
 import { TagsProvider } from '../hooks/useTags';
 
 jest.mock('../utils/api');
@@ -233,7 +234,14 @@ describe('Library 统一书库（合并原“漫画库/文件夹”双 tab）', 
     expect(screen.getByText('压缩包漫画')).toBeInTheDocument();
   });
 
-  test('类型筛选可收窄为仅文件夹 / 仅压缩包', async () => {
+  test('类型筛选可收窄为仅文件夹 / 仅压缩包（服务端过滤）', async () => {
+    // 类型筛选已下推到 /archives?archive_type=...：mock 必须像服务端一样按参数收窄，
+    // 否则测不到真实行为（客户端已不再二次过滤）。
+    api.getArchives.mockImplementation((params = {}) => {
+      if (params.archive_type === 'folder') return Promise.resolve([folder]);
+      if (params.archive_type === 'archive') return Promise.resolve([cbz]);
+      return Promise.resolve([folder, cbz]);
+    });
     renderLibrary();
     await waitFor(() => {
       expect(screen.getByText('文件夹漫画')).toBeInTheDocument();
@@ -1096,14 +1104,16 @@ describe('Library 命令面板投稿', () => {
       <MemoryRouter>
         <Routes>
           <Route path="/" element={
-            <SettingsProvider>
-              <TagsProvider>
-                <ToastProvider>
-                  <Library enableSession={false} />
-                  <CommandPalette onClose={jest.fn()} />
-                </ToastProvider>
-              </TagsProvider>
-            </SettingsProvider>
+            <ThemeProvider>
+              <SettingsProvider>
+                <TagsProvider>
+                  <ToastProvider>
+                    <Library enableSession={false} />
+                    <CommandPalette onClose={jest.fn()} />
+                  </ToastProvider>
+                </TagsProvider>
+              </SettingsProvider>
+            </ThemeProvider>
           } />
           <Route path="/reader/:archiveId" element={<div>READER_PAGE</div>} />
         </Routes>
@@ -1412,8 +1422,10 @@ describe('Library 区分「书库为空」与「筛不出来」', () => {
   test('书库有内容、只是被筛选藏起来 → 给「没有匹配」+ 清除筛选，而不是欢迎页', async () => {
     mockApis();
     api.getSettings.mockResolvedValue({ type_filter: 'archive' });
-    // 探测查询（不带筛选）能查到内容，说明书库非空
-    api.getArchives.mockResolvedValue(withFolder);
+    // 服务端按 archive_type 过滤：库里只有文件夹 → 压缩包筛选结果为空；
+    // 而不带筛选的探测查询仍能查到内容，说明书库非空。
+    api.getArchives.mockImplementation((params = {}) =>
+      Promise.resolve(params.archive_type === 'archive' ? [] : withFolder));
 
     renderLibraryOnly();
 

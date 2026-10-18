@@ -145,6 +145,9 @@ export default function useLibrarySession({
         search: s.search,
         ...(s.readFilter && s.readFilter !== 'all' ? { read: s.readFilter } : {}),
         ...(s.tagState && s.tagState !== 'all' ? { tag_state: s.tagState } : {}),
+        // 类型筛选现在由服务端执行：比对请求必须带上它，否则会话里的「仅文件夹」
+        // 会与未过滤的 fresh 列表比较，每次返回书库都判定为成员变化并重置分页。
+        ...(s.typeFilter && s.typeFilter !== 'all' ? { archive_type: s.typeFilter } : {}),
         ...(s.selectedTag ? { tag: s.selectedTag } : {}),
         ...(s.selectedCategory ? { category_id: s.selectedCategory } : {}),
         // 日期过滤也要带上，否则比对会用未过滤列表顶掉会话里的过滤视图
@@ -158,6 +161,7 @@ export default function useLibrarySession({
           filterRefs.selectedTagRef.current !== s.selectedTag ||
           filterRefs.readFilterRef.current !== (s.readFilter || 'all') ||
           (filterRefs.tagStateRef ? filterRefs.tagStateRef.current : 'all') !== (s.tagState || 'all') ||
+          (filterRefs.typeFilterRef ? filterRefs.typeFilterRef.current : 'all') !== (s.typeFilter || 'all') ||
           filterRefs.selectedCategoryRef.current !== s.selectedCategory ||
           (filterRefs.addedRangeRef ? filterRefs.addedRangeRef.current : null) !== (s.addedRange || null)) {
         return;

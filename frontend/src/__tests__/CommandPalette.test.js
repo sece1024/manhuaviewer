@@ -2,6 +2,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import CommandPalette from '../components/CommandPalette';
 import { SettingsProvider } from '../hooks/useSettings';
+import { ThemeProvider } from '../hooks/useTheme';
 import { registerCommands, resetCommands } from '../hooks/useCommands';
 
 jest.mock('../utils/api');
@@ -15,13 +16,15 @@ const api = require('../utils/api').default;
 function renderPalette(onClose = jest.fn()) {
   render(
     <MemoryRouter initialEntries={['/']}>
-      <SettingsProvider>
-        <Routes>
-          <Route path="/" element={<CommandPalette onClose={onClose} />} />
-          <Route path="/history" element={<div>HISTORY_PAGE</div>} />
-          <Route path="/reader/:archiveId" element={<div>READER_PAGE</div>} />
-        </Routes>
-      </SettingsProvider>
+      <ThemeProvider>
+        <SettingsProvider>
+          <Routes>
+            <Route path="/" element={<CommandPalette onClose={onClose} />} />
+            <Route path="/history" element={<div>HISTORY_PAGE</div>} />
+            <Route path="/reader/:archiveId" element={<div>READER_PAGE</div>} />
+          </Routes>
+        </SettingsProvider>
+      </ThemeProvider>
     </MemoryRouter>
   );
   return onClose;
@@ -120,11 +123,12 @@ describe('CommandPalette 命令面板', () => {
     await waitFor(() => expect(screen.getByText('没有匹配的条目')).toBeInTheDocument());
   });
 
-  test('主题命令把当前主题标出来，执行后写入设置', async () => {
+  test('主题命令把当前主题标出来，执行后切换 data-theme（不写服务端设置）', async () => {
     renderPalette();
     expect(screen.getByText('主题：深色')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('主题：护眼'));
-    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith({ theme: 'eye-care' }));
+    await waitFor(() => expect(document.documentElement.getAttribute('data-theme')).toBe('eye-care'));
+    expect(api.updateSettings).not.toHaveBeenCalled();
   });
 });

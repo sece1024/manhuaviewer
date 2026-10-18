@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useContext, useMemo, createContext } from 'react';
+import { useState, useEffect, useCallback, useContext, useMemo, useRef, createContext } from 'react';
 import api, { localStorageGet, localStorageSet } from '../utils/api';
 
 const SettingsContext = createContext(null);
@@ -45,16 +45,36 @@ export function SettingsProvider({ children }) {
     }).catch(() => {});
   }, []);
 
-  const updateSetting = useCallback(async (key, value) => {
-    // 乐观更新
-    setSettings(prev => ({ ...prev, [key]: value }));
+  // 设置项的乐观更新 + 失败回滚。
+  //
+  // 默认**不再抛出**（很多调用方是 effect/事件里的 fire-and-forget，抛出去只会变成
+  // unhandled rejection）；需要感知失败的调用方传 `{ throwOnError: true }`，或检查
+  // 返回的 boolean。无论哪种，失败都会回滚 state 与 localStorage，不会出现"界面
+  // 显示已启用、服务端其实没保存"的假象。
+  const settingsRef = useRef(settings);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
+
+  const updateSetting = useCallback(async (key, value, { throwOnError = false } = {}) => {
+    const prev = settingsRef.current[key];
+    const next = { ...settingsRef.current, [key]: value };
+    settingsRef.current = next;
+    setSettings(next);
     const lsKey = LS_FALLBACKS[key];
     if (lsKey) localStorageSet(lsKey, value);
     try {
       await api.updateSettings({ [key]: value });
+      return true;
     } catch (e) {
-      // 回滚可以在这里做，但对设置来说不常见，暂不做
+      // 只回滚这一项，保留期间其它设置的成功更新
+      const rolled = { ...settingsRef.current };
+      if (prev === undefined) delete rolled[key];
+      else rolled[key] = prev;
+      settingsRef.current = rolled;
+      setSettings(rolled);
+      if (lsKey) localStorageSet(lsKey, prev === undefined ? '' : prev);
       console.error('Failed to save setting:', e);
+      if (throwOnError) throw e;
+      return false;
     }
   }, []);
 

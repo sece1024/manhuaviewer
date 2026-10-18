@@ -4,6 +4,7 @@ import Settings from '../pages/Settings';
 import JobIndicator from '../components/JobIndicator';
 import { ToastProvider } from '../components/Toast';
 import { SettingsProvider } from '../hooks/useSettings';
+import { ThemeProvider } from '../hooks/useTheme';
 import { TagsProvider } from '../hooks/useTags';
 import { resetJobsStore } from '../hooks/useJobs';
 
@@ -19,13 +20,15 @@ const api = require('../utils/api').default;
 function renderSettings() {
   return render(
     <MemoryRouter>
-      <SettingsProvider>
-        <TagsProvider>
-          <ToastProvider>
-            <Settings />
-          </ToastProvider>
-        </TagsProvider>
-      </SettingsProvider>
+      <ThemeProvider>
+        <SettingsProvider>
+          <TagsProvider>
+            <ToastProvider>
+              <Settings />
+            </ToastProvider>
+          </TagsProvider>
+        </SettingsProvider>
+      </ThemeProvider>
     </MemoryRouter>
   );
 }

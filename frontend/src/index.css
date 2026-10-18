@@ -8,10 +8,14 @@
   --bg-tertiary: #fafafa;
   --text-primary: #1a1a1a;
   --text-secondary: #666666;
-  --text-tertiary: #999999;
+  /* 三级文字用于 11–13px 的辅助信息：对比度必须过 AA（白底 ≥4.5:1） */
+  --text-tertiary: #71717a;
   --accent: #6366f1;
   --accent-hover: #4f46e5;
   --accent-light: #eef2ff;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --muted: #6b7280;
   --border: #e5e7eb;
   --border-hover: #d1d5db;
   --btn-2nd-bg: #ffffff;
@@ -52,7 +56,7 @@
   --bg-tertiary: #252528;
   --text-primary: #f0f0f0;
   --text-secondary: #a0a0a0;
-  --text-tertiary: #666666;
+  --text-tertiary: #8b8b93;
   --accent: #818cf8;
   --accent-hover: #6366f1;
   --accent-light: rgba(99,102,241,0.15);
@@ -78,10 +82,14 @@
   --bg-tertiary: #f8fcf5;
   --text-primary: #2d4a1e;
   --text-secondary: #5a7a48;
-  --text-tertiary: #7a9a68;
-  --accent: #4ade80;
-  --accent-hover: #22c55e;
-  --accent-light: #f0fdf4;
+  --text-tertiary: #5b7a47;
+  /* 浅绿作主色时白字对比度只有 1.7:1：主色/悬停色必须压深到能承载白色文字 */
+  --accent: #15803d;
+  --accent-hover: #166534;
+  --accent-light: #dcfce7;
+  --danger: #b91c1c;
+  --success: #15803d;
+  --muted: #5b7a47;
   --border: #d0e0c8;
   --border-hover: #b0c8a0;
   --btn-2nd-bg: #ffffff;
@@ -1691,6 +1699,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 
 @media (max-width: 768px) {
   .settings-layout { flex-direction: column; }
+  .settings-row-theme { flex-wrap: wrap; gap: 8px; }
+  .settings-row-theme .toggle-group { width: 100%; }
+  .settings-row-theme .toggle-group button { flex: 1; }
   .settings-nav {
     position: static;
     flex-direction: row;

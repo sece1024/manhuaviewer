@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
-import useSettings from '../hooks/useSettings';
+import useTheme from '../hooks/useTheme';
 import useModalKeyboard from '../hooks/useModalKeyboard';
 import { getPageCommands, subscribeCommands } from '../hooks/useCommands';
 
@@ -22,15 +22,13 @@ const EMPTY_LIST = [];
 
 export default function CommandPalette({ onClose }) {
   const navigate = useNavigate();
-  const { settings, updateSetting } = useSettings();
+  const { theme, setTheme } = useTheme();
   const pageCommands = useSyncExternalStore(subscribeCommands, getPageCommands);
   const [query, setQuery] = useState('');
   const [highlight, setHighlight] = useState(0);
   const [archives, setArchives] = useState(EMPTY_LIST);
   const panelRef = useModalKeyboard(onClose);
   const searchTimerRef = useRef(null);
-
-  const theme = settings.theme || 'dark';
 
   /// 面板自己就能做的全局命令；页面专属的由页面登记
   const globalCommands = useMemo(() => {
@@ -40,17 +38,18 @@ export default function CommandPalette({ onClose }) {
       { id: 'nav-settings', group: '导航', icon: '⚙️', label: '去设置', keywords: 'settings 偏好', run: () => navigate('/settings') },
     ];
     const themes = [
-      ['light', '浅色'], ['dark', '深色'], ['eye-care', '护眼'],
+      ['light', '浅色'], ['dark', '深色'], ['eye-care', '护眼'], ['system', '跟随系统'],
     ].map(([value, label]) => ({
       id: `theme-${value}`,
       group: '外观',
       icon: theme === value ? '✅' : '🎨',
       label: `主题：${label}`,
       keywords: 'theme 主题 外观',
-      run: () => updateSetting('theme', value),
+      // 主题是纯客户端设置：必须调 useTheme 的 setter，而不是写服务端 settings
+      run: () => setTheme(value),
     }));
     return [...nav, ...themes];
-  }, [navigate, theme, updateSetting]);
+  }, [navigate, theme, setTheme]);
 
   // 漫画实时搜索：只在有输入时发请求，并防抖（面板是逐字输入的）
   useEffect(() => {

@@ -7,6 +7,7 @@ import {
 } from '../utils/scanRoots';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
+import useTheme from '../hooks/useTheme';
 import useTags from '../hooks/useTags';
 import useSync from '../hooks/useSync';
 import useScan from '../hooks/useScan';
@@ -16,6 +17,7 @@ import CbzConvertPanel from '../components/CbzConvertPanel';
 
 export default function Settings() {
   const { settings, updateSetting } = useSettings();
+  const { theme, setTheme } = useTheme();
   const { tags, reload: reloadTags } = useTags();
   const [stats, setStats] = useState(null);
   const [lanInfo, setLanInfo] = useState(null);
@@ -123,6 +125,12 @@ export default function Settings() {
 
   // 检测 Tauri 环境
   const isTauri = window.__TAURI__ !== undefined;
+  // 备份导出只在本机可用：备份以主机路径为键，而服务端会对非回环请求脱敏（并直接
+  // 返回 403）。局域网浏览器里把按钮藏掉，避免"点了下载到一个错误页"。
+  const isLocalHost = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(
+    typeof window !== 'undefined' ? window.location.hostname : ''
+  );
+  const canExportBackup = isTauri || isLocalHost;
 
   useEffect(() => {
     api.getStats().then(setStats).catch(() => {});
@@ -167,14 +175,14 @@ export default function Settings() {
   const handleGenLanToken = async () => {
     const tok = genLanToken();
     try {
-      await updateSetting('server_token', tok);
+      await updateSetting('server_token', tok, { throwOnError: true });
       setServerToken(tok);
       toast('已生成并启用局域网口令', 'success');
     } catch (e) { toast(e.message, 'error'); }
   };
   const handleClearLanToken = async () => {
     try {
-      await updateSetting('server_token', '');
+      await updateSetting('server_token', '', { throwOnError: true });
       setServerToken('');
       toast('已清除局域网口令（鉴权关闭）', 'success');
     } catch (e) { toast(e.message, 'error'); }
@@ -189,7 +197,7 @@ export default function Settings() {
 
   const handleUpdateSetting = async (key, value) => {
     try {
-      await updateSetting(key, value);
+      await updateSetting(key, value, { throwOnError: true });
       toast('已保存', 'success');
     } catch (e) {
       toast(e.message, 'error');
@@ -202,11 +210,8 @@ export default function Settings() {
   const handleUpdateSettingDebounced = useCallback((key, value) => {
     clearTimeout(colorSaveTimerRef.current);
     colorSaveTimerRef.current = setTimeout(async () => {
-      try {
-        await updateSetting(key, value);
-      } catch (e) {
-        toast(e.message, 'error');
-      }
+      const ok = await updateSetting(key, value);
+      if (!ok) toast('保存失败，请重试', 'error');
     }, 300);
   }, [updateSetting, toast]);
 
@@ -822,6 +827,30 @@ export default function Settings() {
       {/* 外观设置 */}
       <div id="settings-section-appearance" className="settings-section">
         <div className="settings-section-title">🎨 外观</div>
+        <div className="settings-row settings-row-theme">
+          <div>
+            <div className="settings-row-label">主题</div>
+            <div className="settings-row-desc">只影响本机；「跟随系统」会随 macOS/Windows 的浅色/深色自动切换</div>
+          </div>
+          <div className="toggle-group" role="group" aria-label="主题">
+            {[
+              ['light', '浅色'],
+              ['dark', '深色'],
+              ['eye-care', '护眼'],
+              ['system', '跟随系统'],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={theme === value ? 'active' : ''}
+                onClick={() => setTheme(value)}
+                aria-pressed={theme === value}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="settings-row">
           <div>
             <div className="settings-row-label">默认视图</div>
@@ -922,9 +951,10 @@ export default function Settings() {
         <div className="settings-section-title">💾 备份与恢复</div>
         <div className="settings-row-desc" style={{ marginBottom: 12 }}>
           导出所有漫画元数据、标签、分类和阅读历史（不含图片文件）
+          {!canExportBackup && '。导出仅限桌面端本机：备份以本机路径为键，局域网端无法还原。'}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn btn-sm" onClick={handleExportBackup}>📦 导出备份</button>
+          {canExportBackup && <button className="btn btn-sm" onClick={handleExportBackup}>📦 导出备份</button>}
           <label className="btn btn-sm btn-secondary" style={{ cursor: 'pointer', margin: 0 }}>
             📥 导入备份
             <input type="file" accept=".json" onChange={handleImportBackup} style={{ display: 'none' }} disabled={importing} />
