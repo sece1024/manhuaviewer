@@ -6,6 +6,18 @@
 
 <!-- git-cliff: end of header -->
 
+## [3.7.2](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.2) - 2026-10-18
+
+### 🐛 修复
+
+- *(api)* 类型筛选下推服务端，备份导出仅限本机([74c0a54](https://github.com/sece1024/manhuaviewer/commit/74c0a54e754dcdcb534b7705b03c899398002c57))
+- *(frontend)* 修复设置保存、确认框与空档案死路，统一主题状态([1b7bb64](https://github.com/sece1024/manhuaviewer/commit/1b7bb6473ae2adc41d0ff78694d19562b51f7d31))
+
+
+### 📚 文档
+
+- 修正发版顺序与过时文档，补齐许可证元数据([cf1a8d0](https://github.com/sece1024/manhuaviewer/commit/cf1a8d00fae318353cdbd25697dac7762c751935))
+
 ## [3.7.1](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.1) - 2026-10-13
 
 ### 🚀 新特性
