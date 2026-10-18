@@ -2,6 +2,7 @@
   "name": "manhuaviewer",
   "version": "3.7.1",
   "description": "MangaViewer — 漫画阅读管理系统",
+  "license": "MIT",
   "scripts": {
     "build": "pnpm --filter manhuaviewer-frontend build",
     "tauri": "tauri",

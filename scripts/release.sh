@@ -77,9 +77,10 @@ git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null && die "tag v$VERSION
 # --check：本地验证门禁。放在确认之前——先花几分钟跑测试，
 # 最后的 y/N 才是干净的"最后一步"；任何一步失败即中止，此时还没改动任何文件。
 if [ "$DO_CHECK" = "1" ]; then
-  echo "🔍 --check：运行验证套件（lint / fmt / build / 前端测试 / cargo test）..."
+  echo "🔍 --check：运行验证套件（Rust lint / ESLint / fmt / build / 前端测试 / cargo test）..."
   if ! (
     pnpm lint &&
+      pnpm --filter manhuaviewer-frontend lint:ci &&
       pnpm format:check &&
       pnpm --filter manhuaviewer-frontend build &&
       (cd frontend && CI=true pnpm test) &&
@@ -118,9 +119,12 @@ fi
 ./scripts/bump-version.sh "$VERSION"
 echo ""
 
-# 2. 重新生成 CHANGELOG.md（含自上个 tag 以来的提交；release 提交本身尚未生成，属预期）
-pnpm changelog
-echo "✅ CHANGELOG.md 已重新生成"
+# 2. 重新生成 CHANGELOG.md。
+# 关键：显式传 `--tag v$VERSION`。此时 tag 还没创建，若只跑 `git-cliff -o`，本次
+# 提交会被归到「未发布」——而该文件随后随 release 提交一起发出，于是每个版本都
+# 要等下一次发版才出现在 CHANGELOG 里（v3.7.1 就踩过这个坑）。
+git-cliff --tag "v$VERSION" -o CHANGELOG.md
+echo "✅ CHANGELOG.md 已按 v$VERSION 重新生成"
 
 # 3. 提交（只 stage 版本三文件 + CHANGELOG.md）并打轻量 tag
 git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml CHANGELOG.md

@@ -62,16 +62,16 @@ chore: 移除 Electron 相关代码
 
 ## CI 自动检查
 
-每次推送和 PR 会自动运行以下检查（`.github/workflows/ci.yml`）：
+每次向 `main` 推送或提 PR 会自动运行以下检查（`.github/workflows/ci.yml`）：
 
 | Job | 内容 |
 |-----|------|
 | **frontend** | `pnpm --filter manhuaviewer-frontend lint:ci`（ESLint；`vite build` 本身不做 lint）+ `pnpm --filter manhuaviewer-frontend build`（编译）+ `cd frontend && pnpm test`（前端测试） |
-| **rust** | `cargo fmt --check` + `cargo clippy -D warnings` + `cargo test` |
+| **rust** | `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test` |
 
 请在提交前确保本地通过这些检查。前端 lint 也可单独运行：`pnpm --filter manhuaviewer-frontend lint`（宽松版，只列问题不卡 warning）。
 
-ESLint 配置见 `frontend/eslint.config.mjs`：只启用「真实缺陷」类规则（`no-undef`、`no-unused-vars`、`react-hooks/rules-of-hooks` 等），不引入风格规则。`react-hooks/exhaustive-deps` 设为 `warn`，当前基线 13 条（均为有意的 ref 依赖模式），CI 用 `--max-warnings=13` 锁住，避免回退但也不强迫立刻重构。
+ESLint 配置见 `frontend/eslint.config.mjs`：只启用「真实缺陷」类规则（`no-undef`、`no-unused-vars`、`react-hooks/rules-of-hooks` 等），不引入风格规则。`react-hooks/exhaustive-deps` 设为 `warn`，当前基线 12 条（多为有意的 ref/稳定 setter 依赖省略，另有 Library/Reader 若干待清理项），CI 用 `--max-warnings=13` 锁住，避免回退但也不强迫立刻重构。
 
 ## 本地构建安装包
 
@@ -114,7 +114,7 @@ pnpm tauri build
 推送一个 `v` 开头的 Git 标签即可触发。**推荐一键发版：**
 
 ```bash
-# 一条命令完成：bump 三处版本号 → pnpm changelog → commit → tag → push
+# 一条命令完成：bump 三处版本号 → git-cliff（显式带新 tag）→ commit → tag → push
 ./scripts/release.sh 3.5.4
 #   -y        免交互确认
 #   --no-push 只做到本地 commit + tag，不推送（稍后手动 git push origin main v3.5.4）
@@ -132,7 +132,8 @@ pnpm tauri build
 # frontend/package.json 的版本（2.0.0）是独立的，脚本不会动它——不要"顺手"同步
 
 # 2. 重新生成 CHANGELOG.md（git-cliff，配置见 cliff.toml；需先安装：brew install git-cliff）
-pnpm changelog
+#    必须显式传 --tag：此时 v3.5.4 还不存在，只跑 pnpm changelog 会把本次发布放进「未发布」
+git-cliff --tag v3.5.4 -o CHANGELOG.md
 
 # 3. 提交并打标签
 git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml CHANGELOG.md
@@ -154,6 +155,7 @@ git push origin main v3.5.4
 
 1. 推送标签后，GitHub Actions 自动在多个平台并行构建
 2. 构建完成后创建 **草稿 Release**，所有安装包作为 Release Assets 上传
+   （`release-notes` job 会先校验 tag 与三处版本号一致，再用 git-cliff 生成正文）
 3. 前往 [GitHub Releases](https://github.com/sece1024/manhuaviewer/releases) 页面检查产物
 4. 确认无误后，点击 **Publish release** 正式发布
 
@@ -162,7 +164,7 @@ git push origin main v3.5.4
 - 发布前务必同步三处版本号（`package.json`、`tauri.conf.json`、`Cargo.toml`），推荐用 `./scripts/bump-version.sh <x.y.z>` 一次改完
 - `CHANGELOG.md` 由 git-cliff 生成（`pnpm changelog`），**不要手工编辑**；草稿 Release 的正文由 CI 用 `git-cliff --latest --strip header` 自动生成（配置见 `cliff.toml`）
 - Release 默认为草稿状态，需要手动确认发布
-- 构建使用 [tauri-apps/tauri-action@v0](https://github.com/tauri-apps/tauri-action)，配置详见 `release.yml`
+- 构建使用 [tauri-apps/tauri-action@v1](https://github.com/tauri-apps/tauri-action)，配置详见 `release.yml`
 - macOS 构建使用 **ad-hoc 签名**（`APPLE_SIGNING_IDENTITY: "-"`，免费、无需 Apple Developer 账号，也未经 Apple 公证），用户首次打开仍需右键 > 打开，或在"系统设置 > 隐私与安全性"中允许
 
 ## 日志与启动问题排查

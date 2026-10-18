@@ -6,7 +6,7 @@
 
 <!-- git-cliff: end of header -->
 
-## 未发布
+## [3.7.1](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.1) - 2026-10-13
 
 ### 🚀 新特性
 

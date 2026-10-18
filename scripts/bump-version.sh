@@ -47,6 +47,9 @@ echo "   Cargo.toml:        $(grep '^version' "$ROOT/src-tauri/Cargo.toml" | xar
 
 echo ""
 echo "📋 下一步:"
-echo "   git add -A && git commit -m \"chore: release v$VERSION\""
+echo "   git-cliff --tag v$VERSION -o CHANGELOG.md   # 显式带新 tag，否则版本会落在「未发布」"
+echo "   git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml CHANGELOG.md"
+echo "   git commit -m \"chore: release v$VERSION\""
 echo "   git tag v$VERSION"
-echo "   git push origin main --tags"
+echo "   git push origin main v$VERSION"
+echo "   （不要用 git add -A / git push --tags：会把 gen/schemas 等游离改动和其它本地 tag 一起带上）"

@@ -25,16 +25,17 @@ pnpm format                    # cargo fmt (auto-fix)
 pnpm changelog                 # git-cliff: regenerate CHANGELOG.md (config: cliff.toml)
 ```
 
-CI (`.github/workflows/ci.yml`) runs two jobs: **frontend** (`pnpm --filter manhuaviewer-frontend build` + `pnpm test`) and **rust** (`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`). The rust job does **not** build the frontend — backend code must compile with `frontend/build` absent.
+CI (`.github/workflows/ci.yml`) runs two jobs: **frontend** (`pnpm --filter manhuaviewer-frontend lint:ci` + build + `cd frontend && pnpm test`) and **rust** (`cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`). The rust job does **not** build the frontend — backend code must compile with `frontend/build` absent.
 
 ## Before finishing a change
 
 1. `pnpm lint` — clippy must pass with zero warnings
 2. `pnpm format:check`
-3. `pnpm --filter manhuaviewer-frontend build`
-4. `cd frontend && pnpm test`
-5. `cd src-tauri && cargo test`
-6. Commit with a Conventional Commits message (`feat:`, `fix:`, `docs:`, `ci:`, `chore:`)
+3. `pnpm --filter manhuaviewer-frontend lint:ci` — 0 errors, warnings ≤ 13
+4. `pnpm --filter manhuaviewer-frontend build`
+5. `cd frontend && pnpm test`
+6. `cd src-tauri && cargo test`
+7. Commit with a Conventional Commits message (`feat:`, `fix:`, `docs:`, `ci:`, `chore:`)
 
 ## Other docs
 
