@@ -1440,8 +1440,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .reader-page-wrapper {
   position: relative;
   /* grid + place-items：让「当前页」与「翻页时的旧页垫底」叠在同一个居中单元格，
-   * 两张图都 grid-area 1/1 重叠居中，翻到冷页时旧图继续挡背景、不闪一下 */
+   * 两张图都 grid-area 1/1 重叠居中，翻到冷页时旧图继续挡背景、不闪一下。
+   *
+   * grid-template 是**必需的**：只写 display:grid 时隐式轨道是 auto，行会被 <img>
+   * 的固有尺寸撑大（甚至溢出容器），图片的 max-height:100% 因此解析到"内容高度"
+   * 而不是阅读区高度——表现为竖版页只显示中间一截、"适应高度"切换后毫无变化。
+   * 锁定 100% / 100% 后网格区域恒等于容器，百分比约束才有意义。 */
   display: grid;
+  grid-template: 100% / 100%;
   place-items: center;
   width: 100%;
   height: 100%;

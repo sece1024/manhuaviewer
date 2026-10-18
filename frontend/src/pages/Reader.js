@@ -762,6 +762,9 @@ export default function Reader() {
   };
 
   // 图片样式（memoized 避免每次渲染重建）
+  // 三种适应模式都用**显式宽高**而非只给 max-*：max-* 只缩小不放大，图片本身小于
+  // 阅读区时三种模式看起来完全一样（用户会以为"切了没反应"）。高度模式铺满单元格
+  // 再用 object-fit: contain 等比装下整页；宽度模式按宽度铺满、高度可超出（裁切）。
   const imgStyle = useMemo(() => {
     const base = {
       transform: `scale(${scale}) rotate(${rotation}deg) translate(${translate.x / scale}px, ${translate.y / scale}px)`,
@@ -772,9 +775,9 @@ export default function Reader() {
     };
 
     if (longImage) return { width: '100%', height: 'auto', display: 'block', userSelect: 'none', pointerEvents: 'none' };
-    if (fitMode === 'height') return { ...base, maxHeight: '100%', maxWidth: '100%' };
-    if (fitMode === 'width') return { ...base, maxWidth: '100%', height: 'auto' };
-    return { ...base, maxHeight: 'none', maxWidth: 'none' };
+    if (fitMode === 'height') return { ...base, width: '100%', height: '100%', maxWidth: 'none', maxHeight: 'none' };
+    if (fitMode === 'width') return { ...base, width: '100%', height: 'auto', maxWidth: 'none', maxHeight: 'none' };
+    return { ...base, width: 'auto', height: 'auto', maxHeight: 'none', maxWidth: 'none' };
   }, [scale, rotation, translate, longImage, fitMode]);
 
   // 双页模式：RTL（日漫）右页=当前页，左页=下一页；LTR 反之

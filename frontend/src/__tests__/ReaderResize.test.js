@@ -1,5 +1,8 @@
+/* global __dirname */ // 读取 index.css 做布局契约断言需要 fs/path/__dirname
 import { render, screen, waitFor, act, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import fs from 'fs';
+import path from 'path';
 import Reader from '../pages/Reader';
 import { ToastProvider } from '../components/Toast';
 import { SettingsProvider } from '../hooks/useSettings';
@@ -90,22 +93,40 @@ describe('阅读器调整图片大小', () => {
     expect(screen.getByText(/100%/)).toBeInTheDocument();
   });
 
-  test('适应模式选择落到图片尺寸约束上（高/宽/原始）', async () => {
+  test('适应模式选择落到图片尺寸约束上（高/宽/原始，可放大也可缩小）', async () => {
     await openReader();
     const select = screen.getByLabelText('适应模式');
     expect(select.value).toBe('height');
-    expect(img().style.maxHeight).toBe('100%');
+    // 高度模式：铺满单元格 + object-fit:contain = 整页等比装下（小于视口的页也放大）
+    expect(img().style.width).toBe('100%');
+    expect(img().style.height).toBe('100%');
+    expect(img().style.maxWidth).toBe('none');
+    expect(img().style.maxHeight).toBe('none');
+    expect(img().style.objectFit).toBe('contain');
 
     fireEvent.change(select, { target: { value: 'width' } });
-    expect(img().style.maxWidth).toBe('100%');
+    expect(img().style.width).toBe('100%');
     expect(img().style.height).toBe('auto');
+    expect(img().style.maxHeight).toBe('none');
 
     fireEvent.change(select, { target: { value: 'original' } });
+    expect(img().style.width).toBe('auto');
+    expect(img().style.height).toBe('auto');
     expect(img().style.maxHeight).toBe('none');
     expect(img().style.maxWidth).toBe('none');
 
     // 持久化到设置，下次打开沿用
     expect(api.updateSettings).toHaveBeenCalledWith({ reader_fit: 'original' });
+  });
+
+  test('单页容器显式锁定 grid 轨道（auto 行会被图片撑大，令高度约束失效）', () => {
+    // jsdom 不做布局计算，这里守的是根因的静态契约：只写 display:grid 时隐式轨道为
+    // auto，行被 <img> 固有高度撑大，max-height:100% 便解析到内容高度而非阅读区高度，
+    // 竖版页只显示中间一截、切「适应高度」毫无变化。删掉 grid-template 本用例即失败。
+    const css = fs.readFileSync(path.join(__dirname, '..', 'index.css'), 'utf8');
+    const rule = css.match(/\.reader-page-wrapper\s*\{([\s\S]*?)\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[1]).toMatch(/grid-template:\s*100%\s*\/\s*100%/);
   });
 
   test('W 键循环切换适应模式并写回设置', async () => {
@@ -143,14 +164,14 @@ describe('阅读器调整图片大小', () => {
 
   test('旋转 90° 后允许拖动平移（此前 scale=1 时拖动被禁用，被裁掉的部分看不到）', async () => {
     const region = await openReader();
-    const before = { maxHeight: img().style.maxHeight, maxWidth: img().style.maxWidth };
+    const before = { width: img().style.width, height: img().style.height };
 
     pressKey('r');
     await waitFor(() => expect(img().style.transform).toContain('rotate(90deg)'));
 
     // 现状：旋转不重算尺寸约束（布局盒没变），所以超出 overflow:hidden 的部分只能靠拖动看
-    expect(img().style.maxHeight).toBe(before.maxHeight);
-    expect(img().style.maxWidth).toBe(before.maxWidth);
+    expect(img().style.width).toBe(before.width);
+    expect(img().style.height).toBe(before.height);
 
     fireEvent.mouseDown(region, { button: 0, clientX: 100, clientY: 100 });
     fireEvent.mouseMove(region, { clientX: 160, clientY: 100 });
