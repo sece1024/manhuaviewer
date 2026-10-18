@@ -182,7 +182,19 @@ pub async fn lan_ip(req: Request) -> Response {
     Json(serde_json::json!({ "ipv4": ips, "port": port, "loopback": is_loopback })).into_response()
 }
 
-pub async fn export_backup(State(state): State<Arc<AppState>>) -> Response {
+/// GET /api/backup — 导出全库元数据备份。
+///
+/// 只允许回环（本机）请求：备份以 `path` 为键重建关联，而局域网脱敏中间件
+/// （`routes/mod.rs::redact_lan_paths`）会把非回环 JSON 里的每个 `path` 删掉——
+/// 局域网端导出的文件恢复时档案会被静默跳过、标签/分类/历史/书签关联全丢。
+/// 与其返回一份不可恢复的"空壳备份"，不如明确拒绝；桌面端行为不变。
+pub async fn export_backup(State(state): State<Arc<AppState>>, req: Request) -> Response {
+    if !crate::routes::auth::peer_is_loopback(&req) {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "备份导出仅限本机桌面端：备份以主机路径为键，局域网端导出会被脱敏且无法恢复",
+        );
+    }
     db_json(&state, |db| db.export_backup()).await
 }
 

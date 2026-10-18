@@ -369,6 +369,9 @@ pub struct ArchiveQuery {
     /// 标签状态：untagged=未打标签 / tagged=已打标签。缺省不过滤。
     /// 详见 `db::archives::tag_state_clause`
     pub tag_state: Option<String>,
+    /// 档案类型：folder=文件夹 / archive=压缩包。缺省不过滤。
+    /// 必须在服务端过滤：客户端只持有当前一页，过滤后可能把整页筛空。
+    pub archive_type: Option<String>,
     pub group_id: Option<i64>,
     /// 随机排序的会话种子：同一 seed 下顺序确定，滚动加载更多不会跨页重复/遗漏
     pub seed: Option<i64>,
@@ -515,6 +518,7 @@ pub async fn list_archives(
                 query.category_id,
                 query.added_from.as_deref(),
                 query.added_to.as_deref(),
+                query.archive_type.as_deref(),
                 query.read.as_deref(),
                 query.tag_state.as_deref(),
                 sort,
@@ -536,6 +540,7 @@ pub async fn list_archives(
                 query.category_id,
                 query.added_from.as_deref(),
                 query.added_to.as_deref(),
+                query.archive_type.as_deref(),
                 query.read.as_deref(),
                 query.tag_state.as_deref(),
                 sort,
@@ -679,9 +684,9 @@ pub struct UndoDeleteRequest {
 
 /// POST /api/archives/undo-delete — 撤销刚才的「从库中移除」。
 ///
-/// 磁盘上的源文件从来没被删过，所以这里要还原的是**元数据**：档案行（原 id / 原始
-/// created_at / 手动封面 / 合并组归属）、标签与分类关联、书签、阅读进度。令牌一次性，
-/// 有效期见 `services::undo`。
+/// 能走到这里的删除都是默认路径（只删库记录），磁盘源文件没被动过；要还原的是
+/// **元数据**：档案行（原 id / 原始 created_at / 手动封面 / 合并组归属）、标签与分类
+/// 关联、书签、阅读进度。令牌一次性，有效期见 `services::undo`。
 pub async fn undo_delete(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<UndoDeleteRequest>,

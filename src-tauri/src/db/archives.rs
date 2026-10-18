@@ -279,8 +279,15 @@ impl Database {
         offset: i64,
     ) -> Result<Vec<ArchiveRow>> {
         let conn = self.conn()?;
-        let (join_clause, where_clause, mut params) =
-            Self::build_archive_filters(&conn, search, tag, category_id, added_from, added_to)?;
+        let (join_clause, where_clause, mut params) = Self::build_archive_filters(
+            &conn,
+            search,
+            tag,
+            category_id,
+            added_from,
+            added_to,
+            None,
+        )?;
 
         let order_clause = order_expr_for(sort);
         let direction = if order == "asc" { "ASC" } else { "DESC" };
@@ -309,6 +316,7 @@ impl Database {
     /// `read`: None=全部, "unread"=从未读过, "in_progress"=读到一半, "finished"=已读完,
     /// "read"=有阅读记录（在读 + 已读完）。详见 [`read_filter_clause`]。
     /// `tag_state`: None=全部, "untagged"=未打标签, "tagged"=已打标签。详见 [`tag_state_clause`]。
+    /// `archive_type`: None=全部, "folder"=文件夹, "archive"=压缩包（与书库类型筛选一致）。
     #[allow(clippy::too_many_arguments)]
     pub fn list_archives_all(
         &self,
@@ -317,14 +325,22 @@ impl Database {
         category_id: Option<i64>,
         added_from: Option<&str>,
         added_to: Option<&str>,
+        archive_type: Option<&str>,
         read: Option<&str>,
         tag_state: Option<&str>,
         sort: &str,
         order: &str,
     ) -> Result<Vec<ArchiveRow>> {
         let conn = self.conn()?;
-        let (join_clause, mut where_clause, params) =
-            Self::build_archive_filters(&conn, search, tag, category_id, added_from, added_to)?;
+        let (join_clause, mut where_clause, params) = Self::build_archive_filters(
+            &conn,
+            search,
+            tag,
+            category_id,
+            added_from,
+            added_to,
+            archive_type,
+        )?;
 
         where_clause.push_str(&read_filter_clause(read));
         where_clause.push_str(tag_state_clause(tag_state));
@@ -358,6 +374,7 @@ impl Database {
     /// 保持「按首条成员位置」的既有语义。
     ///
     /// 调用方需保证 `sort != "random"`（随机排序依赖路由层的稳定洗牌，单独处理）。
+    /// `archive_type`: None=全部, "folder"=文件夹, "archive"=压缩包。
     #[allow(clippy::too_many_arguments)]
     pub fn list_archives_grouped_page(
         &self,
@@ -366,6 +383,7 @@ impl Database {
         category_id: Option<i64>,
         added_from: Option<&str>,
         added_to: Option<&str>,
+        archive_type: Option<&str>,
         read: Option<&str>,
         tag_state: Option<&str>,
         sort: &str,
@@ -374,8 +392,15 @@ impl Database {
         offset: i64,
     ) -> Result<Vec<GroupedArchiveRow>> {
         let conn = self.conn()?;
-        let (join_clause, mut where_clause, mut params) =
-            Self::build_archive_filters(&conn, search, tag, category_id, added_from, added_to)?;
+        let (join_clause, mut where_clause, mut params) = Self::build_archive_filters(
+            &conn,
+            search,
+            tag,
+            category_id,
+            added_from,
+            added_to,
+            archive_type,
+        )?;
 
         where_clause.push_str(&read_filter_clause(read));
         where_clause.push_str(tag_state_clause(tag_state));
@@ -440,6 +465,7 @@ impl Database {
     /// 构造档案列表查询的 JOIN / WHERE 片段与参数（供 list_archives / list_archives_all /
     /// list_archives_grouped_page 共用）。
     /// `added_from`/`added_to`：按添加日期过滤的本地日期边界（from 含、to 不含）。
+    /// `archive_type`：档案类型（`folder` / 压缩包），缺省不过滤。未知值忽略。
     fn build_archive_filters(
         conn: &rusqlite::Connection,
         search: Option<&str>,
@@ -447,6 +473,7 @@ impl Database {
         category_id: Option<i64>,
         added_from: Option<&str>,
         added_to: Option<&str>,
+        archive_type: Option<&str>,
     ) -> Result<ArchiveFilters> {
         let mut where_clause = String::from("WHERE 1=1");
         let mut join_clause = String::new();
@@ -543,6 +570,14 @@ impl Database {
         if let Some(to) = added_to.filter(|s| !s.is_empty()) {
             where_clause.push_str(" AND a.created_at < datetime(?, 'utc')");
             params.push(Box::new(to.to_string()));
+        }
+
+        // 档案类型：folder=文件夹，archive=压缩包。与前端「类型」下拉一致。
+        // 只认这两个取值，未知值不产生条件（避免把拼错的参数变成"空结果"）。
+        match archive_type {
+            Some("folder") => where_clause.push_str(" AND a.archive_type = 'folder'"),
+            Some("archive") => where_clause.push_str(" AND a.archive_type <> 'folder'"),
+            _ => {}
         }
 
         Ok((join_clause, where_clause, params))
@@ -1341,11 +1376,13 @@ mod read_state_tests {
     }
 
     fn titles(db: &Database, read: Option<&str>) -> Vec<String> {
-        db.list_archives_all(None, None, None, None, None, read, None, "title", "asc")
-            .unwrap()
-            .into_iter()
-            .map(|a| a.title)
-            .collect()
+        db.list_archives_all(
+            None, None, None, None, None, None, read, None, "title", "asc",
+        )
+        .unwrap()
+        .into_iter()
+        .map(|a| a.title)
+        .collect()
     }
 
     /// 断言两侧用同一比较器排序，避免依赖 SQLite 的排序规则。
@@ -1467,11 +1504,13 @@ mod tag_state_tests {
     }
 
     fn titles(db: &Database, tag: Option<&str>, tag_state: Option<&str>) -> Vec<String> {
-        db.list_archives_all(None, tag, None, None, None, None, tag_state, "title", "asc")
-            .unwrap()
-            .into_iter()
-            .map(|a| a.title)
-            .collect()
+        db.list_archives_all(
+            None, tag, None, None, None, None, None, tag_state, "title", "asc",
+        )
+        .unwrap()
+        .into_iter()
+        .map(|a| a.title)
+        .collect()
     }
 
     fn any_order(mut v: Vec<&str>) -> Vec<String> {
