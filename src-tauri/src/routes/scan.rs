@@ -122,43 +122,55 @@ fn worker_count(tasks: usize) -> usize {
     hw.clamp(1, 8).min(tasks.max(1))
 }
 
+/// 遍历阶段耗时等的毫秒格式化：<1s 用 ms，否则保留一位小数。
+fn fmt_ms(ms: u128) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    }
+}
+
 fn scan_inner(
     db: &crate::db::Database,
     root_dir: &str,
     depth: u32,
     job: &Arc<ScanJob>,
 ) -> anyhow::Result<serde_json::Value> {
+    let t_total = std::time::Instant::now();
     let scanner = crate::services::scanner::Scanner::new();
+
+    // 遍历：候选档案的类型、大小、mtime 都在这一步一并拿到（见 scanner::Discovered），
+    // 后续判定不再为每个档案重复 stat。
+    let t = std::time::Instant::now();
     let discovered = scanner.scan_directory(root_dir, depth)?;
+    let walk_ms = t.elapsed().as_millis();
     job.total.store(discovered.len(), Ordering::SeqCst);
-    let present: HashSet<String> = discovered.iter().cloned().collect();
+    let present: HashSet<&str> = discovered.iter().map(|d| d.path.as_str()).collect();
 
     // 快照：本 root 下已入库档案的 (page_count, file_size, file_mtime)
+    let t = std::time::Instant::now();
     let meta = db.scan_meta_for_root(root_dir)?;
+    let meta_ms = t.elapsed().as_millis();
     let meta_by_path: HashMap<&str, (i64, i64, i64)> = meta
         .iter()
         .map(|(p, pc, fs, fm)| (p.as_str(), (*pc, *fs, *fm)))
         .collect();
 
-    // 第一遍（遍历 + 分类，快）：跳过未变化档案，其余收集待数页
+    // 第一遍（分类）：跳过未变化档案，其余收集待数页。纯内存比对，不再有 I/O。
+    let t = std::time::Instant::now();
     let mut pending: Vec<Pending> = Vec::with_capacity(discovered.len());
-    for archive_path in &discovered {
+    for d in &discovered {
         if job.cancel.load(Ordering::SeqCst) {
             break;
         }
 
-        let archive_type = scanner.detect_archive_type(archive_path);
-        let path = std::path::Path::new(archive_path);
-
-        let file_size = std::fs::metadata(archive_path)
-            .map(|m| m.len() as i64)
-            .unwrap_or(0);
-        let file_mtime = super::archives::archive_mtime_secs(archive_path);
-        let existing = meta_by_path.get(archive_path.as_str()).copied();
+        let archive_type = scanner.detect_archive_type_with(&d.path, d.is_dir);
+        let existing = meta_by_path.get(d.path.as_str()).copied();
 
         // 文件签名（mtime+size）与已入库一致且已有页数 → 完全跳过，不再开包数页
         if let Some((pc, fs, fm)) = existing {
-            if fm == file_mtime && fs == file_size && pc > 0 {
+            if fm == d.file_mtime && fs == d.file_size && pc > 0 {
                 job.unchanged.fetch_add(1, Ordering::SeqCst);
                 job.done.fetch_add(1, Ordering::SeqCst);
                 continue;
@@ -168,13 +180,14 @@ fn scan_inner(
             job.added.fetch_add(1, Ordering::SeqCst);
         }
 
+        let path = std::path::Path::new(&d.path);
         let title = {
             let relative = path.strip_prefix(root_dir).unwrap_or(path);
             let first = relative.components().next();
             match first {
                 Some(std::path::Component::Normal(name)) => {
                     let s = name.to_string_lossy().to_string();
-                    if path.is_file() {
+                    if !d.is_dir {
                         std::path::Path::new(&s)
                             .file_stem()
                             .unwrap_or_default()
@@ -194,15 +207,17 @@ fn scan_inner(
 
         pending.push(Pending {
             title,
-            path: archive_path.clone(),
+            path: d.path.clone(),
             archive_type,
-            file_size,
-            file_mtime,
+            file_size: d.file_size,
+            file_mtime: d.file_mtime,
             page_count: 0,
         });
     }
+    let compare_ms = t.elapsed().as_millis();
 
     // 第二遍（并行数页，慢）：每个索引只被一个线程处理，用原子数组收集结果
+    let t = std::time::Instant::now();
     if !pending.is_empty() {
         let counts: Vec<AtomicI64> = (0..pending.len()).map(|_| AtomicI64::new(0)).collect();
         let cursor = AtomicUsize::new(0);
@@ -229,8 +244,10 @@ fn scan_inner(
             p.page_count = counts[i].load(Ordering::SeqCst);
         }
     }
+    let count_ms = t.elapsed().as_millis();
 
     // 单事务批量写入，避免每个档案单独获取连接 + SELECT id
+    let t = std::time::Instant::now();
     let upserts: Vec<(String, String, String, i64, i64, i64)> = pending
         .iter()
         .map(|p| {
@@ -245,6 +262,7 @@ fn scan_inner(
         })
         .collect();
     db.batch_upsert_scanned_archives(&upserts)?;
+    let write_ms = t.elapsed().as_millis();
 
     // 清理孤儿档案：本 root 下、磁盘上确实已不存在的路径（只清本 root，不影响其它根）。
     // 磁盘上仍存在但本次扫描未发现的路径（深度限制、扩展名白名单外、无图片文件夹、
@@ -252,7 +270,7 @@ fn scan_inner(
     let mut removed = 0usize;
     let mut skipped = 0usize;
     for (row_path, _pc, _fs, _fm) in &meta {
-        if present.contains(row_path) {
+        if present.contains(row_path.as_str()) {
             continue; // 本次扫描已发现，保留
         }
         if std::path::Path::new(row_path).exists() {
@@ -269,26 +287,52 @@ fn scan_inner(
         job.removed.fetch_add(1, Ordering::SeqCst);
     }
     job.skipped.store(skipped, Ordering::SeqCst);
+    let cleanup_ms = t.elapsed().as_millis();
 
     let added = job.added.load(Ordering::SeqCst);
     let updated = job.updated.load(Ordering::SeqCst);
     let cancelled = job.cancel.load(Ordering::SeqCst);
+    let total_ms = t_total.elapsed().as_millis();
+
+    // 各阶段耗时：书库很大或库在慢盘/网络盘上时，「时间花在遍历、数页还是入库」是
+    // 判断该往哪优化的唯一依据，所以既写日志，也塞进汇总文案（扫描完成后用户直接
+    // 在自己的提示里就能看到）。
+    tracing::info!(
+        "扫描耗时（{} 个档案）：遍历 {} · 建快照 {} · 比对 {} · 数页 {} · 入库 {} · 清理 {} · 合计 {}",
+        discovered.len(),
+        fmt_ms(walk_ms),
+        fmt_ms(meta_ms),
+        fmt_ms(compare_ms),
+        fmt_ms(count_ms),
+        fmt_ms(write_ms),
+        fmt_ms(cleanup_ms),
+        fmt_ms(total_ms),
+    );
+    let timing = format!(
+        "（耗时 {}：遍历 {} · 数页 {}）",
+        fmt_ms(total_ms),
+        fmt_ms(walk_ms),
+        fmt_ms(count_ms),
+    );
+
     let message = if cancelled {
         format!(
-            "扫描已取消：共发现 {} 个档案，新增 {}，更新 {}，清理 {} 个已删除档案",
-            discovered.len(),
-            added,
-            updated,
-            removed
-        )
-    } else {
-        format!(
-            "扫描完成：共 {} 个档案，新增 {}，更新 {}，清理 {} 个已删除档案，跳过 {} 个仍存在的档案",
+            "扫描已取消：共发现 {} 个档案，新增 {}，更新 {}，清理 {} 个已删除档案{}",
             discovered.len(),
             added,
             updated,
             removed,
-            skipped
+            timing
+        )
+    } else {
+        format!(
+            "扫描完成：共 {} 个档案，新增 {}，更新 {}，清理 {} 个已删除档案，跳过 {} 个仍存在的档案{}",
+            discovered.len(),
+            added,
+            updated,
+            removed,
+            skipped,
+            timing
         )
     };
 
@@ -300,6 +344,15 @@ fn scan_inner(
         "skipped": skipped,
         "cancelled": cancelled,
         "message": message,
+        "timings": {
+            "walk_ms": walk_ms,
+            "meta_ms": meta_ms,
+            "compare_ms": compare_ms,
+            "count_ms": count_ms,
+            "write_ms": write_ms,
+            "cleanup_ms": cleanup_ms,
+            "total_ms": total_ms,
+        },
     }))
 }
 
@@ -471,5 +524,35 @@ mod tests {
         assert_eq!(second.added.load(Ordering::SeqCst), 0);
         assert_eq!(second.done.load(Ordering::SeqCst), 1);
         assert_eq!(out["added"].as_u64(), Some(0));
+
+        // 汇总里带各阶段耗时，重扫时应只有遍历（walk_ms）有实际开销
+        let timings = &out["timings"];
+        assert!(timings["walk_ms"].as_u64().is_some(), "{timings}");
+        assert!(timings["total_ms"].as_u64().is_some(), "{timings}");
+        let message = out["message"].as_str().unwrap();
+        assert!(message.contains("耗时"), "汇总应带耗时：{message}");
+        assert!(message.contains("遍历"), "汇总应带阶段拆分：{message}");
+    }
+
+    /// 增量跳过的判定依据来自遍历阶段顺带取到的 size/mtime，不再为每个档案重复 stat。
+    #[test]
+    fn discovered_metadata_matches_filesystem() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("lib");
+        std::fs::create_dir_all(&root).unwrap();
+        let book = root.join("book.cbz");
+        std::fs::write(&book, b"1234567890").unwrap();
+
+        let found = crate::services::scanner::Scanner::new()
+            .scan_directory(root.to_str().unwrap(), 1)
+            .unwrap();
+        let entry = found
+            .iter()
+            .find(|d| d.path == book.to_string_lossy())
+            .expect("应发现 book.cbz");
+        assert!(!entry.is_dir);
+        assert_eq!(entry.file_size, 10);
+        let real = crate::services::fs_ext::mtime_secs(&book);
+        assert_eq!(entry.file_mtime, real);
     }
 }
