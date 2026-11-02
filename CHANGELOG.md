@@ -6,6 +6,17 @@
 
 <!-- git-cliff: end of header -->
 
+## [3.7.4](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.4) - 2026-11-02
+
+### 🐛 修复
+
+- *(reader)* 双页「过宽」改按页面实际缩放判定，竖版页不再被强制单页([ba48f0c](https://github.com/sece1024/manhuaviewer/commit/ba48f0cbaa99b5bc75d6f77513eb43b162a4a60a))
+
+
+### ⚡ 性能
+
+- *(scan)* 复用遍历拿到的元数据，去掉每个档案的重复 stat，并输出各阶段耗时([e109636](https://github.com/sece1024/manhuaviewer/commit/e1096367df72af46f5a2d3d8c20e3d7c19922f44))
+
 ## [3.7.3](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.3) - 2026-11-02
 
 ### 🐛 修复
