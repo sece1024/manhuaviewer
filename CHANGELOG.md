@@ -6,6 +6,13 @@
 
 <!-- git-cliff: end of header -->
 
+## [3.7.3](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.3) - 2026-11-02
+
+### 🐛 修复
+
+- *(reader)* 修好单页「适应高度」失效与图片溢出([800d5f1](https://github.com/sece1024/manhuaviewer/commit/800d5f1c5c708db1d6b9a0032027d425061534f3))
+- *(reader)* 高度改走 flex，修好 Windows 首帧「适应高度」失效([b88c349](https://github.com/sece1024/manhuaviewer/commit/b88c349813a4ca7aa391e329633836c8252e47d7))
+
 ## [3.7.2](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.2) - 2026-10-18
 
 ### 🐛 修复
