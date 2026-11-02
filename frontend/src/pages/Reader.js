@@ -473,24 +473,47 @@ export default function Reader() {
     showOverlay(`${newIndex + 1} / ${pages.length}`);
   }, [pages.length, pages, pageReady, showOverlay]);
 
+  // 当前页在双页里会不会被挤小 → 自动按单页显示（仅对“适应高度”的 contain 适配有意义）。
+  // 判据是「双页时这一页比单页时小多少」，不再用「页宽占容器宽度的比例」——后者在
+  // 宽屏上对竖版页恒成立（两侧留白本来就有），会把完全放得下的双页也强制成单页。
+  // 放在翻页逻辑之前：步进要看「实际渲染的是双页还是单页」，不能只看 doublePage 开关。
+  const wideSpread = useMemo(() => {
+    if (!doublePage || !autoSingleWide || fitMode !== 'height') return false;
+    const cur = pages[currentIndex];
+    // 读取 pageDimsVersion 是有意为之：尺寸写在 ref 上、ref 变化不触发重渲染，
+    // 需要这个版本号作为 memo 的失效信号（见 recordPageDims）。
+    void pageDimsVersion;
+    const dims = cur ? pageDimsRef.current[cur.id] : null;
+    if (!dims) {
+      // 新页尺寸未知：沿用上一次判定，避免「过宽→未知→闪回双页跨页」的残影
+      return wideSpreadStickyRef.current;
+    }
+    const wide = spreadTooWide(dims, readerSize, { gap: 4, minPageRatio: WIDE_SPREAD_MIN_PAGE_RATIO });
+    wideSpreadStickyRef.current = wide;
+    return wide;
+  }, [doublePage, autoSingleWide, fitMode, pages, currentIndex, readerSize, pageDimsVersion]);
+  // 实际布局是否双页：双页开关打开但这一页被降级成单页时，翻页按单页步进——
+  // 否则会跳过与它配对的下一页（横版跨页本来就只占一个页位）。
+  const effectiveDouble = doublePage && !wideSpread;
+
   const goPrev = useCallback(() => {
     // 步进 = 双页 2 / 单页 1。RTL 与 LTR 的“阅读前进方向”都是索引递增（页序按索引排列），
     // 版面左右镜像由 doubleLeft/doubleRight 与点击区各自处理，翻页方向不再按语向反转。
-    const step = doublePage ? 2 : 1;
+    const step = effectiveDouble ? 2 : 1;
     const target = currentIndexRef.current - step;
     if (target < 0) {
       // 第一页继续往前 → 上一话（组内）；没有则环回本册末页
       // （双页模式回到末跨页起始页：偶数页数 len-2，奇数页数末页单张 len-1）
       if (!jumpToSiblingChapter(-1)) {
-        goPage(doublePage && pages.length % 2 === 0 ? pages.length - 2 : pages.length - 1);
+        goPage(effectiveDouble && pages.length % 2 === 0 ? pages.length - 2 : pages.length - 1);
       }
       return;
     }
     goPage(target);
-  }, [doublePage, goPage, jumpToSiblingChapter, pages.length]);
+  }, [effectiveDouble, goPage, jumpToSiblingChapter, pages.length]);
 
   const goNext = useCallback(() => {
-    const step = doublePage ? 2 : 1;
+    const step = effectiveDouble ? 2 : 1;
     const target = currentIndexRef.current + step;
     if (target >= pages.length) {
       // 末页继续 → 下一话（合并组内，用户显式合并过 = 明确的阅读顺序，可直接跳）；
@@ -500,7 +523,7 @@ export default function Reader() {
       return;
     }
     goPage(target);
-  }, [doublePage, goPage, jumpToSiblingChapter, pages.length]);
+  }, [effectiveDouble, goPage, jumpToSiblingChapter, pages.length]);
 
   // 长图模式：滚动到整本书末尾时自动续下一话（每次到达末尾只触发一次）；
   // 组内没有下一话则弹「本话读完」，不再静默滚回顶部
@@ -785,31 +808,11 @@ export default function Reader() {
     ? [pages[currentIndex + 1], pages[currentIndex]]
     : [pages[currentIndex], pages[currentIndex + 1]];
 
-  // 当前跨页是否“过宽”→ 自动按单页显示（仅对“适应高度”的 contain 适配有意义）。
-  // 整跨页 contain 后当前页宽度 < 容器宽度 × WIDE_SPREAD_MIN_PAGE_RATIO 即视为过度缩小。
-  const wideSpread = useMemo(() => {
-    if (!doublePage || !autoSingleWide || fitMode !== 'height') return false;
-    const cur = pages[currentIndex];
-    const other = pages[currentIndex + 1];
-    // 读取 pageDimsVersion 是有意为之：尺寸写在 ref 上、ref 变化不触发重渲染，
-    // 需要这个版本号作为 memo 的失效信号（见 recordPageDims）。
-    void pageDimsVersion;
-    const dims = cur ? pageDimsRef.current[cur.id] : null;
-    if (!dims) {
-      // 新页尺寸未知：沿用上一次判定，避免「过宽→未知→闪回双页跨页」的残影
-      return wideSpreadStickyRef.current;
-    }
-    const otherDims = other ? pageDimsRef.current[other.id] || null : null;
-    const wide = spreadTooWide(dims, otherDims, readerSize, { gap: 4, minPageRatio: WIDE_SPREAD_MIN_PAGE_RATIO });
-    wideSpreadStickyRef.current = wide;
-    return wide;
-  }, [doublePage, autoSingleWide, fitMode, pages, currentIndex, readerSize, pageDimsVersion]);
-
-  // 首次触发过宽降级时提示一次（换档后复位），避免用户困惑“为什么双页变单页了”
+  // 首次触发降级时提示一次（换档后复位），避免用户困惑“为什么双页变单页了”
   useEffect(() => {
     if (wideSpread && !wideHintShownRef.current) {
       wideHintShownRef.current = true;
-      showOverlay('跨页过宽，已自动按单页显示');
+      showOverlay('两页并排会把画面缩小，已改为单页显示');
     }
   }, [wideSpread, showOverlay]);
 

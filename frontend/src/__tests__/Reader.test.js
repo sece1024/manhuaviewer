@@ -389,7 +389,7 @@ describe('Reader 双页过宽自动降级（wideSpread）', () => {
     api.saveHistory.mockResolvedValue({});
     api.updateSettings.mockResolvedValue({});
     api.getGroupChapters.mockResolvedValue([]);
-    // 让 ResizeObserver 一 observe 就回填宽屏尺寸：竖版跨页在 1920×1080 下会判定过宽
+    // 让 ResizeObserver 一 observe 就回填宽屏尺寸（1920×1080）
     global.ResizeObserver = class {
       constructor(cb) { this.cb = cb; }
       observe() { this.cb([{ contentRect: { width: 1920, height: 1080 } }], this); }
@@ -398,32 +398,52 @@ describe('Reader 双页过宽自动降级（wideSpread）', () => {
     };
   });
 
-  // 给 <img> 注入自然尺寸，让 onLoad 里 recordPageDims 记录到 800×1200（竖版）
+  // 给 <img> 注入自然尺寸，让 onLoad 里 recordPageDims 记录到指定尺寸
   const loadAt = (img, w = 800, h = 1200) => {
     Object.defineProperty(img, 'naturalWidth', { value: w, configurable: true });
     Object.defineProperty(img, 'naturalHeight', { value: h, configurable: true });
     return fireEvent.load(img);
   };
 
-  test('过宽跨页翻到新页时不再闪回双页（回归：残影）', async () => {
+  test('竖版跨页两侧留白但画面没变小 → 保持双页（回归：不再按容器宽度比例误判）', async () => {
     renderReader();
     await screen.findByRole('region', { name: /页面阅读区/ });
 
-    // 开启双页：竖版跨页过宽 → 记录尺寸后自动降级为单页
     await act(async () => { fireEvent.click(screen.getByLabelText('启用双页模式')); });
     const spread = document.querySelector('.reader-spread');
-    expect(spread).not.toBeNull(); // 尺寸还没就绪，暂时是跨页
+    expect(spread).not.toBeNull();
 
-    // 两张跨页图加载（800×1200），recordPageDims → 过宽 → 降级单页
+    // 800×1200 竖版页在 1920×1080 里双页/单页都按 1080 高显示（页宽 720 = 容器 37.5%），
+    // 画面并没有被挤小；旧判据（<40% 容器宽）会在这里强行降级成单页
     const imgs = [...spread.querySelectorAll('img')];
     await act(async () => { imgs.forEach((i) => loadAt(i)); });
-    expect(document.querySelector('.reader-spread')).toBeNull(); // 已降级单页
 
-    // 翻到下一页：新页尺寸未知 → 粘性宽判定应保持单页，而不是闪回双页
+    expect(document.querySelector('.reader-spread')).not.toBeNull();
+    expect(screen.getByAltText('page-1.jpg')).toBeInTheDocument();
+    expect(screen.getByAltText('page-2.jpg')).toBeInTheDocument();
+  });
+
+  test('横版跨页被挤到半个宽度 → 降级单页，翻页不闪回双页（回归：残影）', async () => {
+    renderReader();
+    await screen.findByRole('region', { name: /页面阅读区/ });
+
+    // 开启双页：尺寸还没就绪，暂时是跨页
+    await act(async () => { fireEvent.click(screen.getByLabelText('启用双页模式')); });
+    const spread = document.querySelector('.reader-spread');
+    expect(spread).not.toBeNull();
+
+    // 两张 1600×900 横版跨页图加载后：单页宽 1920，双页只有半宽 958 → 明显缩小 → 降级
+    const imgs = [...spread.querySelectorAll('img')];
+    await act(async () => { imgs.forEach((i) => loadAt(i, 1600, 900)); });
+    expect(document.querySelector('.reader-spread')).toBeNull(); // 已降级单页
+    expect(document.querySelector('.reader-page-wrapper')).not.toBeNull();
+
+    // 降级成单页后按单页步进：横版跨页只占一个页位，下一页不能被跳过（page-2），
+    // 且新页同样是横版 → 仍单页显示，不闪回双页
     pressKey('ArrowRight');
     expect(document.querySelector('.reader-spread')).toBeNull();
-    // 单页分支仍在渲染（RTL 下 goNext 步进 2，当前页应为 page-3）
-    expect(screen.queryByAltText('page-3.jpg')).not.toBeNull();
+    expect(screen.queryByAltText('page-2.jpg')).not.toBeNull();
+    expect(screen.queryByAltText('page-1.jpg')).toBeNull();
   });
 });
 

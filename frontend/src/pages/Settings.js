@@ -812,7 +812,7 @@ export default function Settings() {
         <div className="settings-row">
           <div>
             <div className="settings-row-label">跨页过宽自动单页</div>
-            <div className="settings-row-desc">双页模式下，整跨页适配后单页仍过小（如横版漫画、宽屏显示器）时自动改为单页显示</div>
+            <div className="settings-row-desc">双页模式下，两页并排会让当前页明显小于单页显示（通常是横版跨页）时自动改为单页；竖版页即使两侧留白也保持双页</div>
           </div>
           <input type="checkbox" checked={settings.reader_auto_single !== '0'} onChange={(e) => handleUpdateSetting('reader_auto_single', e.target.checked ? '1' : '0')} />
         </div>
