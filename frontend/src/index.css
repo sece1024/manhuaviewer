@@ -1387,8 +1387,29 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   display: contents; /* 桌面端：内容直接参与 flex 布局 */
 }
 
+/* 阅读器路由下主内容区改成纵向 flex：阅读页的高度由 flex 分配，而不是 height:100%。
+   WebView2/Blink 首帧不把「被 align-items:stretch 拉高的 flex 子项」当作百分比高度的
+   确定基准（CSS Flexbox 里 definite 的判定各家实现并不一致），而 .main-content 正是
+   这样一个拉伸项。此前 .reader-root 写的是 height:100%，在 Windows 上会退化成 auto——
+   阅读区跟着图片固有高度长高，「适应高度」实际变成「适应宽度」，竖版页只露出一部分，
+   必须手动改一次窗口宽度触发重排才恢复正常。改成 flex 后高度是布局算出来的 px 值，
+   与百分比规则无关；分组章节列表等普通页面仍是 main-content 的 flex 子项，内容超高
+   时照常滚动。 */
+.app-layout.reader-immersive .main-content {
+  display: flex;
+  flex-direction: column;
+}
+.reader-root {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .reader-container {
   flex: 1;
+  /* 允许阅读区被工具栏/进度条挤压，绝不反过来把父级撑高 */
+  min-height: 0;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -1411,11 +1432,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 
 /* 双页跨页布局：左右等宽侧栏盒固定占位，尺寸不随图片解码状态跳动——
    此前 <img> 直接作为行内 flex 子项，解码前为 0 尺寸、行随解码生长再被整体
-   居中，Windows 上解码慢时每次翻页都出现整行位移/重心跳动与空白闪烁帧 */
+   居中，Windows 上解码慢时每次翻页都出现整行位移/重心跳动与空白闪烁帧。
+
+   绝对定位铺满阅读区（inset:0）而不是 width/height:100%：阅读区的尺寸来自
+   上级 flex 分配，用 inset 引用它的 padding box 是「已解析的盒子」，不再经过
+   百分比高度的定义性判定，Windows 上不会因为首帧基准不确定而退化成内容尺寸。 */
 .reader-spread {
-  position: relative;
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 0;
   display: flex;
   gap: 4px;
 }
@@ -1438,19 +1462,23 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 }
 
 .reader-page-wrapper {
-  position: relative;
-  /* grid + place-items：让「当前页」与「翻页时的旧页垫底」叠在同一个居中单元格，
+  /* 绝对定位铺满阅读区：尺寸直接取「已解析」的阅读区盒子（inset），不再依赖从
+   * .reader-root 一路传下来的百分比高度——那条链在 Windows/WebView2 首帧会断
+   * （见 .reader-root 注释），断了以后网格行退化成 auto、图片按宽度铺满，竖版页
+   * 就只剩一部分。绝对定位不参与百分比的「确定性」判定。
+   *
+   * grid + place-items：让「当前页」与「翻页时的旧页垫底」叠在同一个居中单元格，
    * 两张图都 grid-area 1/1 重叠居中，翻到冷页时旧图继续挡背景、不闪一下。
    *
    * grid-template 是**必需的**：只写 display:grid 时隐式轨道是 auto，行会被 <img>
-   * 的固有尺寸撑大（甚至溢出容器），图片的 max-height:100% 因此解析到"内容高度"
+   * 的固有尺寸撑大（甚至溢出容器），图片的 height:100% 因此解析到"内容高度"
    * 而不是阅读区高度——表现为竖版页只显示中间一截、"适应高度"切换后毫无变化。
    * 锁定 100% / 100% 后网格区域恒等于容器，百分比约束才有意义。 */
+  position: absolute;
+  inset: 0;
   display: grid;
   grid-template: 100% / 100%;
   place-items: center;
-  width: 100%;
-  height: 100%;
 }
 
 .reader-page-loading {

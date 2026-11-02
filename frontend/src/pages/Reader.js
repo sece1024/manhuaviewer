@@ -900,7 +900,8 @@ export default function Reader() {
   }
 
   return (
-    <div ref={bindContainer} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    /* 高度不走 height:100%：见 index.css .reader-root 的说明（Windows 首帧百分比会退化成 auto） */
+    <div ref={bindContainer} className="reader-root">
       {/* 工具栏 */}
       <div className="reader-toolbar">
         <button className="btn btn-secondary btn-icon" onClick={() => navigate('/')} aria-label="返回书库">←</button>

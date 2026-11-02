@@ -129,6 +129,39 @@ describe('阅读器调整图片大小', () => {
     expect(rule[1]).toMatch(/grid-template:\s*100%\s*\/\s*100%/);
   });
 
+  test('阅读页高度走 flex 而不是百分比（WebView2 首帧百分比会退化成 auto）', async () => {
+    // 根因：桌面端 .main-content 是横向 flex 的拉伸项，WebView2/Blink 首帧不把拉伸
+    // 出来的高度当作百分比基准，.reader-root 上的 height:100% 于是变成 auto——阅读区
+    // 跟着图片固有高度长高，「适应高度」实际是「适应宽度」，竖版页只露一部分，必须
+    // 手动改一次窗口宽度触发重排才恢复。jsdom 不算布局，这里守静态契约。
+    await openReader();
+    const root = document.querySelector('.reader-root');
+    expect(root).not.toBeNull();
+    // 内联 height:100%（或任何 height）会把百分比依赖重新引进来
+    expect(root.style.height).toBe('');
+
+    const css = fs.readFileSync(path.join(__dirname, '..', 'index.css'), 'utf8');
+    // (1) 阅读器路由下 main-content 是纵向 flex 容器
+    const main = css.match(/\.app-layout\.reader-immersive\s+\.main-content\s*\{([\s\S]*?)\}/);
+    expect(main).not.toBeNull();
+    expect(main[1]).toMatch(/display:\s*flex/);
+    expect(main[1]).toMatch(/flex-direction:\s*column/);
+
+    // (2) .reader-root 用 flex 吃掉剩余高度，且不再写 height:100%
+    const rootRule = css.match(/\.reader-root\s*\{([\s\S]*?)\}/);
+    expect(rootRule).not.toBeNull();
+    expect(rootRule[1]).toMatch(/flex:\s*1/);
+    expect(rootRule[1]).not.toMatch(/height:\s*100%/);
+
+    // (3) 单页/双页舞台绝对定位铺满阅读区，不经过百分比高度链
+    const wrapper = css.match(/\.reader-page-wrapper\s*\{([\s\S]*?)\}/);
+    expect(wrapper[1]).toMatch(/position:\s*absolute/);
+    expect(wrapper[1]).toMatch(/inset:\s*0/);
+    const spread = css.match(/\.reader-spread\s*\{([\s\S]*?)\}/);
+    expect(spread[1]).toMatch(/position:\s*absolute/);
+    expect(spread[1]).toMatch(/inset:\s*0/);
+  });
+
   test('W 键循环切换适应模式并写回设置', async () => {
     await openReader();
     expect(screen.getByLabelText('适应模式').value).toBe('height');
