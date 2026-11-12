@@ -6,6 +6,12 @@
 
 <!-- git-cliff: end of header -->
 
+## [3.7.5](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.5) - 2026-11-12
+
+### 🐛 修复
+
+- *(library)* 默认按添加时间排序，排序方式在本次运行内保留([0ef3eb3](https://github.com/sece1024/manhuaviewer/commit/0ef3eb360ede26da6b8252e0b9e19560c5041357))
+
 ## [3.7.4](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.4) - 2026-11-02
 
 ### 🐛 修复
