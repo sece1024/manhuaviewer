@@ -506,7 +506,9 @@ pub async fn list_archives(
 
         // 分页钳制与 OPDS 共用（routes/mod.rs::clamp_pagination）
         let (_page, limit, offset) = super::clamp_pagination(query.page, query.limit, 500);
-        let sort = query.sort.as_deref().unwrap_or("updated");
+        // 未显式指定排序时按「添加时间」倒序，与书库默认一致：
+        // 阅读行为不会改变列表顺序（按最近阅读排会把刚读完的顶到最前）。
+        let sort = query.sort.as_deref().unwrap_or("created");
         let order = query.order.as_deref().unwrap_or("desc");
 
         let mut grouped: Vec<ListItem> = if sort == "random" {

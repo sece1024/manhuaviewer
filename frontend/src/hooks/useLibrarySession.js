@@ -7,6 +7,23 @@ import { membershipChanged, idsWithin } from '../utils/listReconcile';
 // 模块级 —— Library 卸载（进入阅读器等路由）后保留，返回时可秒开旧列表。
 const librarySessions = {};
 
+// 排序方式的「本次运行」记忆：与列表会话分开存放。
+// 列表会话会因扫描/删除等写操作整体作废（成员代际变化），但用户手动选过的排序方式
+// 必须保留到关闭程序为止；列表会话失效重拉时也应继续用它，而不是退回服务端默认值。
+// 只放内存：重启程序后回到「默认排序」，符合“本次关闭程序前记住”的语义。
+let sessionSort = null;
+
+/// 本次运行里用户选过的排序方式；未选过返回 null（此时跟随 settings.sort_by）。
+export function peekSessionSort() {
+  return sessionSort;
+}
+
+/// 记住用户选定的排序方式（sortBy 为空视为未选，忽略）。
+export function rememberSessionSort(sortBy, sortOrder) {
+  if (!sortBy) return;
+  sessionSort = { sortBy, sortOrder: sortOrder || 'desc' };
+}
+
 // 会话里最多保留的档案条数：与 reconcileLibrary 的比对窗口（500）一致。
 // 超出部分不常驻内存——卸载时若把翻了几十页的整份列表都存进会话，这份引用会让
 // 整个数组（可能上万条）在下次进入书库前一直不被 GC；截断后超出的条目返回时由
@@ -23,8 +40,10 @@ function sessionIsStale(session) {
 }
 
 /// 测试辅助：清空模块级会话缓存（跨用例隔离；模块级缓存不会随卸载消失）。
+/// 一并清掉排序方式的运行期记忆，否则改了排序的用例会污染后续用例。
 export function clearLibrarySessions() {
   for (const key of Object.keys(librarySessions)) delete librarySessions[key];
+  sessionSort = null;
 }
 
 /**

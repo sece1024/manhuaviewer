@@ -5,7 +5,7 @@ import { formatSize, formatDateShort, splitPathParts, lastPathPart, readStateOf,
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
 import useTags from '../hooks/useTags';
-import useLibrarySession from '../hooks/useLibrarySession';
+import useLibrarySession, { peekSessionSort, rememberSessionSort } from '../hooks/useLibrarySession';
 import LazyImage from '../components/LazyImage';
 import TagPicker from '../components/TagPicker';
 import CategoryPicker from '../components/CategoryPicker';
@@ -270,8 +270,12 @@ export default function Library({ mode = 'library', enableSession }) {
   const [viewMode, setViewMode] = useState(() => settings.view_mode || 'grid');
   // 网格卡片密度：large | normal | compact（封面优先的视觉密度，仅影响网格布局）
   const [cardDensity, setCardDensity] = useState(() => settings.card_density || 'normal');
-  const [sortBy, setSortBy] = useState(() => settings.sort_by || 'updated');
-  const [sortOrder, setSortOrder] = useState(() => settings.sort_order || 'desc');
+  // 排序：默认按「添加时间」倒序（最近入库的在前）。
+  // 本次运行里手动选过的排序优先于服务端默认值（本页卸载重进、扫描后会话作废都保留），
+  // 这样读完一本漫画再回书库，排序方式与顺序都不会变。
+  const bootSort = useRef(peekSessionSort());
+  const [sortBy, setSortBy] = useState(() => bootSort.current?.sortBy || settings.sort_by || 'created');
+  const [sortOrder, setSortOrder] = useState(() => bootSort.current?.sortOrder || settings.sort_order || 'desc');
   const [selectedTag, setSelectedTag] = useState('');
   const [readFilter, setReadFilter] = useState('all'); // all | unread | in_progress | finished（与后端 read 参数取值一致）
   // 标签状态：all | untagged | tagged（与后端 tag_state 取值一致）。“未打标签”既是
@@ -374,8 +378,8 @@ export default function Library({ mode = 'library', enableSession }) {
     if (jobs.scan.finishedAt === seenScanFinishedAt.current) return;
     seenScanFinishedAt.current = jobs.scan.finishedAt;
     if (jobs.scan.error) return; // 失败由 useScan 提示，列表无需重拉
-    // 扫描会新增/清理档案：重拉列表让新入库的条目直接可见。默认排序是「最近阅读」
-    // = COALESCE(last_read_at, updated_at)，新条目没有 last_read_at，天然排在前面。
+    // 扫描会新增/清理档案：重拉列表让新入库的条目直接可见。默认排序是「添加时间」，
+    // 新扫描到的条目 created_at 最新，天然排在前面。
     restoredFiltersRef.current = null; // 别让会话恢复的"跳过重拉"把这次刷新吃掉
     setReloadTick(t => t + 1);
   }, [jobs.scan.finishedAt, jobs.scan.error]);
@@ -415,6 +419,25 @@ export default function Library({ mode = 'library', enableSession }) {
     setTypeFilter(v);
     typeFilterRef.current = v;
   }, [settings.type_filter]);
+  // 排序默认值同样来自服务端设置，且是异步到达的：本次运行还没手动选过排序时跟随它
+  // 同步一次（localStorage 里可能还留着上一版的旧默认值）。一旦用户在书库选过排序，
+  // 以运行期记忆为准，不再被晚到的设置覆盖。
+  useEffect(() => {
+    if (peekSessionSort()) return;
+    const v = settings.sort_by;
+    if (v && v !== sortByRef.current) {
+      sortByRef.current = v;
+      setSortBy(v);
+    }
+  }, [settings.sort_by]);
+  useEffect(() => {
+    if (peekSessionSort()) return;
+    const v = settings.sort_order;
+    if (v && v !== sortOrderRef.current) {
+      sortOrderRef.current = v;
+      setSortOrder(v);
+    }
+  }, [settings.sort_order]);
   useEffect(() => { selectedCategoryRef.current = selectedCategory; }, [selectedCategory]);
   useEffect(() => { addedRangeRef.current = addedRange; }, [addedRange]);
   useEffect(() => { searchRef.current = search; }, [search]);
@@ -466,8 +489,9 @@ export default function Library({ mode = 'library', enableSession }) {
         : 'all';
       const tagStateRestored = ['untagged', 'tagged'].includes(s.tagState) ? s.tagState : 'all';
       setSearch(s.search); searchRef.current = s.search;
-      setSortBy(s.sortBy); sortByRef.current = s.sortBy;
-      setSortOrder(s.sortOrder); sortOrderRef.current = s.sortOrder;
+      // 排序不从这里恢复：本次运行的排序记忆（peekSessionSort）在挂载时已经进了 state，
+      // 且可能比会话更新（例如刚在设置页改过默认排序）。若两者不一致，下面的
+      // “筛选变化重拉” effect 会按当前排序整表重拉一次，结果与用户看到的一致。
       setSelectedTag(s.selectedTag); selectedTagRef.current = s.selectedTag;
       setReadFilter(readFilterRestored); readFilterRef.current = readFilterRestored;
       setTagState(tagStateRestored); tagStateRef.current = tagStateRestored;
@@ -623,6 +647,15 @@ export default function Library({ mode = 'library', enableSession }) {
   const handleDensityChange = (density) => {
     setCardDensity(density);
     updateSetting('card_density', density);
+  };
+
+  // 排序方式：只记在本次运行里（不写服务端设置），关闭程序后回到「默认排序」。
+  // ref 同步写，避免紧接着触发的重拉读到旧值。
+  const handleSortByChange = (value) => {
+    randomSeedRef.current = null; // 顺序变了，随机排序要换新种子
+    sortByRef.current = value;
+    setSortBy(value);
+    rememberSessionSort(value, sortOrderRef.current);
   };
 
   // 清除全部筛选。search 不走「筛选变化重拉」effect（它自己有防抖路径），
@@ -1436,10 +1469,10 @@ export default function Library({ mode = 'library', enableSession }) {
             <option value="tagged">已打标签</option>
           </select>
 
-          <select value={sortBy} onChange={(e) => { randomSeedRef.current = null; setSortBy(e.target.value); }} style={{ minWidth: 100 }} aria-label="排序方式">
+          <select value={sortBy} onChange={(e) => handleSortByChange(e.target.value)} style={{ minWidth: 100 }} aria-label="排序方式">
+            <option value="created">添加时间</option>
             <option value="updated">最近阅读</option>
             <option value="name">名称</option>
-            <option value="created">添加时间</option>
             <option value="pages">页数</option>
             <option value="size">大小</option>
             <option value="random">随机</option>

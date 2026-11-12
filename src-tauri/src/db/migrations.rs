@@ -3,7 +3,8 @@ use rusqlite::{Connection, Result};
 /// 当前 schema 版本。新增迁移时：把常量 +1，并在 run_migrations 里对
 /// user_version < N 的库执行第 N 版新增步骤（旧的幂等步骤会被版本守卫跳过）。
 /// v4: archives.last_read_at 冗余列 + 两个新索引（见下方 run_migrations 末尾）。
-pub const CURRENT_SCHEMA_VERSION: i64 = 4;
+/// v5: 默认排序由“最近阅读”改为“添加时间”（见末尾 settings 迁移）。
+pub const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
     // 版本守卫：已是当前版本的库不再重复执行（幂等步骤仍在历史版本库上跑一次）
@@ -279,6 +280,15 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
             );",
         )?;
     }
+
+    // v5: 默认排序从「最近阅读」改为「添加时间」。
+    // 旧库里存的 "updated" 就是旧默认值（书库下拉此前不落库，只有设置页能改它），
+    // 这里一次性迁到 "created"；用户之后手动改回「最近阅读」不会再被覆盖
+    // （版本守卫保证本步骤只跑一次）。
+    conn.execute(
+        "UPDATE settings SET value = 'created' WHERE key = 'sort_by' AND value = 'updated'",
+        [],
+    )?;
 
     // 幂等步骤全部成功后才打版本号（中途失败下次启动会重跑，结构依然幂等）
     conn.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;

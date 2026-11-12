@@ -7,6 +7,7 @@ import {
 } from '../utils/scanRoots';
 import { useToast } from '../components/Toast';
 import useSettings from '../hooks/useSettings';
+import { rememberSessionSort } from '../hooks/useLibrarySession';
 import useTheme from '../hooks/useTheme';
 import useTags from '../hooks/useTags';
 import useSync from '../hooks/useSync';
@@ -864,10 +865,18 @@ export default function Settings() {
           <div>
             <div className="settings-row-label">默认排序</div>
           </div>
-          <select value={settings.sort_by || 'updated'} onChange={(e) => handleUpdateSetting('sort_by', e.target.value)}>
+          <select
+            value={settings.sort_by || 'created'}
+            onChange={(e) => {
+              // 设置页改的是长期默认值；同时更新本次运行的排序记忆，
+              // 免得回到书库时还被旧的运行期选择挡着。
+              rememberSessionSort(e.target.value, settings.sort_order || 'desc');
+              handleUpdateSetting('sort_by', e.target.value);
+            }}
+          >
+            <option value="created">添加时间</option>
             <option value="updated">最近阅读</option>
             <option value="name">名称</option>
-            <option value="created">添加时间</option>
             <option value="pages">页数</option>
             <option value="size">文件大小</option>
           </select>
@@ -876,7 +885,13 @@ export default function Settings() {
           <div>
             <div className="settings-row-label">排序顺序</div>
           </div>
-          <select value={settings.sort_order || 'desc'} onChange={(e) => handleUpdateSetting('sort_order', e.target.value)}>
+          <select
+            value={settings.sort_order || 'desc'}
+            onChange={(e) => {
+              rememberSessionSort(settings.sort_by || 'created', e.target.value);
+              handleUpdateSetting('sort_order', e.target.value);
+            }}
+          >
             <option value="desc">降序</option>
             <option value="asc">升序</option>
           </select>

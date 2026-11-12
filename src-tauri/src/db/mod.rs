@@ -268,7 +268,9 @@ impl Database {
             ("scan_roots", "[]"),
             ("view_mode", "grid"),
             ("card_density", "normal"),
-            ("sort_by", "updated"),
+            // 默认按「添加时间」倒序：最近入库的在前。不要用 updated/last_read_at，
+            // 否则读一本漫画就会把它顶到最前，书库顺序随阅读行为变化。
+            ("sort_by", "created"),
             ("sort_order", "desc"),
             ("reader_fit", "height"),
             ("reader_double", "0"),
@@ -358,10 +360,43 @@ mod tests {
         let settings = db.get_settings().unwrap();
 
         assert_eq!(settings.get("view_mode").unwrap(), "grid");
-        assert_eq!(settings.get("sort_by").unwrap(), "updated");
+        assert_eq!(settings.get("sort_by").unwrap(), "created");
         assert_eq!(settings.get("sort_order").unwrap(), "desc");
         // theme 属客户端 localStorage，不再是服务端默认键
         assert!(settings.get("theme").is_none());
+    }
+
+    #[test]
+    fn test_migration_v5_moves_legacy_default_sort_to_created() {
+        let db = setup_test_db();
+        {
+            let conn = db.conn_for_test().unwrap();
+            // 模拟旧库：默认排序还是「最近阅读」，schema 版本停在 v4
+            conn.execute(
+                "UPDATE settings SET value = 'updated' WHERE key = 'sort_by'",
+                [],
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 4).unwrap();
+        }
+        // 再次 init 触发 v5 迁移；版本已达标时才会短路，故这里必须还是 4
+        db.init().unwrap();
+        let settings = db.get_settings().unwrap();
+        assert_eq!(settings.get("sort_by").unwrap(), "created");
+        // 用户之后手动改回「最近阅读」不应再被覆盖（版本守卫只跑一次）
+        {
+            let conn = db.conn_for_test().unwrap();
+            conn.execute(
+                "UPDATE settings SET value = 'updated' WHERE key = 'sort_by'",
+                [],
+            )
+            .unwrap();
+        }
+        db.init().unwrap();
+        assert_eq!(
+            db.get_settings().unwrap().get("sort_by").unwrap(),
+            "updated"
+        );
     }
 
     #[test]

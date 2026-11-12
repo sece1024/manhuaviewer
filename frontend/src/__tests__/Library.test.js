@@ -66,6 +66,18 @@ describe('Library 页面', () => {
     expect(api.getArchives).toHaveBeenCalled();
   });
 
+  // 回归：默认排序曾是「最近阅读」（= COALESCE(last_read_at, updated_at)），
+  // 读完一本漫画它就被顶到最前，看起来像“排序变了”。默认必须是「添加时间」。
+  test('默认按添加时间倒序请求列表', async () => {
+    renderLibrary();
+    await waitFor(() => {
+      expect(screen.getByText('测试漫画')).toBeInTheDocument();
+    });
+    expect(api.getArchives).toHaveBeenCalledWith(
+      expect.objectContaining({ sort_by: 'created', sort_order: 'desc' })
+    );
+  });
+
   test('卡片元信息显示添加时间（created_at 按本地时区展示）', async () => {
     api.getArchives.mockResolvedValue([
       { id: 5, title: '带时间的漫画', archive_type: 'cbz', page_count: 10, cover_url: '/api/archives/5/cover', tags: [], created_at: '2026-04-30 12:00:00' },
@@ -275,6 +287,7 @@ describe('Library 会话恢复（从阅读器返回不丢翻页位置）', () =>
 
   beforeEach(() => {
     jest.clearAllMocks();
+    clearLibrarySessions(); // 排序记忆也是模块级的，跨用例清掉
     api.getSettings.mockResolvedValue({});
     api.getCategories.mockResolvedValue([]);
     api.getTags.mockResolvedValue([]);
@@ -340,6 +353,27 @@ describe('Library 会话恢复（从阅读器返回不丢翻页位置）', () =>
       expect(screen.getByText('第2页漫画1')).toBeInTheDocument();
     });
     expect(screen.getByText('第1页漫画1')).toBeInTheDocument();
+  });
+
+  // 用户要求：手动改过排序方式后，本次运行里一直记住（读完一本漫画再回书库也不变）。
+  test('改过排序后进阅读器再返回：排序方式保持为「名称」', async () => {
+    api.getArchives.mockResolvedValue(page1);
+
+    renderWithSession();
+    await waitFor(() => expect(screen.getByText('第1页漫画1')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('排序方式'), { target: { value: 'name' } });
+    await waitFor(() => expect(api.getArchives).toHaveBeenCalledWith(
+      expect.objectContaining({ sort_by: 'name' })
+    ));
+
+    // 进入阅读器（Library 卸载）再返回：不能被服务端默认排序覆盖
+    fireEvent.click(screen.getByText('第1页漫画1'));
+    await waitFor(() => expect(screen.getByText('返回书库')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('返回书库'));
+
+    await waitFor(() => expect(screen.getByLabelText('排序方式').value).toBe('name'));
+    expect(api.getArchives).toHaveBeenCalledWith(expect.objectContaining({ sort_by: 'name' }));
   });
 
   /// 回归：手动删除磁盘档案后扫描清理，回到书库不得再显示已删除的漫画名。
