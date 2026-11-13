@@ -6,6 +6,14 @@
 
 <!-- git-cliff: end of header -->
 
+## [3.7.6](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.6) - 2026-11-13
+
+### 🚜 重构
+
+- Extract thumbnail cache runtime into services/thumbnail_cache module([0e220d3](https://github.com/sece1024/manhuaviewer/commit/0e220d3347d2f720fd573ebfcc81e361f8a39e8d))
+- Deepen ScanJob behind typed progress methods([716f722](https://github.com/sece1024/manhuaviewer/commit/716f722232203040b4f47c47efdd261390331810))
+- Extract archive delete/undo into services/delete module([a389770](https://github.com/sece1024/manhuaviewer/commit/a389770ad0139ed766049cbc5be56175fad39b2c))
+
 ## [3.7.5](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.5) - 2026-11-12
 
 ### 🐛 修复
