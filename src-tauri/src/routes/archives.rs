@@ -512,60 +512,21 @@ pub struct DeleteArchiveQuery {
     delete_files: Option<bool>,
 }
 
-/// 删除源文件：folder 删整个目录，压缩包删单个文件。阻塞 I/O，必须 spawn_blocking。
-async fn delete_source_file(path: &str, archive_type: &str) {
-    let path = path.to_string();
-    let is_folder = archive_type == "folder";
-    // 删文件是纯破坏性副作用：失败也只体现在日志/调用方忽略，不往上抛（删不掉不阻断移除）
-    let _ = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        if is_folder {
-            std::fs::remove_dir_all(&path)
-        } else {
-            std::fs::remove_file(&path)
-        }
-    })
-    .await;
-}
-
 pub async fn delete_archive(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
     Query(opts): Query<DeleteArchiveQuery>,
 ) -> Response {
-    let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
-    let page_thumb_dir = state.data_dir.join("page_thumbs").join(id.to_string());
-    let extract_dir = state.data_dir.join("extract").join(id.to_string());
-
-    // 删除与快照在同一个事务里完成：否则刚读完快照、还没删，就可能被别的写操作插进来
-    let snapshot = match super::run_db(&state, move |db| db.delete_archive_with_snapshot(id)).await
-    {
-        Ok(snapshot) => snapshot,
-        Err(e) => return internal_error(e),
-    };
-
-    // 删除封面 / 页面缩略图目录与解压缓存目录
-    let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
-    let _ = tokio::fs::remove_dir_all(&page_thumb_dir).await;
-    let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-
-    // 勾选了「同时删除原文件」：删磁盘源文件，且不给撤销令牌（源文件没了，撤销也只能
-    // 恢复一条指向不存在文件的记录，等于把用户骗回一个坏档）。
     let delete_files = opts.delete_files.unwrap_or(false);
-    if delete_files {
-        if let Some(s) = &snapshot {
-            delete_source_file(&s.path, &s.archive_type).await;
-        }
-    }
-
-    let undo_token = if delete_files {
-        None
-    } else {
-        snapshot.map(|s| state.undo.lock().unwrap().push(vec![s]))
+    let outcome = match crate::services::delete::remove_archives(&state, &[id], delete_files).await
+    {
+        Ok(outcome) => outcome,
+        Err(e) => return internal_error(e),
     };
     Json(serde_json::json!({
         "success": true,
-        "undo_token": undo_token,
-        "deleted_files": delete_files,
+        "undo_token": outcome.undo_token,
+        "deleted_files": outcome.deleted_files,
     }))
     .into_response()
 }
@@ -584,15 +545,14 @@ pub async fn undo_delete(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<UndoDeleteRequest>,
 ) -> Response {
-    let Some(snapshots) = state.undo.lock().unwrap().take(&payload.token) else {
-        return error_response(StatusCode::GONE, "撤销已过期（或在别处已被撤销）");
-    };
-    match super::run_db(&state, move |db| db.restore_archive_snapshots(&snapshots)).await {
-        Ok((restored, skipped)) => {
-            // skipped = 路径在撤销窗口内已被重新扫描入库的条目（见 db 层注释）
-            Json(serde_json::json!({ "success": true, "restored": restored, "skipped": skipped }))
-                .into_response()
-        }
+    match crate::services::delete::undo(&state, &payload.token).await {
+        Ok(Some((restored, skipped))) => Json(serde_json::json!({
+            "success": true,
+            "restored": restored,
+            "skipped": skipped,
+        }))
+        .into_response(),
+        Ok(None) => error_response(StatusCode::GONE, "撤销已过期（或在别处已被撤销）"),
         Err(e) => internal_error(e),
     }
 }
@@ -612,42 +572,16 @@ pub async fn batch_delete_archives(
         return error_response(StatusCode::BAD_REQUEST, "ids 不能为空");
     }
 
-    let ids = payload.ids;
-    let delete_files = payload.delete_files;
-    let ids_db = ids.clone();
-    match super::run_db(&state, move |db| db.delete_archives_with_snapshots(&ids_db)).await {
-        Ok(snapshots) => {
-            // 逐个清理封面 / 页面缩略图目录与解压缓存目录
-            for id in &ids {
-                let thumb_dir = state.data_dir.join("thumbnails").join(id.to_string());
-                let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
-                let page_thumb_dir = state.data_dir.join("page_thumbs").join(id.to_string());
-                let _ = tokio::fs::remove_dir_all(&page_thumb_dir).await;
-                let extract_dir = state.data_dir.join("extract").join(id.to_string());
-                let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-            }
-            // 勾选「同时删除原文件」：逐条删磁盘源文件（删除失败不阻断，只影响文件本身）
-            if delete_files {
-                for s in &snapshots {
-                    delete_source_file(&s.path, &s.archive_type).await;
-                }
-            }
-            let affected = snapshots.len();
-            // 整批一个令牌：界面提示是"已删除 N 个 / 撤销"，撤销就应一次还原这一批。
-            // 删了源文件则不提供撤销（源文件没了，撤销只能还原一条坏记录）。
-            let undo_token = if delete_files {
-                None
-            } else {
-                Some(state.undo.lock().unwrap().push(snapshots))
-            };
-            Json(serde_json::json!({
-                "success": true,
-                "affected": affected,
-                "undo_token": undo_token,
-                "deleted_files": delete_files,
-            }))
-            .into_response()
-        }
+    match crate::services::delete::remove_archives(&state, &payload.ids, payload.delete_files).await
+    {
+        // 整批一个令牌：界面提示是「已删除 N 个 / 撤销」，撤销就应一次还原这一批。
+        Ok(outcome) => Json(serde_json::json!({
+            "success": true,
+            "affected": outcome.affected,
+            "undo_token": outcome.undo_token,
+            "deleted_files": outcome.deleted_files,
+        }))
+        .into_response(),
         Err(e) => internal_error(e),
     }
 }
@@ -1973,23 +1907,5 @@ mod tests {
         union.sort_unstable();
         union.dedup();
         assert_eq!(union, (1..=50).collect::<Vec<i64>>());
-    }
-
-    /// 「同时删除原文件」：folder 删整个目录、压缩包删单个文件。
-    #[tokio::test]
-    async fn delete_source_file_removes_folder_and_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path().join("book");
-        std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join("p1.jpg"), b"img").unwrap();
-
-        let file = dir.path().join("book.cbz");
-        std::fs::write(&file, b"PK\x03\x04").unwrap();
-
-        delete_source_file(folder.to_str().unwrap(), "folder").await;
-        assert!(!folder.exists(), "folder 类型的源目录应被删除");
-
-        delete_source_file(file.to_str().unwrap(), "cbz").await;
-        assert!(!file.exists(), "压缩包源文件应被删除");
     }
 }

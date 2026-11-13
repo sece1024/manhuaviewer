@@ -3,6 +3,7 @@ pub mod backup;
 pub mod cache_budget;
 pub mod cbz;
 pub mod cleanup;
+pub mod delete;
 pub mod fs_ext;
 pub mod metadata;
 pub mod page_cache;
