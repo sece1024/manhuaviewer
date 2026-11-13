@@ -16,11 +16,6 @@ use super::{error_response, internal_error};
 
 const CACHE_CONTROL: &str = "private, max-age=3600, must-revalidate";
 
-/// 缩略图访问节流表（进程内），避免每个图片请求都写一次 DB。
-static THUMB_TOUCH: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<i64, std::time::Instant>>,
-> = std::sync::OnceLock::new();
-
 fn archive_mtime(path: &str) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
@@ -246,110 +241,6 @@ fn not_modified(etag: String, last_modified: Option<String>) -> Response {
         pairs.push(("Last-Modified", lm));
     }
     build_response(StatusCode::NOT_MODIFIED, pairs, "")
-}
-
-/// 节流记录缩略图访问（每档案 ≤1 次/60 秒），避免书库滚动时产生大量 DB 写；
-/// touch 后 LRU 会按真实使用时间保留/淘汰缩略图目录。
-async fn touch_thumbnail_usage(state: &Arc<AppState>, id: i64) {
-    {
-        let map = THUMB_TOUCH
-            .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-            .lock()
-            .unwrap();
-        if let Some(t) = map.get(&id) {
-            if t.elapsed().as_secs() < 60 {
-                return;
-            }
-        }
-    }
-    let _ = super::run_db(state, move |db| db.touch_thumbnail_access(id)).await;
-    THUMB_TOUCH
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-        .lock()
-        .unwrap()
-        .insert(id, std::time::Instant::now());
-}
-
-/// 生成封面缩略图后登记 thumbnail_path，并按磁盘预算触发封面 LRU 淘汰（每分钟最多一次）。
-async fn register_thumbnail(
-    state: &Arc<AppState>,
-    id: i64,
-    thumb_dir_str: String,
-    already_set: bool,
-) {
-    if !already_set {
-        let dir = thumb_dir_str;
-        let _ = super::run_db(state, move |db| db.set_thumbnail_path(id, &dir)).await;
-    }
-
-    let mut do_evict = false;
-    {
-        let mut last = state.last_thumb_eviction.lock().unwrap();
-        let elapsed = last
-            .as_ref()
-            .map(|t| t.elapsed().as_secs() >= 60)
-            .unwrap_or(true);
-        if elapsed {
-            *last = Some(std::time::Instant::now());
-            do_evict = true;
-        }
-    }
-    if !do_evict {
-        return;
-    }
-
-    let root = state.data_dir.join("thumbnails");
-    let db = state.db.clone();
-    let evicted = tokio::task::spawn_blocking(move || {
-        crate::services::cache_budget::evict_cover_dirs(
-            &db,
-            &root,
-            crate::services::cache_budget::COVER_CACHE_BUDGET_BYTES,
-            Some(id),
-        )
-    })
-    .await
-    .unwrap_or_default();
-    for path in evicted {
-        let _ = tokio::fs::remove_dir_all(&path).await;
-    }
-}
-
-/// 页面缩略图 LRU 淘汰节流（每分钟最多一次），独立于封面淘汰。
-static PAGE_THUMB_EVICTION: std::sync::OnceLock<std::sync::Mutex<Option<std::time::Instant>>> =
-    std::sync::OnceLock::new();
-
-/// 生成页面缩略图后，按磁盘预算触发页面缩略图目录 LRU 淘汰（每分钟最多一次）。
-async fn register_page_thumb_eviction(state: &Arc<AppState>, id: i64) {
-    let due = {
-        let lock = PAGE_THUMB_EVICTION.get_or_init(|| std::sync::Mutex::new(None));
-        let mut last = lock.lock().unwrap();
-        let elapsed = last
-            .as_ref()
-            .map(|t| t.elapsed().as_secs() >= 60)
-            .unwrap_or(true);
-        if elapsed {
-            *last = Some(std::time::Instant::now());
-        }
-        elapsed
-    };
-    if !due {
-        return;
-    }
-
-    let root = state.data_dir.join("page_thumbs");
-    let evicted = tokio::task::spawn_blocking(move || {
-        crate::services::cache_budget::evict_dirs_by_mtime(
-            &root,
-            crate::services::cache_budget::PAGE_THUMB_CACHE_BUDGET_BYTES,
-            Some(id),
-        )
-    })
-    .await
-    .unwrap_or_default();
-    for path in evicted {
-        let _ = tokio::fs::remove_dir_all(&path).await;
-    }
 }
 
 #[derive(Deserialize)]
@@ -973,10 +864,16 @@ pub async fn get_cover(
     match result {
         Ok(Ok((cover_data, content_type, fresh))) => {
             if fresh {
-                register_thumbnail(&state, id, thumb_dir_str, thumb_already_set).await;
+                crate::services::thumbnail_cache::on_cover_registered(
+                    &state,
+                    id,
+                    thumb_dir_str,
+                    thumb_already_set,
+                )
+                .await;
             }
             // 记录一次访问（节流），让 LRU 保留真正在用的封面
-            touch_thumbnail_usage(&state, id).await;
+            crate::services::thumbnail_cache::record_cover_access(&state, id).await;
             let mut pairs: Vec<(&'static str, String)> = vec![
                 ("Content-Type", content_type),
                 ("ETag", etag),
@@ -1385,7 +1282,7 @@ pub async fn get_page_thumb(
         Ok(Ok((thumb_data, content_type, fresh))) => {
             if fresh {
                 // 页面缩略图目录按磁盘预算做 LRU 淘汰（最多每分钟一次）
-                register_page_thumb_eviction(&state, id).await;
+                crate::services::thumbnail_cache::on_page_thumb_registered(&state, id).await;
             }
 
             let mut pairs: Vec<(&'static str, String)> = vec![
