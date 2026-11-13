@@ -29,6 +29,9 @@ fn current_scan() -> &'static Mutex<Option<Arc<ScanJob>>> {
 }
 
 /// 扫描任务的可观测状态。计数器均为原子，工作线程可并发更新。
+///
+/// 进度语义（added/updated/unchanged 都会推进 done、取消是终态等）全部收敛在
+/// 这里的方法里，扫描体只报告「发生了什么」，不再直接接触原子计数器。
 pub struct ScanJob {
     running: AtomicBool,
     cancel: AtomicBool,
@@ -47,6 +50,21 @@ pub struct ScanJob {
     current: Mutex<String>,
 }
 
+/// 扫描进度的一次不可变快照（供汇总/状态/测试读取）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanProgress {
+    pub running: bool,
+    pub cancelled: bool,
+    pub total: usize,
+    pub done: usize,
+    pub added: usize,
+    pub updated: usize,
+    pub unchanged: usize,
+    pub removed: usize,
+    pub skipped: usize,
+    pub current: String,
+}
+
 impl ScanJob {
     fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -63,19 +81,104 @@ impl ScanJob {
         })
     }
 
+    fn start(&self) {
+        self.running.store(true, Ordering::SeqCst);
+        self.set_current("正在遍历目录...".to_string());
+    }
+
+    fn finish(&self) {
+        self.running.store(false, Ordering::SeqCst);
+        self.cancel.store(false, Ordering::SeqCst);
+    }
+
+    fn request_cancel(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+
+    fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    fn set_total(&self, n: usize) {
+        self.total.store(n, Ordering::SeqCst);
+    }
+
+    /// 分类阶段登记一个档案的变化类型；`count_done` 为真时同步推进 done。
+    fn record_change(&self, category: ScanChange, count_done: bool) {
+        match category {
+            ScanChange::Added => {
+                self.added.fetch_add(1, Ordering::SeqCst);
+            }
+            ScanChange::Updated => {
+                self.updated.fetch_add(1, Ordering::SeqCst);
+            }
+            ScanChange::Unchanged => {
+                self.unchanged.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        if count_done {
+            self.done.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// 数页完成一个档案：推进 done，并更新「当前正在处理」的标题。
+    fn record_page_done(&self, title: &str) {
+        *self.current.lock().unwrap() = title.to_string();
+        self.done.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn record_removed(&self) {
+        self.removed.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn set_skipped(&self, n: usize) {
+        self.skipped.store(n, Ordering::SeqCst);
+    }
+
+    fn set_current(&self, msg: String) {
+        *self.current.lock().unwrap() = msg;
+    }
+
+    fn snapshot(&self) -> ScanProgress {
+        ScanProgress {
+            running: self.running.load(Ordering::SeqCst),
+            cancelled: self.cancel.load(Ordering::SeqCst),
+            total: self.total.load(Ordering::SeqCst),
+            done: self.done.load(Ordering::SeqCst),
+            added: self.added.load(Ordering::SeqCst),
+            updated: self.updated.load(Ordering::SeqCst),
+            unchanged: self.unchanged.load(Ordering::SeqCst),
+            removed: self.removed.load(Ordering::SeqCst),
+            skipped: self.skipped.load(Ordering::SeqCst),
+            current: self.current.lock().unwrap().clone(),
+        }
+    }
+
     fn to_json(&self) -> serde_json::Value {
+        let p = self.snapshot();
         serde_json::json!({
-            "running": self.running.load(Ordering::SeqCst),
-            "total": self.total.load(Ordering::SeqCst),
-            "done": self.done.load(Ordering::SeqCst),
-            "added": self.added.load(Ordering::SeqCst),
-            "updated": self.updated.load(Ordering::SeqCst),
-            "unchanged": self.unchanged.load(Ordering::SeqCst),
-            "removed": self.removed.load(Ordering::SeqCst),
-            "skipped": self.skipped.load(Ordering::SeqCst),
-            "current": self.current.lock().unwrap().clone(),
+            "running": p.running,
+            "total": p.total,
+            "done": p.done,
+            "added": p.added,
+            "updated": p.updated,
+            "unchanged": p.unchanged,
+            "removed": p.removed,
+            "skipped": p.skipped,
+            "current": p.current,
         })
     }
+}
+
+/// 分类阶段中单个档案的变化类型。
+enum ScanChange {
+    Added,
+    Updated,
+    Unchanged,
 }
 
 /// 任务结束（含 panic）时统一清 running/cancel，避免异常退出后永远 409。
@@ -83,8 +186,7 @@ struct ScanEndGuard(Arc<ScanJob>);
 
 impl Drop for ScanEndGuard {
     fn drop(&mut self) {
-        self.0.running.store(false, Ordering::SeqCst);
-        self.0.cancel.store(false, Ordering::SeqCst);
+        self.0.finish();
     }
 }
 
@@ -145,7 +247,7 @@ fn scan_inner(
     let t = std::time::Instant::now();
     let discovered = scanner.scan_directory(root_dir, depth)?;
     let walk_ms = t.elapsed().as_millis();
-    job.total.store(discovered.len(), Ordering::SeqCst);
+    job.set_total(discovered.len());
     let present: HashSet<&str> = discovered.iter().map(|d| d.path.as_str()).collect();
 
     // 快照：本 root 下已入库档案的 (page_count, file_size, file_mtime)
@@ -161,7 +263,7 @@ fn scan_inner(
     let t = std::time::Instant::now();
     let mut pending: Vec<Pending> = Vec::with_capacity(discovered.len());
     for d in &discovered {
-        if job.cancel.load(Ordering::SeqCst) {
+        if job.is_cancelled() {
             break;
         }
 
@@ -171,13 +273,12 @@ fn scan_inner(
         // 文件签名（mtime+size）与已入库一致且已有页数 → 完全跳过，不再开包数页
         if let Some((pc, fs, fm)) = existing {
             if fm == d.file_mtime && fs == d.file_size && pc > 0 {
-                job.unchanged.fetch_add(1, Ordering::SeqCst);
-                job.done.fetch_add(1, Ordering::SeqCst);
+                job.record_change(ScanChange::Unchanged, true);
                 continue;
             }
-            job.updated.fetch_add(1, Ordering::SeqCst);
+            job.record_change(ScanChange::Updated, false);
         } else {
-            job.added.fetch_add(1, Ordering::SeqCst);
+            job.record_change(ScanChange::Added, false);
         }
 
         let path = std::path::Path::new(&d.path);
@@ -225,7 +326,7 @@ fn scan_inner(
         std::thread::scope(|scope| {
             for _ in 0..workers {
                 scope.spawn(|| loop {
-                    if job.cancel.load(Ordering::SeqCst) {
+                    if job.is_cancelled() {
                         break;
                     }
                     let i = cursor.fetch_add(1, Ordering::SeqCst);
@@ -235,8 +336,7 @@ fn scan_inner(
                     let p = &pending[i];
                     let pc = count_pages(&p.path, &p.archive_type);
                     counts[i].store(pc, Ordering::SeqCst);
-                    *job.current.lock().unwrap() = p.title.clone();
-                    job.done.fetch_add(1, Ordering::SeqCst);
+                    job.record_page_done(&p.title);
                 });
             }
         });
@@ -284,14 +384,15 @@ fn scan_inner(
         tracing::info!("Scan cleanup: removing orphan archive {}", row_path);
         db.delete_archive_by_path(row_path)?;
         removed += 1;
-        job.removed.fetch_add(1, Ordering::SeqCst);
+        job.record_removed();
     }
-    job.skipped.store(skipped, Ordering::SeqCst);
+    job.set_skipped(skipped);
     let cleanup_ms = t.elapsed().as_millis();
 
-    let added = job.added.load(Ordering::SeqCst);
-    let updated = job.updated.load(Ordering::SeqCst);
-    let cancelled = job.cancel.load(Ordering::SeqCst);
+    let progress = job.snapshot();
+    let added = progress.added;
+    let updated = progress.updated;
+    let cancelled = progress.cancelled;
     let total_ms = t_total.elapsed().as_millis();
 
     // 各阶段耗时：书库很大或库在慢盘/网络盘上时，「时间花在遍历、数页还是入库」是
@@ -402,15 +503,14 @@ pub async fn scan(
     {
         let cur = current_scan().lock().unwrap();
         if let Some(j) = cur.as_ref() {
-            if j.running.load(Ordering::SeqCst) {
+            if j.is_running() {
                 return error_response(StatusCode::CONFLICT, "已有扫描任务在运行");
             }
         }
     }
 
     let job = ScanJob::new();
-    job.running.store(true, Ordering::SeqCst);
-    *job.current.lock().unwrap() = "正在遍历目录...".to_string();
+    job.start();
     *current_scan().lock().unwrap() = Some(job.clone());
 
     let db = state.db.clone();
@@ -447,7 +547,7 @@ pub async fn scan_status() -> Response {
 
 pub async fn scan_cancel() -> Response {
     if let Some(job) = current_scan().lock().unwrap().as_ref() {
-        job.cancel.store(true, Ordering::SeqCst);
+        job.request_cancel();
     }
     Json(serde_json::json!({ "cancelled": true })).into_response()
 }
@@ -463,6 +563,42 @@ mod tests {
         assert!(worker_count(10_000) <= 8);
     }
 
+    /// 进度语义收敛在 ScanJob 接口上：分类推进计数，数页会推进 done 并更新 current，
+    /// 快照是唯一读取途径（不再直接触碰原子字段）。
+    #[test]
+    fn scan_job_records_progress_through_its_interface() {
+        let job = ScanJob::new();
+        job.start();
+        assert!(job.is_running());
+        job.set_total(4);
+
+        // 未变化立即计入 done；新增/更新只分类，done 留到数页完成时计入
+        job.record_change(ScanChange::Unchanged, true);
+        job.record_change(ScanChange::Added, false);
+        job.record_change(ScanChange::Updated, false);
+        let p = job.snapshot();
+        assert_eq!((p.added, p.updated, p.unchanged), (1, 1, 1));
+        assert_eq!(p.done, 1, "只有未变化档案即时推进 done");
+
+        job.record_page_done("第 1 话");
+        job.record_page_done("第 2 话");
+        let p = job.snapshot();
+        assert_eq!(p.done, 3, "两个待数页档案完成后 done 应为 3");
+        assert_eq!(p.current, "第 2 话", "current 应跟到最后一个数页档案");
+
+        job.record_removed();
+        job.set_skipped(2);
+        let p = job.snapshot();
+        assert_eq!((p.removed, p.skipped), (1, 2));
+
+        // 取消是终态，finish 清 running/cancel，避免异常退出后永远 409
+        job.request_cancel();
+        assert!(job.is_cancelled());
+        job.finish();
+        let p = job.snapshot();
+        assert!(!p.running);
+        assert!(!p.cancelled);
+    }
     /// 并行数页的正确性：多个文件夹档案的页数应各自数准，进度计数收敛到总数。
     #[test]
     fn scan_counts_pages_in_parallel_and_reports_progress() {
@@ -487,9 +623,10 @@ mod tests {
         assert_eq!(out["scanned"].as_u64(), Some(3));
         assert_eq!(out["added"].as_u64(), Some(3));
         assert_eq!(out["cancelled"].as_bool(), Some(false));
-        assert_eq!(job.total.load(Ordering::SeqCst), 3);
-        assert_eq!(job.done.load(Ordering::SeqCst), 3);
-        assert_eq!(job.added.load(Ordering::SeqCst), 3);
+        let p = job.snapshot();
+        assert_eq!(p.total, 3);
+        assert_eq!(p.done, 3);
+        assert_eq!(p.added, 3);
 
         for (idx, count) in expected.iter().enumerate() {
             let path = root
@@ -516,13 +653,13 @@ mod tests {
 
         let first = ScanJob::new();
         scan_inner(&db, &root_s, 1, &first).unwrap();
-        assert_eq!(first.added.load(Ordering::SeqCst), 1);
+        assert_eq!(first.snapshot().added, 1);
 
         let second = ScanJob::new();
         let out = scan_inner(&db, &root_s, 1, &second).unwrap();
-        assert_eq!(second.unchanged.load(Ordering::SeqCst), 1);
-        assert_eq!(second.added.load(Ordering::SeqCst), 0);
-        assert_eq!(second.done.load(Ordering::SeqCst), 1);
+        assert_eq!(second.snapshot().unchanged, 1);
+        assert_eq!(second.snapshot().added, 0);
+        assert_eq!(second.snapshot().done, 1);
         assert_eq!(out["added"].as_u64(), Some(0));
 
         // 汇总里带各阶段耗时，重扫时应只有遍历（walk_ms）有实际开销
