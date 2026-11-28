@@ -6,6 +6,12 @@
 
 <!-- git-cliff: end of header -->
 
+## [3.7.7](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.7) - 2026-11-28
+
+### 🚀 新特性
+
+- *(tags)* 打标签时按使用频次排序，最常用的标签排在最上方([6167429](https://github.com/sece1024/manhuaviewer/commit/6167429c26c3f36feaa538db3d794f0455c9f56b))
+
 ## [3.7.6](https://github.com/sece1024/manhuaviewer/releases/tag/v3.7.6) - 2026-11-13
 
 ### 🚜 重构
