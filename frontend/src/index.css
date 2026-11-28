@@ -1978,9 +1978,20 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   flex-shrink: 0;
 }
 .tag-picker-name {
+  /* flex:1 + min-width:0 让长标签名自己缩略，而不是把右侧的频次/三态提示挤出面板 */
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 排序依据：全库使用次数（列表按它降序，见 utils/tagOrder.js） */
+.tag-picker-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 .tag-picker-create {
   display: flex;

@@ -4,6 +4,7 @@ import { useToast } from './Toast';
 import useTags from '../hooks/useTags';
 import LazyImage from './LazyImage';
 import { formatReadProgress } from '../utils/format';
+import { sortTagsByUsage } from '../utils/tagOrder';
 
 /**
  * TagTriage — 键盘驱动的「整理模式」：一次一本，给未打标签的漫画打标签。
@@ -105,9 +106,11 @@ export default function TagTriage({ sortBy = 'created', sortOrder = 'desc', onCl
   }, [fetchBatch, refilling, toast]);
 
   // 候选 = 过滤后的已有标签（+ 末位的「新建」）
+  // 顺序按全库使用频次降序（同 TagPicker）：输入框为空时高亮的第一个就是最常用的
+  // 标签，回车即打上——这是这个流程里最省事的一击，别让罕见标签占住它。
   const candidates = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const matched = tags.filter(t => !q || fullName(t).toLowerCase().includes(q));
+    const matched = sortTagsByUsage(tags).filter(t => !q || fullName(t).toLowerCase().includes(q));
     const list = matched.map(t => ({ kind: 'tag', tagId: t.id, label: fullName(t), color: t.color }));
     if (q) {
       const exact = tags.some(t => fullName(t).toLowerCase() === q);

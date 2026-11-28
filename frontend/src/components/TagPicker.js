@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../utils/api';
 import useModalKeyboard from '../hooks/useModalKeyboard';
 import { useToast } from './Toast';
+import { sortTagsByUsage, tagUsageCount } from '../utils/tagOrder';
 
 /**
  * TagPicker — 弹窗组件，用于给指定漫画分配/取消标签
@@ -17,6 +18,9 @@ import { useToast } from './Toast';
  *
  * 此前批量模式只有"加"一个方向，`checked` 还被写死为 false：界面既看不出哪些标签
  * 已经在选中项上，点错了也无法用"再点一次"撤销，只能去按旁边那个 移除 按钮。
+ *
+ * 标签按**全库使用频次降序**排列（最常用的在最上面，见 utils/tagOrder.js），
+ * 这样长列表里高频标签总会落在手指/视线范围内，不用先滚动或搜索。
  */
 
 const fullName = (t) => (t.namespace ? `${t.namespace}:${t.name}` : t.name);
@@ -33,6 +37,9 @@ export default function TagPicker({ archiveId, archiveIds, onClose }) {
   const [creating, setCreating] = useState(false);
   const [changed, setChanged] = useState(false);
   const [busyTagId, setBusyTagId] = useState(null);
+  // 本次弹窗里刚创建的标签：频次只有 1，按频次排会沉到列表中部，用户看不见就以为
+  // 没建上、于是重复创建同名标签。只在本次会话里把它们钉在最上方。
+  const [newTagIds, setNewTagIds] = useState(() => new Set());
   const panelRef = useModalKeyboard(() => onClose(changed));
   const toast = useToast();
 
@@ -114,7 +121,11 @@ export default function TagPicker({ archiveId, archiveIds, onClose }) {
       const result = await api.createTag({ namespace, name: tagName });
       const newTag = result?.data || result;
       if (!newTag?.id) throw new Error('创建标签失败');
-      setAllTags(prev => [...prev, { ...newTag, archive_count: 0 }]);
+      // 新建后会立刻分配，所以频次按分配到的档案数记账（而不是 0）：列表下次刷新
+      // 时它就在这个位置，不会因为数字对不上而"跳一下"
+      const assignedCount = isBatch ? archiveIds.length : 1;
+      setAllTags(prev => [...prev, { ...newTag, archive_count: assignedCount }]);
+      setNewTagIds(prev => new Set(prev).add(newTag.id));
       // 自动分配
       if (isBatch) {
         await api.batchAssignTag(archiveIds, newTag.id);
@@ -132,11 +143,15 @@ export default function TagPicker({ archiveId, archiveIds, onClose }) {
   };
 
   // 标签多时先给个搜索框：100+ 标签靠滚动找是纯浪费
+  // 排序只随数据变化重排一次：勾选/取消只改 assignedIds/counts，不改 archive_count，
+  // 所以列表不会在点击过程中跳位（边点边重排会点到相邻项上）。
+  const orderedTags = useMemo(() => sortTagsByUsage(allTags, newTagIds), [allTags, newTagIds]);
+
   const visibleTags = useMemo(() => {
     const q = tagSearch.trim().toLowerCase();
-    if (!q) return allTags;
-    return allTags.filter(t => fullName(t).toLowerCase().includes(q));
-  }, [allTags, tagSearch]);
+    if (!q) return orderedTags;
+    return orderedTags.filter(t => fullName(t).toLowerCase().includes(q));
+  }, [orderedTags, tagSearch]);
 
   const allCount = batchTotal > 0 ? batchTotal : (archiveIds || []).length;
 
@@ -176,6 +191,7 @@ export default function TagPicker({ archiveId, archiveIds, onClose }) {
                     <div className="tag-picker-list">
                       {visibleTags.map(t => {
                         const state = tagStateOf(t.id);
+                        const usage = tagUsageCount(t);
                         return (
                           <div
                             key={t.id}
@@ -187,6 +203,12 @@ export default function TagPicker({ archiveId, archiveIds, onClose }) {
                             </span>
                             <span className="tag-picker-color" style={{ background: t.color }} />
                             <span className="tag-picker-name">{fullName(t)}</span>
+                            {/* 把排序依据摆出来：数字就是全库有多少本带这个标签 */}
+                            {typeof t.archive_count === 'number' && (
+                              <span className="tag-picker-count" title={`全库 ${usage} 本带这个标签`}>
+                                {usage}
+                              </span>
+                            )}
                             {isBatch && state === 'some' && (
                               <span className="tag-picker-partial-hint" title={`选中项里有 ${counts[t.id] || 0} / ${allCount} 个带这个标签`}>
                                 {counts[t.id] || 0}/{allCount}

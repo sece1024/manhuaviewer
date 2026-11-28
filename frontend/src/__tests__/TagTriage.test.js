@@ -100,6 +100,23 @@ describe('TagTriage 整理模式', () => {
     await waitFor(() => expect(api.assignTag).toHaveBeenCalledWith(1, 12));
   });
 
+  test('候选按使用频次排序：回车默认打最常用的标签', async () => {
+    api.getTags.mockResolvedValue([
+      { id: 11, namespace: '', name: '动作', color: '#f00', archive_count: 1 },
+      { id: 12, namespace: 'artist', name: '作者A', color: '#0f0', archive_count: 30 },
+    ]);
+    renderTriage();
+    const input = await ready();
+
+    const labels = () =>
+      Array.from(document.querySelectorAll('.tag-triage-cand')).map(n => n.textContent);
+    expect(labels()).toEqual(['artist:作者A', '动作']);
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(api.assignTag).toHaveBeenCalledWith(1, 12));
+  });
+
   test('Esc 是跳过（不打标但前进），不是关闭', async () => {
     const { onClose } = renderTriage();
     const input = await ready();

@@ -93,6 +93,69 @@ describe('TagPicker 单本模式', () => {
   });
 });
 
+describe('TagPicker 标签排序（按使用频次）', () => {
+  // 频次来自后端 /api/tags 的 archive_count（全库有多少本带这个标签）
+  const COUNTED = [
+    { id: 21, namespace: '', name: '冷门', color: '#111', archive_count: 1 },
+    { id: 22, namespace: '', name: '常用', color: '#222', archive_count: 42 },
+    { id: 23, namespace: '', name: '中等', color: '#333', archive_count: 7 },
+  ];
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    api.getTags.mockResolvedValue(COUNTED);
+    api.getArchiveTags.mockResolvedValue([]);
+    api.assignTag.mockResolvedValue({});
+    api.createTag.mockResolvedValue({ data: { id: 99, namespace: '', name: '刚建的' } });
+  });
+
+  const renderedNames = () =>
+    Array.from(document.querySelectorAll('.tag-picker-name')).map(n => n.textContent);
+  const renderedCounts = () =>
+    Array.from(document.querySelectorAll('.tag-picker-count')).map(n => n.textContent);
+
+  test('最常用的标签排在最上方，并把使用次数显示出来', async () => {
+    renderPicker({ archiveId: 1 });
+    await waitFor(() => expect(screen.getByText('常用')).toBeInTheDocument());
+
+    expect(renderedNames()).toEqual(['常用', '中等', '冷门']);
+    expect(renderedCounts()).toEqual(['42', '7', '1']);
+  });
+
+  test('勾选/取消标签不会让列表重排（否则会在点击途中点到相邻项）', async () => {
+    renderPicker({ archiveId: 1 });
+    await waitFor(() => expect(screen.getByText('冷门')).toBeInTheDocument());
+
+    fireEvent.click(itemOf('冷门'));
+
+    await waitFor(() => expect(api.assignTag).toHaveBeenCalledWith(1, 21));
+    expect(renderedNames()).toEqual(['常用', '中等', '冷门']);
+  });
+
+  test('本次新建的标签置顶，且按实际分配到的档案数计数', async () => {
+    renderPicker({ archiveId: 1 });
+    await waitFor(() => expect(screen.getByText('常用')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('新建标签'), { target: { value: '刚建的' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+
+    await waitFor(() => expect(api.assignTag).toHaveBeenCalledWith(1, 99));
+    // 频次只有 1，纯按频次排会沉到列表中部，用户看不见就以为没建上
+    await waitFor(() => expect(renderedNames()[0]).toBe('刚建的'));
+    expect(renderedCounts()[0]).toBe('1');
+  });
+
+  test('批量模式下同时显示全库次数与选中项命中数', async () => {
+    api.getTagCounts.mockResolvedValue({ total: 3, counts: { 21: 2 } });
+    renderPicker({ archiveIds: [1, 2, 3] });
+    await waitFor(() => expect(screen.getByText('冷门')).toBeInTheDocument());
+
+    const row = itemOf('冷门');
+    expect(row.querySelector('.tag-picker-count').textContent).toBe('1');
+    expect(row.querySelector('.tag-picker-partial-hint').textContent).toBe('2/3');
+  });
+});
+
 describe('TagPicker 批量模式（三态）', () => {
   beforeEach(() => {
     jest.clearAllMocks();
